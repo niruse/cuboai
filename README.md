@@ -79,7 +79,7 @@ Below is a sample of how you might present the alerts in a Markdown card, includ
 type: markdown
 title: 🍼 CuboAI Last 5 Alerts
 content: |
-  {% set alerts = state_attr('sensor.cuboai_last_alert_yourbaby', 'alerts') %}
+  {% set alerts = state_attr('sensor.cuboai_last_alert_suwon', 'alerts') %}
   {% if alerts %}
   | Type | Time | Image |
   |------|------|-------|
@@ -89,6 +89,7 @@ content: |
   {% else %}
   _No recent alerts_
   {% endif %}
+
 ```
 ---
 
