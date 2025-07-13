@@ -37,6 +37,7 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 2. Click the **three dots menu > Custom repositories**
 3. Add this repository URL:  
 https://github.com/niruse/cuboai
+<img width="257" height="139" alt="image" src="https://github.com/user-attachments/assets/c5cb26a9-029e-45db-b05b-e75e5cd146f4" />
 
 yaml
 Copy
@@ -54,10 +55,29 @@ Edit
 2. Place it in `/config/custom_components/` on your Home Assistant instance
 3. Restart Home Assistant
 
+---
+
+## Sample Images of Sensors
+
+Here are example screenshots from the CuboAI integration:
+
+### Last 5 Alerts Sensor Card
+
+![CuboAI Alerts Example](https://github.com/user-attachments/assets/ea368a6b-ca80-4f08-9160-898309fcd0f0)
+
+### Camera State & Subscription Status
+
+![CuboAI Camera and Status Example](https://github.com/user-attachments/assets/eb5eca1e-ccf1-4ed4-b6e0-f4defc56641d)
+
+![CuboAI Camera and Subscription Example](https://github.com/user-attachments/assets/0ac518f7-e24e-471e-b550-dcf928ab6ddc)
+
+## Baby Info
+![CuboAI Camera and Subscription Example](https://github.com/user-attachments/assets/3f8d49bf-38b3-41e9-9f41-6c7f63563c8d)
+
 ## 🖥️ Example Lovelace Dashboard
 
 Below is a sample of how you might present the alerts in a Markdown card, including event images:
-
+![CuboAI Dashboard sample](https://github.com/user-attachments/assets/4acccaf6-451e-4b34-96bd-e97271ebb800)
 
 ```yaml
 type: markdown
