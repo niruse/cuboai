@@ -93,3 +93,16 @@ content: |
   {% else %}
   _No recent alerts_
   {% endif %}
+```
+---
+
+## 🤝 Contributing
+
+We welcome:
+- 🔧 Bug fixes
+- 🌟 Features
+- 🧠 Suggestions
+
+Submit a PR or [open an issue](https://github.com/niruse/cuboai/issues)
+
+---
