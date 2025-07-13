@@ -104,5 +104,6 @@ Submit a PR or [open an issue](https://github.com/niruse/cuboai/issues)
 
 ---
 
-[![Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-coff.ee%2Fniruse-yellow.svg)](https://coff.ee/niruse)
+## ☕ Support
 
+If you found this project helpful, you can [buy me a coffee](https://coff.ee/niruse)!
