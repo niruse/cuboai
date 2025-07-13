@@ -5,6 +5,17 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 
 ---
 
+## 🚨 Disclaimer
+
+> **Warning:**  
+> This is an unofficial integration.  
+> You are fully responsible for the use of your credentials and your data.  
+> The author and contributors take no responsibility for any issues, account restrictions, or data loss that may occur.  
+>  
+> Use at your own risk.
+
+---
+
 ## ✨ Features
 
 - Sensor for **baby info** (name, gender, birth date)
