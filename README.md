@@ -33,16 +33,17 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 
 ### 📦 Installation via HACS
 
-1. Go to **HACS** in Home Assistant
-2. Click the **three dots menu > Custom repositories**
+1. Go to **HACS** in Home Assistant.
+2. Click the **three dots menu** (⋮) > **Custom repositories**.
 3. Add this repository URL:  
-https://github.com/niruse/cuboai
-<img width="257" height="139" alt="image" src="https://github.com/user-attachments/assets/c5cb26a9-029e-45db-b05b-e75e5cd146f4" />
-4. Select **Integration** as category
-5. Search for **CuboAI** in HACS and click **Install**
-6. **Restart Home Assistant**
+   `https://github.com/niruse/cuboai`
+4. In the **Category** dropdown, select **Integration**.
+5. Click **Add**.<br>
+   <img width="257" height="139" alt="HACS Custom Repository" src="https://github.com/user-attachments/assets/c5cb26a9-029e-45db-b05b-e75e5cd146f4" />
+6. Search for **CuboAI** in HACS and click **Install**.
+7. **Restart Home Assistant** to complete the installation.
 
-
+### Manual Insta
 ---
 
 ### 📁 Manual Installation
