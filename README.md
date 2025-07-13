@@ -38,10 +38,6 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 3. Add this repository URL:  
 https://github.com/niruse/cuboai
 <img width="257" height="139" alt="image" src="https://github.com/user-attachments/assets/c5cb26a9-029e-45db-b05b-e75e5cd146f4" />
-
-yaml
-Copy
-Edit
 4. Select **Integration** as category
 5. Search for **CuboAI** in HACS and click **Install**
 6. **Restart Home Assistant**
