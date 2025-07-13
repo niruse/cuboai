@@ -43,7 +43,6 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 6. Search for **CuboAI** in HACS and click **Install**.
 7. **Restart Home Assistant** to complete the installation.
 
-### Manual Insta
 ---
 
 ### 📁 Manual Installation
