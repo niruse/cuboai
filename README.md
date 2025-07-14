@@ -1,3 +1,5 @@
+# This is a QA version. Log files are still being created for testing and improving the integration.
+
 # 🍼 CuboAI Home Assistant Integration
 
 Bring your CuboAI baby monitor into Home Assistant!  
