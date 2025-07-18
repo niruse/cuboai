@@ -8,8 +8,47 @@ import os
 import json
 import sys
 import time
+from datetime import datetime
+from custom_components.cuboai.utils import log_to_file
 
-# --- Ensure warrant is in sys.path ---
+
+ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
+REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
+
+# --- Access/Refresh Token Save/Load ---
+def save_access_token(access_token):
+    try:
+        with open(ACCESS_TOKEN_FILE, "w", encoding="utf-8") as f:
+            json.dump({"access_token": access_token}, f)
+    except Exception as e:
+        log_to_file(f"Failed to save access_token: {e}")
+
+def load_access_token():
+    try:
+        with open(ACCESS_TOKEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("access_token")
+    except Exception:
+        return None
+
+def save_refresh_token(refresh_token):
+    try:
+        with open(REFRESH_TOKEN_FILE, "w", encoding="utf-8") as f:
+            json.dump({"refresh_token": refresh_token}, f)
+    except Exception as e:
+        log_to_file(f"Failed to save refresh_token: {e}")
+
+def load_refresh_token():
+    try:
+        with open(REFRESH_TOKEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("refresh_token")
+    except Exception:
+        return None
+
+# --- Cognito SRP Utilities ---
+
+# Make sure warrant is installed!
 deps_path = "/config/deps/lib/python3.12/site-packages"
 if deps_path not in sys.path:
     sys.path.append(deps_path)
@@ -18,49 +57,41 @@ try:
     from warrant.aws_srp import AWSSRP
 except ImportError:
     raise ImportError(
-        "warrant==0.6.1 is not installed. Run this once from Terminal:\n"
+        "warrant==0.6.1 is not installed. Run this from Terminal:\n"
         "pip install --target /config/deps/lib/python3.12/site-packages --upgrade --no-deps warrant==0.6.1"
     )
 
-# --- Utility ---
 def get_secret_hash(username, client_id, client_secret):
     msg = username + client_id
     dig = hmac.new(client_secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).digest()
     return base64.b64encode(dig).decode()
 
-# === Step 1: Initiate SRP ===
 def initiate_user_srp_auth(username, password, pool_id, client_id, client_secret, user_agent, region="us-east-1"):
     client = boto3.client("cognito-idp", region_name=region)
     aws = AWSSRP(username=username, password=password, pool_id=pool_id, client_id=client_id, client=client)
-
     auth_params = aws.get_auth_params()
     auth_params["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-
-    # boto3 does not use User-Agent for Cognito, but if you want to log it, you can do so here
     return client.initiate_auth(
         AuthFlow="USER_SRP_AUTH",
         AuthParameters=auth_params,
         ClientId=client_id
     ), aws, client
 
-# === Step 2: Password Verifier ===
 def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent):
     challenge_params = resp["ChallengeParameters"]
     challenge_responses = aws.process_challenge(challenge_params)
     username = challenge_params["USER_ID_FOR_SRP"]
     challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-    # boto3 does not use User-Agent for Cognito, but if you want to log it, you can do so here
     return client.respond_to_auth_challenge(
         ClientId=client_id,
         ChallengeName="PASSWORD_VERIFIER",
         ChallengeResponses=challenge_responses
     )["AuthenticationResult"]
 
-# === Step 3: Decode UUID from IdToken ===
 def decode_id_token(id_token):
     return jwt.decode(id_token, options={"verify_signature": False}).get("sub")
 
-# === Step 4: Cubo Mobile Login ===
+# --- Cubo Mobile Login ---
 def cubo_mobile_login(uuid, username, access_token, user_agent):
     url = "https://mobile-api.getcubo.com/v2/user/login"
     payload = {
@@ -88,7 +119,7 @@ def cubo_mobile_login(uuid, username, access_token, user_agent):
     response.raise_for_status()
     return response.json()["data"]
 
-# === Step 5: Refresh Cubo Token ===
+# --- Token Refresh ---
 def refresh_cubo_token(refresh_token, user_agent):
     url = "https://mobile-api.getcubo.com/v1/oauth/token"
     headers = {
@@ -99,9 +130,24 @@ def refresh_cubo_token(refresh_token, user_agent):
     }
     response = requests.post(url, headers=headers)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    # Cloud/mobile refresh sometimes nests tokens in "data" or top-level:
+    if "data" in data:
+        return data["data"]
+    return data
 
-# --- Camera Profiles (baby name/device map and full list) ---
+def refresh_access_token_only(refresh_token, user_agent):
+    log_to_file(f"Refreshing CuboAI token with refresh_token: {refresh_token[:12]}...")
+    disk_token = load_refresh_token() or refresh_token
+    resp = refresh_cubo_token(disk_token, user_agent)
+    log_to_file(f"Token refresh response: {json.dumps(resp, indent=2)}")
+    access_token = resp.get("access_token")
+    new_refresh_token = resp.get("refresh_token", disk_token)
+    save_access_token(access_token)
+    save_refresh_token(new_refresh_token)
+    return access_token, new_refresh_token, resp
+
+# --- Camera Profiles ---
 def get_camera_profiles(access_token, user_agent):
     url = "https://api.getcubo.com/prod/user/cameras"
     headers = {
@@ -121,10 +167,9 @@ def get_camera_profiles(access_token, user_agent):
             device_map[baby_name] = device_id
         except Exception:
             continue
-    return device_map  # dict of { baby_name: device_id }
+    return device_map
 
 def get_camera_profiles_raw(access_token, user_agent):
-    """Fetches full camera profiles list (for attributes/etc)."""
     url = "https://api.getcubo.com/prod/user/cameras"
     headers = {
         "User-Agent": user_agent,
@@ -135,7 +180,7 @@ def get_camera_profiles_raw(access_token, user_agent):
     response.raise_for_status()
     return response.json().get("profiles", [])
 
-# --- Alerts (Notifications) ---
+# --- Alerts ---
 def get_recent_alerts(device_id, access_token, user_agent, hours=2, max_alerts=5):
     now = int(time.time())
     since_ts = now - hours * 60 * 60
@@ -154,7 +199,6 @@ def get_recent_alerts(device_id, access_token, user_agent, hours=2, max_alerts=5
 
 # --- Download image (alert photo) ---
 def download_image(url, token, user_agent, save_dir, filename=None):
-    """Downloads an image with authentication header and passed User-Agent."""
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
     if not filename:

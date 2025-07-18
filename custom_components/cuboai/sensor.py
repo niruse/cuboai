@@ -3,59 +3,109 @@ import logging
 from datetime import datetime
 from homeassistant.helpers.entity import Entity
 from .const import DOMAIN
+from custom_components.cuboai.utils import log_to_file
+from .api.cuboai_functions import (
+    get_camera_profiles_raw,
+    get_recent_alerts,
+    get_subscription_info,
+    get_camera_state,
+    download_image,
+    refresh_access_token_only,
+    load_refresh_token,
+    save_refresh_token,
+    load_access_token,
+    save_access_token,
+)
+from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
 
-def log_to_file(msg):
-    try:
-        with open("/config/cuboai_last_alert_debug.log", "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now()} - {msg}\n")
-    except Exception as e:
-        _LOGGER.error(f"Failed to log to file: {e}")
+
 
 async def async_setup_entry(hass, entry, async_add_entities):
     device_id = entry.data["device_id"]
     access_token = entry.data["access_token"]
+    refresh_token = entry.data["refresh_token"]
     baby_name = entry.data["baby_name"]
     user_agent = entry.data["user_agent"]
     download_images = entry.options.get("download_images", entry.data.get("download_images", True))
 
     sensors = [
         CuboBabyInfoSensor(
+            hass=hass,
+            entry=entry,
             name=f"CuboAI Baby Info {baby_name}",
             device_id=device_id,
             baby_name=baby_name,
             access_token=access_token,
+            refresh_token=refresh_token,
             user_agent=user_agent,
         ),
         CuboLastAlertSensor(
+            hass=hass,
+            entry=entry,
             device_id=device_id,
             access_token=access_token,
+            refresh_token=refresh_token,
             user_agent=user_agent,
             name=f"CuboAI Last Alert {baby_name}",
             download_images=download_images
         ),
         CuboSubscriptionSensor(
+            hass=hass,
+            entry=entry,
             access_token=access_token,
+            refresh_token=refresh_token,
             user_agent=user_agent,
             name=f"CuboAI Subscription {baby_name}"
         ),
         CuboCameraStateSensor(
+            hass=hass,
+            entry=entry,
             device_id=device_id,
             access_token=access_token,
+            refresh_token=refresh_token,
             user_agent=user_agent,
             name=f"CuboAI Camera State {baby_name}"
         ),
     ]
     async_add_entities(sensors, update_before_add=True)
 
-class CuboBabyInfoSensor(Entity):
-    def __init__(self, name, device_id, baby_name, access_token, user_agent):
+class CuboBaseSensor(Entity):
+    def __init__(self, hass, entry, access_token, refresh_token, user_agent):
+        self.hass = hass
+        self._entry = entry
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        self._user_agent = user_agent
+
+    def _load_latest_tokens(self):
+        # Always load the latest tokens from disk, fallback to instance values
+        latest_access = load_access_token() or self._access_token
+        latest_refresh = load_refresh_token() or self._refresh_token
+        self._access_token = latest_access
+        self._refresh_token = latest_refresh
+
+    async def _external_refresh_token(self):
+        # Always load the latest refresh_token from file, fallback to init value
+        self._load_latest_tokens()
+        access_token, refresh_token, _ = await self.hass.async_add_executor_job(
+            refresh_access_token_only,
+            self._refresh_token,
+            self._user_agent,
+        )
+        # Save both tokens for all sensors to use
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        save_access_token(access_token)
+        save_refresh_token(refresh_token)
+
+class CuboBabyInfoSensor(CuboBaseSensor):
+    def __init__(self, hass, entry, name, device_id, baby_name, access_token, refresh_token, user_agent):
+        super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._name = name
         self._device_id = device_id
         self._baby_name = baby_name
-        self._access_token = access_token
-        self._user_agent = user_agent
         self._state = None
         self._attributes = {}
 
@@ -76,11 +126,22 @@ class CuboBabyInfoSensor(Entity):
         return self._attributes
 
     async def async_update(self):
-        from .api.cuboai_functions import get_camera_profiles_raw
+        import traceback
         try:
-            profiles = await self.hass.async_add_executor_job(
-                get_camera_profiles_raw, self._access_token, self._user_agent
-            )
+            self._load_latest_tokens()
+            try:
+                profiles = await self.hass.async_add_executor_job(
+                    get_camera_profiles_raw, self._access_token, self._user_agent
+                )
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                    log_to_file(f"Access token expired in BabyInfoSensor: {e}")
+                    await self._external_refresh_token()
+                    profiles = await self.hass.async_add_executor_job(
+                        get_camera_profiles_raw, self._access_token, self._user_agent
+                    )
+                else:
+                    raise
             found = False
             for item in profiles:
                 if item["device_id"] == self._device_id:
@@ -96,7 +157,6 @@ class CuboBabyInfoSensor(Entity):
                     }
                     found = True
                     break
-
             if not found:
                 self._attributes = {
                     "baby": None,
@@ -105,7 +165,8 @@ class CuboBabyInfoSensor(Entity):
                     "device_id": self._device_id
                 }
         except Exception as e:
-            _LOGGER.error("Failed to update Cubo baby profile info: %s", e)
+            #_LOGGER.error("Failed to update Cubo baby profile info: %s", e)
+            log_to_file(f"Failed to update Cubo baby profile info: {e}\n{traceback.format_exc()}")
             self._attributes = {
                 "baby": None,
                 "birth": None,
@@ -113,15 +174,14 @@ class CuboBabyInfoSensor(Entity):
                 "device_id": self._device_id
             }
 
-class CuboLastAlertSensor(Entity):
-    def __init__(self, device_id, access_token, user_agent, name="CuboAI Last Alert", download_images=True):
+class CuboLastAlertSensor(CuboBaseSensor):
+    def __init__(self, hass, entry, device_id, access_token, refresh_token, user_agent, name="CuboAI Last Alert", download_images=True):
+        super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._device_id = device_id
-        self._access_token = access_token
-        self._user_agent = user_agent
         self._name = name
+        self.download_images = download_images
         self._state = None
         self._attributes = {}
-        self.download_images = download_images
 
     @property
     def name(self):
@@ -141,17 +201,24 @@ class CuboLastAlertSensor(Entity):
 
     async def async_update(self):
         import traceback
-        from .api.cuboai_functions import get_recent_alerts, download_image
+        images_dir = "/config/www/cuboai_images"
+        web_base = "/local/cuboai_images"
         try:
-            log_to_file("Starting CuboLastAlertSensor update...")
-            images_dir = "/config/www/cuboai_images"
-            web_base = "/local/cuboai_images"
-
-            alerts = await self.hass.async_add_executor_job(
-                get_recent_alerts, self._device_id, self._access_token, self._user_agent, 12, 5
-            )
+            self._load_latest_tokens()
+            try:
+                alerts = await self.hass.async_add_executor_job(
+                    get_recent_alerts, self._device_id, self._access_token, self._user_agent, 12, 5
+                )
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                    log_to_file(f"Access token expired in LastAlertSensor: {e}")
+                    await self._external_refresh_token()
+                    alerts = await self.hass.async_add_executor_job(
+                        get_recent_alerts, self._device_id, self._access_token, self._user_agent, 12, 5
+                    )
+                else:
+                    raise
             log_to_file(f"Fetched alerts: {json.dumps(alerts, indent=2)}")
-
             alert_dicts = []
             if alerts:
                 for alert in alerts:
@@ -167,7 +234,6 @@ class CuboLastAlertSensor(Entity):
                         except Exception as e:
                             log_to_file(f"Image download failed: {e}")
                             local_image_path = None
-
                     alert_dicts.append({
                         "type": alert.get("type"),
                         "created": alert.get("created"),
@@ -175,7 +241,6 @@ class CuboLastAlertSensor(Entity):
                         "image": local_image_path,
                         "id": alert.get("id"),
                     })
-
                 latest = alert_dicts[0]
                 self._state = latest.get("type", "Unknown")
                 self._attributes = {"alerts": alert_dicts}
@@ -186,19 +251,17 @@ class CuboLastAlertSensor(Entity):
                 self._attributes = {"alerts": []}
                 self._attr_extra_state_attributes = self._attributes
                 log_to_file("No alerts found.")
-
         except Exception as e:
             err_msg = f"Error fetching Cubo alerts: {e}\n{traceback.format_exc()}"
             log_to_file(err_msg)
-            _LOGGER.error(err_msg)
+            #_LOGGER.error(err_msg)
             self._state = "Error"
             self._attributes = {"alerts": []}
             self._attr_extra_state_attributes = self._attributes
 
-class CuboSubscriptionSensor(Entity):
-    def __init__(self, access_token, user_agent, name="CuboAI Subscription"):
-        self._access_token = access_token
-        self._user_agent = user_agent
+class CuboSubscriptionSensor(CuboBaseSensor):
+    def __init__(self, hass, entry, access_token, refresh_token, user_agent, name="CuboAI Subscription"):
+        super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._name = name
         self._state = None
         self._attributes = {}
@@ -220,12 +283,22 @@ class CuboSubscriptionSensor(Entity):
         return self._attributes
 
     async def async_update(self):
-        from .api.cuboai_functions import get_subscription_info
         import traceback
         try:
-            data = await self.hass.async_add_executor_job(
-                get_subscription_info, self._access_token, self._user_agent
-            )
+            self._load_latest_tokens()
+            try:
+                data = await self.hass.async_add_executor_job(
+                    get_subscription_info, self._access_token, self._user_agent
+                )
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                    log_to_file(f"Access token expired in SubscriptionSensor: {e}")
+                    await self._external_refresh_token()
+                    data = await self.hass.async_add_executor_job(
+                        get_subscription_info, self._access_token, self._user_agent
+                    )
+                else:
+                    raise
             if data:
                 self._state = data.get("status", "unknown")
                 self._attributes = data
@@ -235,13 +308,13 @@ class CuboSubscriptionSensor(Entity):
         except Exception as e:
             self._state = "Error"
             self._attributes = {}
-            _LOGGER.error(f"Error fetching CuboAI subscription: {e}\n{traceback.format_exc()}")
+            #_LOGGER.error(f"Error fetching CuboAI subscription: {e}\n{traceback.format_exc()}")
+            log_to_file(f"Error fetching CuboAI subscription: {e}\n{traceback.format_exc()}")
 
-class CuboCameraStateSensor(Entity):
-    def __init__(self, device_id, access_token, user_agent, name="CuboAI Camera State"):
+class CuboCameraStateSensor(CuboBaseSensor):
+    def __init__(self, hass, entry, device_id, access_token, refresh_token, user_agent, name="CuboAI Camera State"):
+        super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._device_id = device_id
-        self._access_token = access_token
-        self._user_agent = user_agent
         self._name = name
         self._state = None
         self._attributes = {}
@@ -263,12 +336,22 @@ class CuboCameraStateSensor(Entity):
         return self._attributes
 
     async def async_update(self):
-        from .api.cuboai_functions import get_camera_state
         import traceback
         try:
-            data = await self.hass.async_add_executor_job(
-                get_camera_state, self._device_id, self._access_token, self._user_agent
-            )
+            self._load_latest_tokens()
+            try:
+                data = await self.hass.async_add_executor_job(
+                    get_camera_state, self._device_id, self._access_token, self._user_agent
+                )
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                    log_to_file(f"Access token expired in CameraStateSensor: {e}")
+                    await self._external_refresh_token()
+                    data = await self.hass.async_add_executor_job(
+                        get_camera_state, self._device_id, self._access_token, self._user_agent
+                    )
+                else:
+                    raise
             if data:
                 self._state = data.get("state", "unknown")
                 self._attributes = data
@@ -278,4 +361,5 @@ class CuboCameraStateSensor(Entity):
         except Exception as e:
             self._state = "Error"
             self._attributes = {}
-            _LOGGER.error(f"Error fetching CuboAI camera state: {e}\n{traceback.format_exc()}")
+            #_LOGGER.error(f"Error fetching CuboAI camera state: {e}\n{traceback.format_exc()}")
+            log_to_file(f"Error fetching CuboAI camera state: {e}\n{traceback.format_exc()}")
