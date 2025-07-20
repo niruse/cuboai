@@ -78,16 +78,27 @@ Below is a sample of how you might present the alerts in a Markdown card, includ
 ```yaml
 type: markdown
 title: 🍼 CuboAI Last 5 Alerts
-content: |
+content: >
   {% set alerts = state_attr('sensor.cuboai_last_alert_suwon', 'alerts') %}
+
   {% if alerts %}
+
   | Type | Time | Image |
+
   |------|------|-------|
+
   {% for alert in alerts %}
-  | **{{ alert['type'].replace('CUBO_ALERT_','').replace('_',' ').title() }}** | {{ alert['created'][:16].replace('T',' ') }} | {% if alert['image'] %}![img]({{ alert['image'] }}){% else %}-{% endif %} |
+
+  | **{{ alert['type'].replace('CUBO_ALERT_','').replace('_',' ').title() }}**
+  | 
+    {{ as_timestamp(alert['created']) | timestamp_custom('%Y-%m-%d %H:%M', true) }} | 
+    {% if alert['image'] %}![img]({{ alert['image'] }}){% else %}-{% endif %} |
   {% endfor %}
+
   {% else %}
+
   _No recent alerts_
+
   {% endif %}
 
 ```

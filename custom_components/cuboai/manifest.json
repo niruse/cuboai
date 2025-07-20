@@ -1,7 +1,7 @@
 {
     "domain": "cuboai",
     "name": "CuboAi",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "requirements": [
         "boto3>=1.26.0",
         "requests",
