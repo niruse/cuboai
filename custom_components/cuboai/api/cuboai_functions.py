@@ -181,21 +181,36 @@ def get_camera_profiles_raw(access_token, user_agent):
     return response.json().get("profiles", [])
 
 # --- Alerts ---
-def get_recent_alerts(device_id, access_token, user_agent, hours=2, max_alerts=5):
+def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, max_per_call=20):
+    import time, requests
     now = int(time.time())
-    since_ts = now - hours * 60 * 60
-    url = f"https://api.getcubo.com/prod/timeline/alerts?since={since_ts}"
+    since_ts = now - hours_back * 60 * 60
+    url_base = "https://api.getcubo.com/prod/timeline/alerts"
     headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/json",
         "x-cspp-authorization": f"Bearer {access_token}"
     }
-    resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
-    alerts_data = resp.json().get("data", [])
-    filtered = [a for a in alerts_data if a.get("device_id") == device_id]
-    filtered_sorted = sorted(filtered, key=lambda a: a.get("ts", 0), reverse=True)
-    return filtered_sorted[:max_alerts]
+    all_alerts = {}
+    while True:
+        url = f"{url_base}?since={since_ts}"
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        alerts_data = resp.json().get("data", [])
+        filtered = [a for a in alerts_data if a.get("device_id") == device_id]
+        if not filtered:
+            break
+        for alert in filtered:
+            all_alerts[alert["id"]] = alert
+        if len(all_alerts) >= n:
+            break  # Got enough
+        if len(filtered) < max_per_call:
+            break  # No more results in window
+        # move window to 1 sec before oldest alert ts
+        oldest_ts = min(a["ts"] for a in filtered)
+        since_ts = oldest_ts - 1
+    # Sort newest first and return up to n
+    return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
 
 # --- Download image (alert photo) ---
 def download_image(url, token, user_agent, save_dir, filename=None):
