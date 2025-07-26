@@ -74,12 +74,12 @@ Here are example screenshots from the CuboAI integration:
 
 Below is a sample of how you might present the alerts in a Markdown card, including event images:
 ![CuboAI Dashboard sample](https://github.com/user-attachments/assets/4acccaf6-451e-4b34-96bd-e97271ebb800)
-
+Remember to update the yaml file based on your sensors replace {{Your Baby Name}} with yours.
 ```yaml
 type: markdown
 title: 🍼 CuboAI Last 5 Alerts
 content: >
-  {% set alerts = state_attr('sensor.cuboai_last_alert_suwon', 'alerts') %}
+  {% set alerts = state_attr('sensor.cuboai_last_alert_{{Your Baby Name}}', 'alerts') %}
 
   {% if alerts %}
 
