@@ -5,6 +5,12 @@ Monitor alerts, camera status, subscription, and more—directly in your smart h
 
 ---
 
+## ☕ Support
+
+If you found this project helpful, you can [buy me a coffee](https://coff.ee/niruse)!
+
+---
+
 ## 🚨 Disclaimer
 
 > **Warning:**  
@@ -114,9 +120,3 @@ We welcome:
 - 🧠 Suggestions
 
 Submit a PR or [open an issue](https://github.com/niruse/cuboai/issues)
-
----
-
-## ☕ Support
-
-If you found this project helpful, you can [buy me a coffee](https://coff.ee/niruse)!
