@@ -8,12 +8,14 @@ import os
 import json
 import sys
 import time
+import glob
 from datetime import datetime
 from custom_components.cuboai.utils import log_to_file
 
 
 ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
 REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
+
 
 # --- Access/Refresh Token Save/Load ---
 def save_access_token(access_token):
@@ -23,6 +25,7 @@ def save_access_token(access_token):
     except Exception as e:
         log_to_file(f"Failed to save access_token: {e}")
 
+
 def load_access_token():
     try:
         with open(ACCESS_TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -31,12 +34,14 @@ def load_access_token():
     except Exception:
         return None
 
+
 def save_refresh_token(refresh_token):
     try:
         with open(REFRESH_TOKEN_FILE, "w", encoding="utf-8") as f:
             json.dump({"refresh_token": refresh_token}, f)
     except Exception as e:
         log_to_file(f"Failed to save refresh_token: {e}")
+
 
 def load_refresh_token():
     try:
@@ -46,25 +51,56 @@ def load_refresh_token():
     except Exception:
         return None
 
+
 # --- Cognito SRP Utilities ---
+def ensure_warrant_installed():
+    """
+    Ensure 'warrant' can be imported regardless of Python version.
+    Looks for the correct site-packages path inside /config/deps/lib/.
+    """
+    deps_path = f"/config/deps/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
 
-# Make sure warrant is installed!
-deps_path = "/config/deps/lib/python3.12/site-packages"
-if deps_path not in sys.path:
-    sys.path.append(deps_path)
+    paths_to_try = [deps_path]
+    candidates = glob.glob("/config/deps/lib/python*/site-packages")
+    for c in candidates:
+        if c not in paths_to_try:
+            paths_to_try.append(c)
 
-try:
-    from warrant.aws_srp import AWSSRP
-except ImportError:
-    raise ImportError(
-        "warrant==0.6.1 is not installed. Run this from Terminal:\n"
-        "pip install --target /config/deps/lib/python3.12/site-packages --upgrade --no-deps warrant==0.6.1"
-    )
+    found = False
+    for path in paths_to_try:
+        if os.path.isdir(path):
+            if path not in sys.path:
+                sys.path.append(path)
+            found = True
+            break
+
+    if not found:
+        raise ImportError(
+            "No valid deps path found under /config/deps/lib/. "
+            "You may need to install warrant manually."
+        )
+
+    try:
+        from warrant.aws_srp import AWSSRP  # noqa: F401
+    except ImportError as e:
+        raise ImportError(
+            "warrant==0.6.1 is not installed. Run this from Terminal:\n"
+            f"pip install --target {path} --upgrade --no-deps warrant==0.6.1"
+        ) from e
+
+    return True
+
+
+# make sure it's available before import
+ensure_warrant_installed()
+from warrant.aws_srp import AWSSRP
+
 
 def get_secret_hash(username, client_id, client_secret):
     msg = username + client_id
     dig = hmac.new(client_secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).digest()
     return base64.b64encode(dig).decode()
+
 
 def initiate_user_srp_auth(username, password, pool_id, client_id, client_secret, user_agent, region="us-east-1"):
     client = boto3.client("cognito-idp", region_name=region)
@@ -77,6 +113,7 @@ def initiate_user_srp_auth(username, password, pool_id, client_id, client_secret
         ClientId=client_id
     ), aws, client
 
+
 def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent):
     challenge_params = resp["ChallengeParameters"]
     challenge_responses = aws.process_challenge(challenge_params)
@@ -88,8 +125,10 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
         ChallengeResponses=challenge_responses
     )["AuthenticationResult"]
 
+
 def decode_id_token(id_token):
     return jwt.decode(id_token, options={"verify_signature": False}).get("sub")
+
 
 # --- Cubo Mobile Login ---
 def cubo_mobile_login(uuid, username, access_token, user_agent):
@@ -119,6 +158,7 @@ def cubo_mobile_login(uuid, username, access_token, user_agent):
     response.raise_for_status()
     return response.json()["data"]
 
+
 # --- Token Refresh ---
 def refresh_cubo_token(refresh_token, user_agent):
     url = "https://mobile-api.getcubo.com/v1/oauth/token"
@@ -131,10 +171,10 @@ def refresh_cubo_token(refresh_token, user_agent):
     response = requests.post(url, headers=headers)
     response.raise_for_status()
     data = response.json()
-    # Cloud/mobile refresh sometimes nests tokens in "data" or top-level:
     if "data" in data:
         return data["data"]
     return data
+
 
 def refresh_access_token_only(refresh_token, user_agent):
     log_to_file(f"Refreshing CuboAI token with refresh_token: {refresh_token[:12]}...")
@@ -146,6 +186,7 @@ def refresh_access_token_only(refresh_token, user_agent):
     save_access_token(access_token)
     save_refresh_token(new_refresh_token)
     return access_token, new_refresh_token, resp
+
 
 # --- Camera Profiles ---
 def get_camera_profiles(access_token, user_agent):
@@ -169,6 +210,7 @@ def get_camera_profiles(access_token, user_agent):
             continue
     return device_map
 
+
 def get_camera_profiles_raw(access_token, user_agent):
     url = "https://api.getcubo.com/prod/user/cameras"
     headers = {
@@ -180,9 +222,9 @@ def get_camera_profiles_raw(access_token, user_agent):
     response.raise_for_status()
     return response.json().get("profiles", [])
 
+
 # --- Alerts ---
 def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, max_per_call=20):
-    import time, requests
     now = int(time.time())
     since_ts = now - hours_back * 60 * 60
     url_base = "https://api.getcubo.com/prod/timeline/alerts"
@@ -203,14 +245,13 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, 
         for alert in filtered:
             all_alerts[alert["id"]] = alert
         if len(all_alerts) >= n:
-            break  # Got enough
+            break
         if len(filtered) < max_per_call:
-            break  # No more results in window
-        # move window to 1 sec before oldest alert ts
+            break
         oldest_ts = min(a["ts"] for a in filtered)
         since_ts = oldest_ts - 1
-    # Sort newest first and return up to n
     return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
+
 
 # --- Download image (alert photo) ---
 def download_image(url, token, user_agent, save_dir, filename=None):
@@ -229,6 +270,7 @@ def download_image(url, token, user_agent, save_dir, filename=None):
     with open(save_path, "wb") as f:
         f.write(resp.content)
     return save_path
+
 
 # --- Subscription Info ---
 def get_subscription_info(access_token, user_agent):
@@ -258,6 +300,7 @@ def get_subscription_info(access_token, user_agent):
         "created": sub.get("created"),
         "order_id": sub.get("order_id"),
     }
+
 
 # --- Camera State (online/offline) ---
 def get_camera_state(device_id, access_token, user_agent):
