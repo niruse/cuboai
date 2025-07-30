@@ -10,8 +10,10 @@ import sys
 import time
 import glob
 import subprocess
+import importlib
 from datetime import datetime
 from custom_components.cuboai.utils import log_to_file
+
 
 ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
 REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
@@ -55,43 +57,57 @@ def load_refresh_token():
 # --- Cognito SRP Utilities ---
 def ensure_warrant_installed():
     """
-    Ensure 'warrant' can be imported regardless of Python version.
-    Installs warrant==0.6.1 into /config/deps/lib if missing.
+    Ensure 'warrant' is installed and importable in Home Assistant's /config/deps path.
+    If missing, automatically installs warrant==0.6.1 into the detected deps path.
+    Creates the folder if it does not exist.
     """
-    deps_path = f"/config/deps/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+    # Detect Python version
+    py_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    deps_root = f"/config/deps/lib/{py_version}"
+    site_packages = os.path.join(deps_root, "site-packages")
 
-    # Make sure deps_path exists
-    os.makedirs(deps_path, exist_ok=True)
+    # Create folder if missing
+    if not os.path.exists(site_packages):
+        try:
+            os.makedirs(site_packages, exist_ok=True)
+            log_to_file(f"Created missing folder: {site_packages}")
+        except Exception as e:
+            raise ImportError(f"Failed to create deps folder {site_packages}: {e}")
 
-    if deps_path not in sys.path:
-        sys.path.append(deps_path)
+    # Ensure path is in sys.path (insert at beginning so it has priority)
+    if site_packages not in sys.path:
+        sys.path.insert(0, site_packages)
 
+    # Try importing
     try:
         from warrant.aws_srp import AWSSRP  # noqa: F401
         return True
     except ImportError:
-        log_to_file("warrant not found. Attempting installation...")
-
         try:
+            log_to_file("warrant not found, attempting auto-install warrant==0.6.1...")
             subprocess.check_call([
-                sys.executable, "-m", "pip", "install",
-                "--target", deps_path,
-                "--upgrade", "--no-deps", "warrant==0.6.1"
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-cache-dir",
+                "--upgrade",
+                "--no-deps",
+                "--target",
+                site_packages,
+                "warrant==0.6.1"
             ])
+            importlib.invalidate_caches()
+            from warrant.aws_srp import AWSSRP  # noqa: F401
             log_to_file("warrant successfully installed.")
+            return True
         except Exception as e:
-            log_to_file(f"Failed to install warrant: {e}")
             raise ImportError(
-                f"Could not install warrant into {deps_path}. "
-                f"Run manually: pip install --target {deps_path} --upgrade --no-deps warrant==0.6.1"
-            ) from e
-
-    # Try again after install
-    from warrant.aws_srp import AWSSRP  # noqa: F401
-    return True
+                f"Failed to auto-install warrant==0.6.1 into {site_packages}: {e}"
+            )
 
 
-# Make sure it's available before import
+# Make sure warrant is available before import
 ensure_warrant_installed()
 from warrant.aws_srp import AWSSRP
 
