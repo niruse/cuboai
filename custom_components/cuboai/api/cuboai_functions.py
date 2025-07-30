@@ -9,6 +9,8 @@ import json
 import sys
 import time
 import glob
+import subprocess
+import importlib
 from datetime import datetime
 from custom_components.cuboai.utils import log_to_file
 
@@ -55,43 +57,54 @@ def load_refresh_token():
 # --- Cognito SRP Utilities ---
 def ensure_warrant_installed():
     """
-    Ensure 'warrant' can be imported regardless of Python version.
-    Looks for the correct site-packages path inside /config/deps/lib/.
+    Ensure 'warrant' is installed and importable in Home Assistant's /config/deps path.
+    If missing, automatically installs warrant==0.6.1 into the detected deps path.
     """
-    deps_path = f"/config/deps/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
-
-    paths_to_try = [deps_path]
     candidates = glob.glob("/config/deps/lib/python*/site-packages")
-    for c in candidates:
-        if c not in paths_to_try:
-            paths_to_try.append(c)
+    found_path = None
 
-    found = False
-    for path in paths_to_try:
+    for path in candidates:
         if os.path.isdir(path):
             if path not in sys.path:
                 sys.path.append(path)
-            found = True
+            found_path = path
             break
 
-    if not found:
+    if not found_path:
         raise ImportError(
             "No valid deps path found under /config/deps/lib/. "
-            "You may need to install warrant manually."
+            "Cannot install warrant automatically."
         )
 
     try:
         from warrant.aws_srp import AWSSRP  # noqa: F401
-    except ImportError as e:
-        raise ImportError(
-            "warrant==0.6.1 is not installed. Run this from Terminal:\n"
-            f"pip install --target {path} --upgrade --no-deps warrant==0.6.1"
-        ) from e
+        return True
+    except ImportError:
+        try:
+            log_to_file("warrant not found, attempting auto-install warrant==0.6.1...")
+            subprocess.check_call([
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-cache-dir",
+                "--upgrade",
+                "--no-deps",
+                "--target",
+                found_path,
+                "warrant==0.6.1"
+            ])
+            importlib.invalidate_caches()
+            from warrant.aws_srp import AWSSRP  # noqa: F401
+            log_to_file("warrant successfully installed.")
+            return True
+        except Exception as e:
+            raise ImportError(
+                f"Failed to auto-install warrant==0.6.1 into {found_path}: {e}"
+            )
 
-    return True
 
-
-# make sure it's available before import
+# Make sure warrant is available before import
 ensure_warrant_installed()
 from warrant.aws_srp import AWSSRP
 
