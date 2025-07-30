@@ -9,9 +9,9 @@ import json
 import sys
 import time
 import glob
+import subprocess
 from datetime import datetime
 from custom_components.cuboai.utils import log_to_file
-
 
 ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
 REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
@@ -56,36 +56,42 @@ def load_refresh_token():
 def ensure_warrant_installed():
     """
     Ensure 'warrant' can be imported regardless of Python version.
-    Dynamically searches for the correct site-packages path inside /config/deps/lib/.
+    Installs warrant==0.6.1 into /config/deps/lib if missing.
     """
-    candidates = glob.glob("/config/deps/lib/python*/site-packages")
-    found_path = None
+    deps_path = f"/config/deps/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
 
-    for path in candidates:
-        if os.path.isdir(path):
-            if path not in sys.path:
-                sys.path.append(path)
-            found_path = path
-            break
+    # Make sure deps_path exists
+    os.makedirs(deps_path, exist_ok=True)
 
-    if not found_path:
-        raise ImportError(
-            "No valid deps path found under /config/deps/lib/. "
-            "You may need to install warrant manually."
-        )
+    if deps_path not in sys.path:
+        sys.path.append(deps_path)
 
     try:
         from warrant.aws_srp import AWSSRP  # noqa: F401
-    except ImportError as e:
-        raise ImportError(
-            "warrant==0.6.1 is not installed. Run this from Terminal:\n"
-            f"pip install --target {found_path} --upgrade --no-deps warrant==0.6.1"
-        ) from e
+        return True
+    except ImportError:
+        log_to_file("warrant not found. Attempting installation...")
 
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "--target", deps_path,
+                "--upgrade", "--no-deps", "warrant==0.6.1"
+            ])
+            log_to_file("warrant successfully installed.")
+        except Exception as e:
+            log_to_file(f"Failed to install warrant: {e}")
+            raise ImportError(
+                f"Could not install warrant into {deps_path}. "
+                f"Run manually: pip install --target {deps_path} --upgrade --no-deps warrant==0.6.1"
+            ) from e
+
+    # Try again after install
+    from warrant.aws_srp import AWSSRP  # noqa: F401
     return True
 
 
-# Make sure warrant is available before import
+# Make sure it's available before import
 ensure_warrant_installed()
 from warrant.aws_srp import AWSSRP
 
@@ -165,7 +171,6 @@ def refresh_cubo_token(refresh_token, user_agent):
     response = requests.post(url, headers=headers)
     response.raise_for_status()
     data = response.json()
-    # Cloud/mobile refresh sometimes nests tokens in "data" or top-level:
     if "data" in data:
         return data["data"]
     return data
@@ -240,13 +245,11 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, 
         for alert in filtered:
             all_alerts[alert["id"]] = alert
         if len(all_alerts) >= n:
-            break  # Got enough
+            break
         if len(filtered) < max_per_call:
-            break  # No more results in window
-        # move window to 1 sec before oldest alert ts
+            break
         oldest_ts = min(a["ts"] for a in filtered)
         since_ts = oldest_ts - 1
-    # Sort newest first and return up to n
     return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
 
 
