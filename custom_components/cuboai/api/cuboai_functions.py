@@ -56,25 +56,19 @@ def load_refresh_token():
 def ensure_warrant_installed():
     """
     Ensure 'warrant' can be imported regardless of Python version.
-    Looks for the correct site-packages path inside /config/deps/lib/.
+    Dynamically searches for the correct site-packages path inside /config/deps/lib/.
     """
-    deps_path = f"/config/deps/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
-
-    paths_to_try = [deps_path]
     candidates = glob.glob("/config/deps/lib/python*/site-packages")
-    for c in candidates:
-        if c not in paths_to_try:
-            paths_to_try.append(c)
+    found_path = None
 
-    found = False
-    for path in paths_to_try:
+    for path in candidates:
         if os.path.isdir(path):
             if path not in sys.path:
                 sys.path.append(path)
-            found = True
+            found_path = path
             break
 
-    if not found:
+    if not found_path:
         raise ImportError(
             "No valid deps path found under /config/deps/lib/. "
             "You may need to install warrant manually."
@@ -85,13 +79,13 @@ def ensure_warrant_installed():
     except ImportError as e:
         raise ImportError(
             "warrant==0.6.1 is not installed. Run this from Terminal:\n"
-            f"pip install --target {path} --upgrade --no-deps warrant==0.6.1"
+            f"pip install --target {found_path} --upgrade --no-deps warrant==0.6.1"
         ) from e
 
     return True
 
 
-# make sure it's available before import
+# Make sure warrant is available before import
 ensure_warrant_installed()
 from warrant.aws_srp import AWSSRP
 
@@ -171,6 +165,7 @@ def refresh_cubo_token(refresh_token, user_agent):
     response = requests.post(url, headers=headers)
     response.raise_for_status()
     data = response.json()
+    # Cloud/mobile refresh sometimes nests tokens in "data" or top-level:
     if "data" in data:
         return data["data"]
     return data
@@ -245,11 +240,13 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, 
         for alert in filtered:
             all_alerts[alert["id"]] = alert
         if len(all_alerts) >= n:
-            break
+            break  # Got enough
         if len(filtered) < max_per_call:
-            break
+            break  # No more results in window
+        # move window to 1 sec before oldest alert ts
         oldest_ts = min(a["ts"] for a in filtered)
         since_ts = oldest_ts - 1
+    # Sort newest first and return up to n
     return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
 
 
