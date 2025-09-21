@@ -20,12 +20,23 @@ REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
 
 
 # --- Access/Refresh Token Save/Load ---
+def _atomic_write(path, payload: str):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.replace(tmp, path)
+
 def save_access_token(access_token):
     try:
-        with open(ACCESS_TOKEN_FILE, "w", encoding="utf-8") as f:
-            json.dump({"access_token": access_token}, f)
+        _atomic_write(ACCESS_TOKEN_FILE, json.dumps({"access_token": access_token}))
     except Exception as e:
         log_to_file(f"Failed to save access_token: {e}")
+
+def save_refresh_token(refresh_token):
+    try:
+        _atomic_write(REFRESH_TOKEN_FILE, json.dumps({"refresh_token": refresh_token}))
+    except Exception as e:
+        log_to_file(f"Failed to save refresh_token: {e}")
 
 
 def load_access_token():
@@ -35,14 +46,6 @@ def load_access_token():
             return data.get("access_token")
     except Exception:
         return None
-
-
-def save_refresh_token(refresh_token):
-    try:
-        with open(REFRESH_TOKEN_FILE, "w", encoding="utf-8") as f:
-            json.dump({"refresh_token": refresh_token}, f)
-    except Exception as e:
-        log_to_file(f"Failed to save refresh_token: {e}")
 
 
 def load_refresh_token():
