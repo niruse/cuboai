@@ -168,16 +168,61 @@ class CuboBabyInfoSensor(CuboBaseSensor):
             }
 
 class CuboLastAlertSensor(CuboBaseSensor):
-    def __init__(self, hass, entry, device_id, access_token, refresh_token, user_agent, name="CuboAI Last Alert", download_images=True):
+    """
+    Sensor that exposes the latest CuboAI alerts for a specific device.
+    - Pulls the latest N alerts using get_n_alerts_paged
+    - Parses params into a dict (not a JSON string)
+    - Downloads alert images to /config/www/cuboai_images if enabled
+    - Cleans up old images per device (keeps the latest 5)
+    - Chooses the state based on the newest alert by ts
+    """
+
+    def __init__(
+        self,
+        hass,
+        entry,
+        device_id,
+        access_token,
+        refresh_token,
+        user_agent,
+        name="CuboAI Last Alert",
+        download_images=True,
+    ):
         super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._device_id = device_id
         self._name = name
         self._state = None
         self._attributes = {}
-        
+        self._attr_extra_state_attributes = self._attributes
+
+        # Paths for image storage and web access
+        self._images_dir = "/config/www/cuboai_images"
+        self._web_base = "/local/cuboai_images"
+
+        # Default behavior can be overridden via options
+        self._default_download_images = download_images
+
+    # ---------- Config helpers ----------
+
     @property
-    def download_images(self):
-        return self._entry.options.get("download_images", self._entry.data.get("download_images", True))
+    def download_images(self) -> bool:
+        # Prefer options over data, fallback to default ctor value
+        return self._entry.options.get(
+            "download_images",
+            self._entry.data.get("download_images", self._default_download_images),
+        )
+
+    @property
+    def hours_back(self) -> int:
+        # Allow narrowing the window via options for closer parity with manual tests
+        return int(self._entry.options.get("hours_back", self._entry.data.get("hours_back", 12)))
+
+    @property
+    def max_alerts(self) -> int:
+        # How many alerts to keep in attributes
+        return int(self._entry.options.get("alerts_count", self._entry.data.get("alerts_count", 5)))
+
+    # ---------- Entity basics ----------
 
     @property
     def name(self):
@@ -195,86 +240,135 @@ class CuboLastAlertSensor(CuboBaseSensor):
     def extra_state_attributes(self):
         return self._attributes
 
+    # ---------- Update logic ----------
+
     async def async_update(self):
-        import traceback
         import os
         from pathlib import Path
+        import json as _json
+        import traceback
 
-        images_dir = "/config/www/cuboai_images"
-        web_base = "/local/cuboai_images"
         try:
+            # Ensure we use the newest tokens saved on disk
             self._load_latest_tokens()
+
+            # Fetch alerts, with refresh fallback on 401
             try:
                 alerts = await self.hass.async_add_executor_job(
-                    get_n_alerts_paged, self._device_id, self._access_token, self._user_agent, 5, 12
+                    get_n_alerts_paged,
+                    self._device_id,
+                    self._access_token,
+                    self._user_agent,
+                    self.max_alerts,
+                    self.hours_back,
                 )
             except Exception as e:
-                if "401" in str(e) or "Unauthorized" in str(e).lower():
-                    log_to_file(f"Access token expired in LastAlertSensor: {e}")
+                if "401" in str(e) or "unauthorized" in str(e).lower():
+                    log_to_file(f"[CuboLastAlertSensor] Access token expired: {e}")
                     await self._external_refresh_token()
                     alerts = await self.hass.async_add_executor_job(
-                        get_n_alerts_paged, self._device_id, self._access_token, self._user_agent, 5, 12
+                        get_n_alerts_paged,
+                        self._device_id,
+                        self._access_token,
+                        self._user_agent,
+                        self.max_alerts,
+                        self.hours_back,
                     )
                 else:
                     raise
 
-            log_to_file(f"Fetched alerts: {json.dumps(alerts, indent=2)}")
+            log_to_file(f"[CuboLastAlertSensor] Fetched alerts raw: {_json.dumps(alerts, ensure_ascii=False)[:2000]}")
+
             alert_dicts = []
             downloaded_filenames = []
 
             if alerts:
+                # Ensure image dir exists if downloads are enabled
+                if self.download_images and not os.path.exists(self._images_dir):
+                    try:
+                        os.makedirs(self._images_dir, exist_ok=True)
+                        log_to_file(f"[CuboLastAlertSensor] Created images dir: {self._images_dir}")
+                    except Exception as e:
+                        log_to_file(f"[CuboLastAlertSensor] Failed to create images dir: {e}")
+
                 for alert in alerts:
+                    # params can arrive as dict already if get_n_alerts_paged normalized it
+                    params = alert.get("params")
+                    if isinstance(params, str):
+                        try:
+                            params = _json.loads(params)
+                        except Exception:
+                            # Leave as string if not valid JSON
+                            pass
+
                     local_image_path = None
                     if self.download_images and alert.get("image"):
                         filename = f"{self._device_id}_{alert.get('id')}.jpg"
                         try:
                             await self.hass.async_add_executor_job(
-                                download_image, alert.get("image"), self._access_token, self._user_agent, images_dir, filename
+                                download_image,
+                                alert.get("image"),
+                                self._access_token,
+                                self._user_agent,
+                                self._images_dir,
+                                filename,
                             )
-                            local_image_path = f"{web_base}/{filename}"
+                            local_image_path = f"{self._web_base}/{filename}"
                             downloaded_filenames.append(filename)
-                            log_to_file(f"Downloaded image to: {local_image_path}")
+                            log_to_file(f"[CuboLastAlertSensor] Downloaded image: {local_image_path}")
                         except Exception as e:
-                            log_to_file(f"Image download failed: {e}")
+                            log_to_file(f"[CuboLastAlertSensor] Image download failed: {e}")
                             local_image_path = None
 
-                    alert_dicts.append({
-                        "type": alert.get("type"),
-                        "created": alert.get("created"),
-                        "params": alert.get("params"),
-                        "image": local_image_path,
-                        "id": alert.get("id"),
-                    })
-
-                # 🔁 Cleanup old images: keep only the 5 most recent
-                try:
-                    all_images = sorted(
-                        Path(images_dir).glob(f"{self._device_id}_*.jpg"),
-                        key=lambda f: f.stat().st_mtime,
-                        reverse=True
+                    alert_dicts.append(
+                        {
+                            "type": alert.get("type"),
+                            "created": alert.get("created"),
+                            "params": params,
+                            "image": local_image_path,
+                            "id": alert.get("id"),
+                            "ts": alert.get("ts"),
+                            "device_id": alert.get("device_id"),
+                        }
                     )
-                    for old_file in all_images[5:]:  # Keep latest 5
-                        log_to_file(f"Deleting old image: {old_file.name}")
-                        old_file.unlink()
-                except Exception as e:
-                    log_to_file(f"Error cleaning up old images: {e}")
 
-                latest = alert_dicts[0]
+                # Cleanup old images per device, keep only the latest 5
+                if self.download_images:
+                    try:
+                        all_images = sorted(
+                            Path(self._images_dir).glob(f"{self._device_id}_*.jpg"),
+                            key=lambda f: f.stat().st_mtime,
+                            reverse=True,
+                        )
+                        for old_file in all_images[5:]:
+                            log_to_file(f"[CuboLastAlertSensor] Deleting old image: {old_file.name}")
+                            old_file.unlink(missing_ok=True)
+                    except Exception as e:
+                        log_to_file(f"[CuboLastAlertSensor] Error cleaning images: {e}")
+
+                # Choose latest by ts
+                latest = max(alert_dicts, key=lambda a: a.get("ts", 0) or 0)
                 self._state = latest.get("type", "Unknown")
                 self._attributes = {"alerts": alert_dicts}
                 self._attr_extra_state_attributes = self._attributes
-                log_to_file(f"Set state: {self._state}, attributes: {json.dumps(self._attributes)}")
+
+                log_to_file(
+                    f"[CuboLastAlertSensor] State set to: {self._state}. "
+                    f"Attributes count: {len(alert_dicts)}"
+                )
             else:
                 self._state = "No alerts"
                 self._attributes = {"alerts": []}
                 self._attr_extra_state_attributes = self._attributes
-                log_to_file("No alerts found.")
+                log_to_file("[CuboLastAlertSensor] No alerts found in window.")
+
         except Exception as e:
-            err_msg = f"Error fetching Cubo alerts: {e}\n{traceback.format_exc()}"
+            err_msg = f"[CuboLastAlertSensor] Error updating alerts: {e}\n{traceback.format_exc()}"
             log_to_file(err_msg)
             self._state = "Error"
             self._attributes = {"alerts": []}
             self._attr_extra_state_attributes = self._attributes
+
 
 
 class CuboSubscriptionSensor(CuboBaseSensor):

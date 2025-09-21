@@ -240,6 +240,7 @@ def get_camera_profiles_raw(access_token, user_agent):
 
 
 # --- Alerts ---
+'''
 def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, max_per_call=20):
     now = int(time.time())
     since_ts = now - hours_back * 60 * 60
@@ -267,6 +268,87 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, 
         oldest_ts = min(a["ts"] for a in filtered)
         since_ts = oldest_ts - 1
     return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
+'''
+# --- Alerts helpers ---
+
+def _normalize_alert(a):
+    import json
+    params = a.get("params")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except Exception:
+            pass
+    return {
+        "id": a.get("id"),
+        "device_id": a.get("device_id"),
+        "type": a.get("type"),
+        "ts": a.get("ts"),
+        "created": a.get("created"),
+        "image": a.get("image"),
+        "params": params,
+        "profile": a.get("profile"),
+        "region": a.get("region"),
+    }
+
+
+def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12):
+    """
+    Fetch the latest N alerts for a specific device_id.
+    Walk forward in time by advancing since to max(ts)+1 per page.
+    Return alerts sorted by ts desc and truncated to N.
+    """
+    import time
+    import requests
+
+    now = int(time.time())
+    since_ts = now - hours_back * 60 * 60
+    url_base = "https://api.getcubo.com/prod/timeline/alerts"
+
+    headers = {
+        "User-Agent": user_agent or "okhttp/5.0.0-alpha.14",
+        "Content-Type": "application/json",
+        "x-cspp-authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "identity",
+        "Connection": "Keep-Alive",
+    }
+
+    all_alerts_for_device = {}
+    iters = 0
+    max_iters = 100
+    seen_progress = True
+
+    while iters < max_iters and seen_progress:
+        url = f"{url_base}?since={since_ts}"
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+
+        if not data:
+            break
+
+        ts_list = []
+        for a in data:
+            ts = a.get("ts", 0)
+            if ts:
+                ts_list.append(ts)
+            if a.get("device_id") == device_id:
+                all_alerts_for_device[a["id"]] = a
+
+        max_ts_in_page = max(ts_list) if ts_list else since_ts
+        next_since = max_ts_in_page + 1
+
+        seen_progress = next_since > since_ts
+        since_ts = next_since
+        iters += 1
+
+        if len(all_alerts_for_device) >= n:
+            # optional: you can break here to be quicker
+            pass
+
+    # newest first, take N, normalize
+    result = sorted(all_alerts_for_device.values(), key=lambda a: a.get("ts", 0), reverse=True)[:n]
+    return [_normalize_alert(a) for a in result]
 
 
 # --- Download image (alert photo) ---
