@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from homeassistant.helpers.entity import Entity
@@ -76,14 +77,20 @@ class CuboBaseSensor(Entity):
         self._refresh_token = refresh_token
         self._user_agent = user_agent
 
-    def _load_latest_tokens(self):
-        latest_access = load_access_token() or self._access_token
-        latest_refresh = load_refresh_token() or self._refresh_token
-        self._access_token = latest_access
-        self._refresh_token = latest_refresh
+    async def _load_latest_tokens(self):
+        # Load tokens from disk via executor to avoid blocking the event loop
+        latest_access, latest_refresh = await asyncio.gather(
+            self.hass.async_add_executor_job(load_access_token),
+            self.hass.async_add_executor_job(load_refresh_token),
+        )
+        if latest_access:
+            self._access_token = latest_access
+        if latest_refresh:
+            self._refresh_token = latest_refresh
 
     async def _external_refresh_token(self):
-        self._load_latest_tokens()
+        # Always reload the latest tokens before refreshing
+        await self._load_latest_tokens()
         access_token, refresh_token, _ = await self.hass.async_add_executor_job(
             refresh_access_token_only,
             self._refresh_token,
@@ -91,8 +98,11 @@ class CuboBaseSensor(Entity):
         )
         self._access_token = access_token
         self._refresh_token = refresh_token
-        save_access_token(access_token)
-        save_refresh_token(refresh_token)
+        # Save tokens back to disk via executor as well
+        await asyncio.gather(
+            self.hass.async_add_executor_job(save_access_token, access_token),
+            self.hass.async_add_executor_job(save_refresh_token, refresh_token),
+        )
 
 class CuboBabyInfoSensor(CuboBaseSensor):
     def __init__(self, hass, entry, name, device_id, baby_name, access_token, refresh_token, user_agent):
@@ -122,7 +132,7 @@ class CuboBabyInfoSensor(CuboBaseSensor):
     async def async_update(self):
         import traceback
         try:
-            self._load_latest_tokens()
+            await self._load_latest_tokens()
             try:
                 profiles = await self.hass.async_add_executor_job(
                     get_camera_profiles_raw, self._access_token, self._user_agent
@@ -250,7 +260,7 @@ class CuboLastAlertSensor(CuboBaseSensor):
 
         try:
             # Ensure we use the newest tokens saved on disk
-            self._load_latest_tokens()
+            await self._load_latest_tokens()
 
             # Fetch alerts, with refresh fallback on 401
             try:
@@ -284,9 +294,11 @@ class CuboLastAlertSensor(CuboBaseSensor):
 
             if alerts:
                 # Ensure image dir exists if downloads are enabled
-                if self.download_images and not os.path.exists(self._images_dir):
+                exists = await self.hass.async_add_executor_job(os.path.exists, self._images_dir)
+                if self.download_images and not exists:
                     try:
-                        os.makedirs(self._images_dir, exist_ok=True)
+                        # run makedirs in executor to avoid blocking the loop
+                        await self.hass.async_add_executor_job(os.makedirs, self._images_dir, True)
                         log_to_file(f"[CuboLastAlertSensor] Created images dir: {self._images_dir}")
                     except Exception as e:
                         log_to_file(f"[CuboLastAlertSensor] Failed to create images dir: {e}")
@@ -333,16 +345,25 @@ class CuboLastAlertSensor(CuboBaseSensor):
                     )
 
                 # Cleanup old images per device, keep only the latest 5
+
+                def _cleanup_images(dir_path, prefix):
+                    # Runs in executor, safe to use blocking I/O here
+                    from pathlib import Path
+                    files = sorted(
+                        Path(dir_path).glob(f"{prefix}_*.jpg"),
+                        key=lambda f: f.stat().st_mtime,
+                        reverse=True,
+                    )
+                    for old_file in files[5:]:
+                        try:
+                            old_file.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                
+                # inside async_update
                 if self.download_images:
                     try:
-                        all_images = sorted(
-                            Path(self._images_dir).glob(f"{self._device_id}_*.jpg"),
-                            key=lambda f: f.stat().st_mtime,
-                            reverse=True,
-                        )
-                        for old_file in all_images[5:]:
-                            log_to_file(f"[CuboLastAlertSensor] Deleting old image: {old_file.name}")
-                            old_file.unlink(missing_ok=True)
+                        await self.hass.async_add_executor_job(_cleanup_images, self._images_dir, self._device_id)
                     except Exception as e:
                         log_to_file(f"[CuboLastAlertSensor] Error cleaning images: {e}")
 
@@ -397,7 +418,7 @@ class CuboSubscriptionSensor(CuboBaseSensor):
     async def async_update(self):
         import traceback
         try:
-            self._load_latest_tokens()
+            await self._load_latest_tokens()
             try:
                 data = await self.hass.async_add_executor_job(
                     get_subscription_info, self._access_token, self._user_agent
@@ -449,7 +470,7 @@ class CuboCameraStateSensor(CuboBaseSensor):
     async def async_update(self):
         import traceback
         try:
-            self._load_latest_tokens()
+            await self._load_latest_tokens()
             try:
                 data = await self.hass.async_add_executor_job(
                     get_camera_state, self._device_id, self._access_token, self._user_agent
