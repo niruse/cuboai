@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CuboAI Login",
+        "description": "Enter your CuboAI account credentials.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      },
+      "mfa": {
+        "title": "Two-Factor Authentication",
+        "description": "Enter the verification code from your {mfa_type}.",
+        "data": {
+          "mfa_code": "Verification Code"
+        }
+      },
+      "select_camera": {
+        "title": "Select Camera",
+        "description": "Choose which camera to add.",
+        "data": {
+          "camera": "Camera",
+          "download_images": "Download alert images locally"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Authentication failed. Please check your credentials.",
+      "invalid_mfa_code": "Invalid verification code. Please try again.",
+      "mfa_code_expired": "Verification code expired. Please restart setup.",
+      "mfa_failed": "MFA verification failed. Please try again.",
+      "no_cameras": "No cameras found for this account.",
+      "camera_fetch_failed": "Failed to fetch camera list."
+    },
+    "abort": {
+      "already_configured": "This camera is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "CuboAI Options",
+        "data": {
+          "download_images": "Download alert images locally"
+        }
+      }
+    }
+  }
+}
