@@ -1,5 +1,6 @@
 import logging
 import random
+import boto3
 import voluptuous as vol
 from homeassistant import config_entries
 from .const import DOMAIN
@@ -17,6 +18,10 @@ _LOGGER.setLevel(logging.DEBUG)
 AUTH_SCHEMA = vol.Schema({
     vol.Required("username"): str,
     vol.Required("password"): str
+})
+
+MFA_SCHEMA = vol.Schema({
+    vol.Required("mfa_code"): str
 })
 
 CLIENT_ID = "1gvbkmngl920rtp6hlbp6057ue"
@@ -75,6 +80,17 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 _LOGGER.debug("Password verifier responded successfully")
 
+                # Check if MFA is required
+                if isinstance(tokens, dict) and "challenge" in tokens:
+                    _LOGGER.debug("MFA challenge detected: %s", tokens["challenge"])
+                    # Store data for MFA step
+                    self._mfa_session = tokens["session"]
+                    self._mfa_challenge = tokens["challenge"]
+                    self._mfa_username = tokens["username"]
+                    self._user_agent = user_agent
+                    self._username_input = user_input["username"]
+                    return await self.async_step_mfa()
+
                 # Step 3: Decode ID Token and login to Cubo
                 uuid = api.decode_id_token(tokens["IdToken"])
                 _LOGGER.debug("Decoded UUID from ID token: %s", uuid)
@@ -111,6 +127,79 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=AUTH_SCHEMA,
             errors=errors
+        )
+
+    async def async_step_mfa(self, user_input=None):
+        """Handle MFA code input step."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                mfa_code = user_input["mfa_code"].strip()
+                _LOGGER.debug("Attempting MFA verification with code length: %d", len(mfa_code))
+
+                # Create a new Cognito client for MFA response
+                client = boto3.client("cognito-idp", region_name=REGION)
+
+                tokens = await self.hass.async_add_executor_job(
+                    api.respond_to_mfa_challenge,
+                    client,
+                    CLIENT_ID,
+                    CLIENT_SECRET,
+                    self._mfa_session,
+                    self._mfa_username,
+                    mfa_code,
+                    self._mfa_challenge
+                )
+                _LOGGER.debug("MFA verification successful")
+
+                # Continue with normal flow - decode ID token and login to Cubo
+                uuid = api.decode_id_token(tokens["IdToken"])
+                _LOGGER.debug("Decoded UUID from ID token: %s", uuid)
+
+                data = await self.hass.async_add_executor_job(
+                    api.cubo_mobile_login,
+                    uuid,
+                    self._username_input,
+                    tokens["AccessToken"],
+                    self._user_agent
+                )
+                _LOGGER.debug("Cubo mobile login successful after MFA")
+
+                access_token = data["access_token"]
+                refresh_token = data["refresh_token"]
+
+                _LOGGER.debug("Access token (first 20 chars): %s...", access_token[:20])
+                _LOGGER.debug("Refresh token (first 20 chars): %s...", refresh_token[:20])
+
+                # Store for camera selection step
+                self._uuid = uuid
+                self._username = self._username_input
+                self._access_token = access_token
+                self._refresh_token = refresh_token
+
+                return await self.async_step_select_camera()
+
+            except Exception as e:
+                _LOGGER.exception("MFA verification failed: %s", e)
+                if "CodeMismatchException" in str(e) or "Invalid" in str(e):
+                    errors["base"] = "invalid_mfa_code"
+                elif "ExpiredCodeException" in str(e) or "expired" in str(e).lower():
+                    errors["base"] = "mfa_code_expired"
+                else:
+                    errors["base"] = "mfa_failed"
+
+        # Determine hint text based on MFA type
+        mfa_type = getattr(self, "_mfa_challenge", "SMS_MFA")
+        description_placeholders = {
+            "mfa_type": "authenticator app" if mfa_type == "SOFTWARE_TOKEN_MFA" else "SMS"
+        }
+
+        return self.async_show_form(
+            step_id="mfa",
+            data_schema=MFA_SCHEMA,
+            errors=errors,
+            description_placeholders=description_placeholders
         )
 
     async def async_step_select_camera(self, user_input=None):
