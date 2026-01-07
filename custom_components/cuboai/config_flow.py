@@ -1,6 +1,5 @@
 import logging
 import random
-import boto3
 import voluptuous as vol
 from homeassistant import config_entries
 from .const import DOMAIN
@@ -138,18 +137,15 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 mfa_code = user_input["mfa_code"].strip()
                 _LOGGER.debug("Attempting MFA verification with code length: %d", len(mfa_code))
 
-                # Create a new Cognito client for MFA response
-                client = boto3.client("cognito-idp", region_name=REGION)
-
                 tokens = await self.hass.async_add_executor_job(
                     api.respond_to_mfa_challenge,
-                    client,
                     CLIENT_ID,
                     CLIENT_SECRET,
                     self._mfa_session,
                     self._mfa_username,
                     mfa_code,
-                    self._mfa_challenge
+                    self._mfa_challenge,
+                    REGION
                 )
                 _LOGGER.debug("MFA verification successful")
 

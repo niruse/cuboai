@@ -154,11 +154,15 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
     return result["AuthenticationResult"]
 
 
-def respond_to_mfa_challenge(client, client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA"):
+def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"):
     """
     Respond to an MFA challenge (SMS_MFA or SOFTWARE_TOKEN_MFA).
+    Creates its own boto3 client to avoid blocking calls in async context.
     Returns AuthenticationResult tokens on success.
     """
+    # Create client inside executor job to avoid blocking the event loop
+    client = boto3.client("cognito-idp", region_name=region)
+    
     challenge_responses = {
         "USERNAME": username,
         "SECRET_HASH": get_secret_hash(username, client_id, client_secret),
