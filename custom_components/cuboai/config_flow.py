@@ -120,7 +120,21 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             except Exception as e:
                 _LOGGER.exception("CuboAI authentication failed: %s", e)
-                errors["base"] = "auth_failed"
+                error_str = str(e)
+                if "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    errors["base"] = "sms_quota_exceeded"
+                elif "NotAuthorizedException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "UserNotFoundException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "InvalidPasswordException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "TooManyRequestsException" in error_str:
+                    errors["base"] = "too_many_requests"
+                elif "LimitExceededException" in error_str:
+                    errors["base"] = "too_many_requests"
+                else:
+                    errors["base"] = "auth_failed"
 
         return self.async_show_form(
             step_id="user",
@@ -178,10 +192,15 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             except Exception as e:
                 _LOGGER.exception("MFA verification failed: %s", e)
-                if "CodeMismatchException" in str(e) or "Invalid" in str(e):
+                error_str = str(e)
+                if "CodeMismatchException" in error_str or "Invalid" in error_str:
                     errors["base"] = "invalid_mfa_code"
-                elif "ExpiredCodeException" in str(e) or "expired" in str(e).lower():
+                elif "ExpiredCodeException" in error_str or "expired" in error_str.lower():
                     errors["base"] = "mfa_code_expired"
+                elif "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    errors["base"] = "sms_quota_exceeded"
+                elif "TooManyRequestsException" in error_str or "LimitExceededException" in error_str:
+                    errors["base"] = "too_many_requests"
                 else:
                     errors["base"] = "mfa_failed"
 
