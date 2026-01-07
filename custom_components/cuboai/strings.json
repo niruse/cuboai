@@ -30,6 +30,8 @@
       "invalid_mfa_code": "Invalid verification code. Please try again.",
       "mfa_code_expired": "Verification code expired. Please restart setup.",
       "mfa_failed": "MFA verification failed. Please try again.",
+      "sms_quota_exceeded": "CuboAI's SMS service is temporarily unavailable. Please try again later or use an authenticator app if available.",
+      "too_many_requests": "Too many attempts. Please wait a few minutes and try again.",
       "no_cameras": "No cameras found for this account.",
       "camera_fetch_failed": "Failed to fetch camera list."
     },
