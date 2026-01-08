@@ -120,8 +120,8 @@ Access via `entry.data` or `entry.options`:
 - Debug log: `/config/cuboai_auth.log`
 
 ### Dependencies
-- `boto3` + `warrant==0.6.1` for Cognito SRP (warrant auto-installed at runtime)
-- `pyjwt` for ID token decoding
+- `boto3` for AWS Cognito client
+- `pycognito` for Cognito SRP authentication
 - `requests` for HTTP calls
 
 ### Cognito Auth Constants

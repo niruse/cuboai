@@ -30,7 +30,7 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
 - Sensor for **subscription status** (Premium, trial, grace period, etc.)
 - Sensor for **camera online/offline state**
 - Support for multiple CuboAI cameras (multi-instance integration)
-- Easy authentication with CuboAI (uses warrant for SRP/AWS Cognito)
+- Easy authentication with CuboAI (uses pycognito for SRP/AWS Cognito)
 - All data stays local—no cloud polling from Home Assistant servers
 
 ---
