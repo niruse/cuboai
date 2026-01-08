@@ -187,16 +187,12 @@ class CuboBabyInfoSensor(CuboBaseSensor):
             await self._load_latest_tokens()
             session = await self._get_session()
             try:
-                profiles = await get_camera_profiles_raw(
-                    self._access_token, self._user_agent, session
-                )
+                profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
             except aiohttp.ClientResponseError as e:
                 if e.status == 401:
                     log_to_file(f"Access token expired in BabyInfoSensor: {e}")
                     await self._external_refresh_token()
-                    profiles = await get_camera_profiles_raw(
-                        self._access_token, self._user_agent, session
-                    )
+                    profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
                 else:
                     raise
             found = False
@@ -504,16 +500,12 @@ class CuboSubscriptionSensor(CuboBaseSensor):
             await self._load_latest_tokens()
             session = await self._get_session()
             try:
-                data = await get_subscription_info(
-                    self._access_token, self._user_agent, session
-                )
+                data = await get_subscription_info(self._access_token, self._user_agent, session)
             except aiohttp.ClientResponseError as e:
                 if e.status == 401:
                     log_to_file(f"Access token expired in SubscriptionSensor: {e}")
                     await self._external_refresh_token()
-                    data = await get_subscription_info(
-                        self._access_token, self._user_agent, session
-                    )
+                    data = await get_subscription_info(self._access_token, self._user_agent, session)
                 else:
                     raise
             if data:
@@ -579,16 +571,12 @@ class CuboCameraStateSensor(CuboBaseSensor):
             await self._load_latest_tokens()
             session = await self._get_session()
             try:
-                data = await get_camera_state(
-                    self._device_id, self._access_token, self._user_agent, session
-                )
+                data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
             except aiohttp.ClientResponseError as e:
                 if e.status == 401:
                     log_to_file(f"Access token expired in CameraStateSensor: {e}")
                     await self._external_refresh_token()
-                    data = await get_camera_state(
-                        self._device_id, self._access_token, self._user_agent, session
-                    )
+                    data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
                 else:
                     raise
             if data:

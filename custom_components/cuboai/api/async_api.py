@@ -71,9 +71,7 @@ async def cubo_mobile_login(
             await session.close()
 
 
-async def refresh_cubo_token(
-    refresh_token: str, user_agent: str, session: aiohttp.ClientSession | None = None
-) -> dict:
+async def refresh_cubo_token(refresh_token: str, user_agent: str, session: aiohttp.ClientSession | None = None) -> dict:
     """Refresh CuboAI access token.
 
     Args:
