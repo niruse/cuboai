@@ -21,52 +21,72 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    device_id = entry.data["device_id"]
     access_token = entry.data["access_token"]
     refresh_token = entry.data["refresh_token"]
-    baby_name = entry.data["baby_name"]
     user_agent = entry.data["user_agent"]
     download_images = entry.options.get("download_images", entry.data.get("download_images", True))
-
-    sensors = [
-        CuboBabyInfoSensor(
-            hass=hass,
-            entry=entry,
-            name=f"CuboAI Baby Info {baby_name}",
-            device_id=device_id,
-            baby_name=baby_name,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            user_agent=user_agent,
-        ),
-        CuboLastAlertSensor(
-            hass=hass,
-            entry=entry,
-            device_id=device_id,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            user_agent=user_agent,
-            name=f"CuboAI Last Alert {baby_name}",
-            download_images=download_images
-        ),
+    
+    # Get all cameras from entry data
+    cameras = entry.data.get("cameras", [])
+    
+    # For backward compatibility with old single-camera entries
+    if not cameras and "device_id" in entry.data:
+        cameras = [{
+            "device_id": entry.data["device_id"],
+            "baby_name": entry.data["baby_name"]
+        }]
+    
+    sensors = []
+    
+    # Create sensors for each camera
+    for camera in cameras:
+        device_id = camera["device_id"]
+        baby_name = camera["baby_name"]
+        
+        sensors.extend([
+            CuboBabyInfoSensor(
+                hass=hass,
+                entry=entry,
+                name=f"CuboAI Baby Info {baby_name}",
+                device_id=device_id,
+                baby_name=baby_name,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+            ),
+            CuboLastAlertSensor(
+                hass=hass,
+                entry=entry,
+                device_id=device_id,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+                name=f"CuboAI Last Alert {baby_name}",
+                download_images=download_images
+            ),
+            CuboCameraStateSensor(
+                hass=hass,
+                entry=entry,
+                device_id=device_id,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                user_agent=user_agent,
+                name=f"CuboAI Camera State {baby_name}"
+            ),
+        ])
+    
+    # Add subscription sensor once per account (not per camera)
+    sensors.append(
         CuboSubscriptionSensor(
             hass=hass,
             entry=entry,
             access_token=access_token,
             refresh_token=refresh_token,
             user_agent=user_agent,
-            name=f"CuboAI Subscription {baby_name}"
-        ),
-        CuboCameraStateSensor(
-            hass=hass,
-            entry=entry,
-            device_id=device_id,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            user_agent=user_agent,
-            name=f"CuboAI Camera State {baby_name}"
-        ),
-    ]
+            name="CuboAI Subscription"
+        )
+    )
+    
     async_add_entities(sensors, update_before_add=True)
 
 class CuboBaseSensor(Entity):
@@ -128,6 +148,15 @@ class CuboBabyInfoSensor(CuboBaseSensor):
     @property
     def extra_state_attributes(self):
         return self._attributes
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
 
     async def async_update(self):
         import traceback
@@ -249,6 +278,26 @@ class CuboLastAlertSensor(CuboBaseSensor):
     @property
     def extra_state_attributes(self):
         return self._attributes
+
+    @property
+    def device_info(self):
+        # Get baby name from entry data
+        cameras = self._entry.data.get("cameras", [])
+        baby_name = "Unknown"
+        for cam in cameras:
+            if cam["device_id"] == self._device_id:
+                baby_name = cam["baby_name"]
+                break
+        # Fallback for backward compatibility
+        if baby_name == "Unknown" and self._entry.data.get("device_id") == self._device_id:
+            baby_name = self._entry.data.get("baby_name", "Unknown")
+        
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
 
     # ---------- Update logic ----------
 
@@ -405,7 +454,8 @@ class CuboSubscriptionSensor(CuboBaseSensor):
 
     @property
     def unique_id(self):
-        return "cuboai_subscription"
+        # Use entry_id to make it unique per integration instance
+        return f"cuboai_subscription_{self._entry.entry_id}"
 
     @property
     def state(self):
@@ -466,6 +516,26 @@ class CuboCameraStateSensor(CuboBaseSensor):
     @property
     def extra_state_attributes(self):
         return self._attributes
+
+    @property
+    def device_info(self):
+        # Get baby name from entry data
+        cameras = self._entry.data.get("cameras", [])
+        baby_name = "Unknown"
+        for cam in cameras:
+            if cam["device_id"] == self._device_id:
+                baby_name = cam["baby_name"]
+                break
+        # Fallback for backward compatibility
+        if baby_name == "Unknown" and self._entry.data.get("device_id") == self._device_id:
+            baby_name = self._entry.data.get("baby_name", "Unknown")
+        
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
 
     async def async_update(self):
         import traceback
