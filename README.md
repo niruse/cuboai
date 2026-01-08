@@ -1,5 +1,9 @@
 # 🍼 CuboAI Home Assistant Integration
 
+[![CI](https://github.com/niruse/cuboai/actions/workflows/ci.yml/badge.svg)](https://github.com/niruse/cuboai/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/niruse/cuboai/branch/main/graph/badge.svg)](https://codecov.io/gh/niruse/cuboai)
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+
 Bring your CuboAI baby monitor into Home Assistant!  
 Monitor alerts, camera status, subscription, and more—directly in your smart home dashboard.
 

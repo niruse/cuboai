@@ -1,92 +1,18 @@
-"""Tests for CuboAI authentication flow functions."""
+"""Tests for CuboAI authentication flow functions.
 
-import sys
-from unittest.mock import MagicMock
+These tests import the actual cuboai functions (not copies) to ensure
+changes to the implementation are properly tested.
+"""
 
-# Mock homeassistant before importing cuboai modules
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-sys.modules["homeassistant.core"] = MagicMock()
-sys.modules["homeassistant.const"] = MagicMock()
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.entity"] = MagicMock()
+from unittest.mock import MagicMock, patch
 
-# Mock the utils module to avoid file I/O issues
-mock_utils = MagicMock()
-mock_utils.log_to_file = MagicMock()
-sys.modules["custom_components.cuboai.utils"] = mock_utils
-
-# Now we can import the API functions
-# Import functions directly to avoid warrant auto-install
-import base64
-import hashlib
-import hmac
-
-
-def get_secret_hash(username, client_id, client_secret):
-    """Copy of the function for testing without warrant dependency."""
-    msg = username + client_id
-    dig = hmac.new(client_secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).digest()
-    return base64.b64encode(dig).decode()
-
-
-def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent):
-    """Copy of the function for testing."""
-    challenge_params = resp["ChallengeParameters"]
-    challenge_responses = aws.process_challenge(challenge_params)
-    username = challenge_params["USER_ID_FOR_SRP"]
-    challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-    result = client.respond_to_auth_challenge(
-        ClientId=client_id, ChallengeName="PASSWORD_VERIFIER", ChallengeResponses=challenge_responses
-    )
-    # Check if MFA is required
-    if "ChallengeName" in result:
-        return {
-            "challenge": result["ChallengeName"],
-            "session": result["Session"],
-            "challenge_params": result.get("ChallengeParameters", {}),
-            "username": username,
-        }
-    return result["AuthenticationResult"]
-
-
-def respond_to_mfa_challenge(
-    client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"
-):
-    """Copy of the function for testing - note: in tests we mock the client creation."""
-    # For testing, we create a mock-friendly version
-    # The real function creates boto3.client internally
-    challenge_responses = {
-        "USERNAME": username,
-        "SECRET_HASH": get_secret_hash(username, client_id, client_secret),
-    }
-    if challenge_name == "SOFTWARE_TOKEN_MFA":
-        challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
-    else:
-        challenge_responses["SMS_MFA_CODE"] = mfa_code
-
-    # Note: Real function creates client internally; tests will need to mock boto3.client
-    return challenge_responses  # For signature testing only
-
-
-# Test helper that mimics the real function but accepts a mock client
-def _respond_to_mfa_challenge_with_client(
-    client, client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA"
-):
-    """Test helper that accepts a mock client."""
-    challenge_responses = {
-        "USERNAME": username,
-        "SECRET_HASH": get_secret_hash(username, client_id, client_secret),
-    }
-    if challenge_name == "SOFTWARE_TOKEN_MFA":
-        challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
-    else:
-        challenge_responses["SMS_MFA_CODE"] = mfa_code
-
-    result = client.respond_to_auth_challenge(
-        ClientId=client_id, ChallengeName=challenge_name, Session=session, ChallengeResponses=challenge_responses
-    )
-    return result["AuthenticationResult"]
+# Import actual functions from cuboai module
+# (conftest.py sets up the necessary mocks before this runs)
+from custom_components.cuboai.api.cuboai_functions import (
+    get_secret_hash,
+    respond_to_mfa_challenge,
+    respond_to_password_verifier,
+)
 
 
 class TestGetSecretHash:
@@ -127,7 +53,7 @@ class TestRespondToPasswordVerifier:
 
         mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
-        # Call function
+        # Call actual function
         result = respond_to_password_verifier(
             resp=mock_resp,
             aws=mock_aws,
@@ -152,7 +78,7 @@ class TestRespondToPasswordVerifier:
 
         mock_cognito_client.respond_to_auth_challenge.return_value = mock_mfa_challenge
 
-        # Call function
+        # Call actual function
         result = respond_to_password_verifier(
             resp=mock_resp,
             aws=mock_aws,
@@ -192,14 +118,20 @@ class TestRespondToPasswordVerifier:
 
 
 class TestRespondToMfaChallenge:
-    """Tests for the respond_to_mfa_challenge function."""
+    """Tests for the respond_to_mfa_challenge function.
 
-    def test_sms_mfa_success(self, mock_cognito_client, mock_tokens):
+    Note: The actual respond_to_mfa_challenge function creates its own boto3
+    client internally, so we need to patch boto3.client to test it.
+    """
+
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_sms_mfa_success(self, mock_boto_client, mock_tokens):
         """Successfully responds to SMS MFA challenge."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
 
-        result = _respond_to_mfa_challenge_with_client(
-            client=mock_cognito_client,
+        result = respond_to_mfa_challenge(
             client_id="test-client-id",
             client_secret="test-client-secret",
             session="test-session",
@@ -212,17 +144,19 @@ class TestRespondToMfaChallenge:
         assert result == mock_tokens
 
         # Verify correct challenge response was sent
-        call_args = mock_cognito_client.respond_to_auth_challenge.call_args
+        call_args = mock_client.respond_to_auth_challenge.call_args
         assert call_args.kwargs["ChallengeName"] == "SMS_MFA"
         assert "SMS_MFA_CODE" in call_args.kwargs["ChallengeResponses"]
         assert call_args.kwargs["ChallengeResponses"]["SMS_MFA_CODE"] == "123456"
 
-    def test_software_token_mfa_success(self, mock_cognito_client, mock_tokens):
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_software_token_mfa_success(self, mock_boto_client, mock_tokens):
         """Successfully responds to SOFTWARE_TOKEN_MFA (TOTP) challenge."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
 
-        result = _respond_to_mfa_challenge_with_client(
-            client=mock_cognito_client,
+        result = respond_to_mfa_challenge(
             client_id="test-client-id",
             client_secret="test-client-secret",
             session="test-session",
@@ -232,34 +166,38 @@ class TestRespondToMfaChallenge:
         )
 
         # Verify correct response key for TOTP
-        call_args = mock_cognito_client.respond_to_auth_challenge.call_args
+        call_args = mock_client.respond_to_auth_challenge.call_args
         assert call_args.kwargs["ChallengeName"] == "SOFTWARE_TOKEN_MFA"
         assert "SOFTWARE_TOKEN_MFA_CODE" in call_args.kwargs["ChallengeResponses"]
         assert call_args.kwargs["ChallengeResponses"]["SOFTWARE_TOKEN_MFA_CODE"] == "654321"
 
-    def test_default_challenge_name_is_sms(self, mock_cognito_client, mock_tokens):
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_default_challenge_name_is_sms(self, mock_boto_client, mock_tokens):
         """Default MFA type is SMS_MFA."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
 
-        _respond_to_mfa_challenge_with_client(
-            client=mock_cognito_client,
+        respond_to_mfa_challenge(
             client_id="test-client-id",
             client_secret="test-client-secret",
             session="test-session",
             username="testuser",
             mfa_code="123456",
-            # No challenge_name specified
+            # No challenge_name specified - should default to SMS_MFA
         )
 
-        call_args = mock_cognito_client.respond_to_auth_challenge.call_args
+        call_args = mock_client.respond_to_auth_challenge.call_args
         assert call_args.kwargs["ChallengeName"] == "SMS_MFA"
 
-    def test_includes_secret_hash_and_username(self, mock_cognito_client, mock_tokens):
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_includes_secret_hash_and_username(self, mock_boto_client, mock_tokens):
         """Challenge response includes required SECRET_HASH and USERNAME."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
 
-        _respond_to_mfa_challenge_with_client(
-            client=mock_cognito_client,
+        respond_to_mfa_challenge(
             client_id="test-client-id",
             client_secret="test-client-secret",
             session="test-session",
@@ -267,19 +205,21 @@ class TestRespondToMfaChallenge:
             mfa_code="123456",
         )
 
-        call_args = mock_cognito_client.respond_to_auth_challenge.call_args
+        call_args = mock_client.respond_to_auth_challenge.call_args
         challenge_responses = call_args.kwargs["ChallengeResponses"]
 
         assert "USERNAME" in challenge_responses
         assert challenge_responses["USERNAME"] == "testuser"
         assert "SECRET_HASH" in challenge_responses
 
-    def test_passes_session_to_cognito(self, mock_cognito_client, mock_tokens):
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_passes_session_to_cognito(self, mock_boto_client, mock_tokens):
         """Session token is passed to Cognito."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
 
-        _respond_to_mfa_challenge_with_client(
-            client=mock_cognito_client,
+        respond_to_mfa_challenge(
             client_id="test-client-id",
             client_secret="test-client-secret",
             session="my-unique-session-token",
@@ -287,5 +227,23 @@ class TestRespondToMfaChallenge:
             mfa_code="123456",
         )
 
-        call_args = mock_cognito_client.respond_to_auth_challenge.call_args
+        call_args = mock_client.respond_to_auth_challenge.call_args
         assert call_args.kwargs["Session"] == "my-unique-session-token"
+
+    @patch("custom_components.cuboai.api.cuboai_functions.boto3.client")
+    def test_creates_cognito_client_with_correct_region(self, mock_boto_client, mock_tokens):
+        """Boto3 client is created with the specified region."""
+        mock_client = MagicMock()
+        mock_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
+        mock_boto_client.return_value = mock_client
+
+        respond_to_mfa_challenge(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            session="test-session",
+            username="testuser",
+            mfa_code="123456",
+            region="eu-west-1",
+        )
+
+        mock_boto_client.assert_called_once_with("cognito-idp", region_name="eu-west-1")
