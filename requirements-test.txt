@@ -1,0 +1,8 @@
+# Test dependencies for CuboAI
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Dependencies from the integration (needed for imports)
+boto3>=1.26.0
+requests
+pyjwt

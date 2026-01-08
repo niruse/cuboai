@@ -19,6 +19,10 @@ AUTH_SCHEMA = vol.Schema({
     vol.Required("password"): str
 })
 
+MFA_SCHEMA = vol.Schema({
+    vol.Required("mfa_code"): str
+})
+
 CLIENT_ID = "1gvbkmngl920rtp6hlbp6057ue"
 CLIENT_SECRET = "1ot7h8m3t83g0g4b7ais7ilcf12o44cvr9cbgad0t90kcpno56jr"
 POOL_ID = "us-east-1_Wr7vffd5Y"
@@ -75,6 +79,17 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 _LOGGER.debug("Password verifier responded successfully")
 
+                # Check if MFA is required
+                if isinstance(tokens, dict) and "challenge" in tokens:
+                    _LOGGER.debug("MFA challenge detected: %s", tokens["challenge"])
+                    # Store data for MFA step
+                    self._mfa_session = tokens["session"]
+                    self._mfa_challenge = tokens["challenge"]
+                    self._mfa_username = tokens["username"]
+                    self._user_agent = user_agent
+                    self._username_input = user_input["username"]
+                    return await self.async_step_mfa()
+
                 # Step 3: Decode ID Token and login to Cubo
                 uuid = api.decode_id_token(tokens["IdToken"])
                 _LOGGER.debug("Decoded UUID from ID token: %s", uuid)
@@ -105,12 +120,101 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             except Exception as e:
                 _LOGGER.exception("CuboAI authentication failed: %s", e)
-                errors["base"] = "auth_failed"
+                error_str = str(e)
+                if "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    errors["base"] = "sms_quota_exceeded"
+                elif "NotAuthorizedException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "UserNotFoundException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "InvalidPasswordException" in error_str:
+                    errors["base"] = "auth_failed"
+                elif "TooManyRequestsException" in error_str:
+                    errors["base"] = "too_many_requests"
+                elif "LimitExceededException" in error_str:
+                    errors["base"] = "too_many_requests"
+                else:
+                    errors["base"] = "auth_failed"
 
         return self.async_show_form(
             step_id="user",
             data_schema=AUTH_SCHEMA,
             errors=errors
+        )
+
+    async def async_step_mfa(self, user_input=None):
+        """Handle MFA code input step."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                mfa_code = user_input["mfa_code"].strip()
+                _LOGGER.debug("Attempting MFA verification with code length: %d", len(mfa_code))
+
+                tokens = await self.hass.async_add_executor_job(
+                    api.respond_to_mfa_challenge,
+                    CLIENT_ID,
+                    CLIENT_SECRET,
+                    self._mfa_session,
+                    self._mfa_username,
+                    mfa_code,
+                    self._mfa_challenge,
+                    REGION
+                )
+                _LOGGER.debug("MFA verification successful")
+
+                # Continue with normal flow - decode ID token and login to Cubo
+                uuid = api.decode_id_token(tokens["IdToken"])
+                _LOGGER.debug("Decoded UUID from ID token: %s", uuid)
+
+                data = await self.hass.async_add_executor_job(
+                    api.cubo_mobile_login,
+                    uuid,
+                    self._username_input,
+                    tokens["AccessToken"],
+                    self._user_agent
+                )
+                _LOGGER.debug("Cubo mobile login successful after MFA")
+
+                access_token = data["access_token"]
+                refresh_token = data["refresh_token"]
+
+                _LOGGER.debug("Access token (first 20 chars): %s...", access_token[:20])
+                _LOGGER.debug("Refresh token (first 20 chars): %s...", refresh_token[:20])
+
+                # Store for camera selection step
+                self._uuid = uuid
+                self._username = self._username_input
+                self._access_token = access_token
+                self._refresh_token = refresh_token
+
+                return await self.async_step_select_camera()
+
+            except Exception as e:
+                _LOGGER.exception("MFA verification failed: %s", e)
+                error_str = str(e)
+                if "CodeMismatchException" in error_str or "Invalid" in error_str:
+                    errors["base"] = "invalid_mfa_code"
+                elif "ExpiredCodeException" in error_str or "expired" in error_str.lower():
+                    errors["base"] = "mfa_code_expired"
+                elif "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    errors["base"] = "sms_quota_exceeded"
+                elif "TooManyRequestsException" in error_str or "LimitExceededException" in error_str:
+                    errors["base"] = "too_many_requests"
+                else:
+                    errors["base"] = "mfa_failed"
+
+        # Determine hint text based on MFA type
+        mfa_type = getattr(self, "_mfa_challenge", "SMS_MFA")
+        description_placeholders = {
+            "mfa_type": "authenticator app" if mfa_type == "SOFTWARE_TOKEN_MFA" else "SMS"
+        }
+
+        return self.async_show_form(
+            step_id="mfa",
+            data_schema=MFA_SCHEMA,
+            errors=errors,
+            description_placeholders=description_placeholders
         )
 
     async def async_step_select_camera(self, user_input=None):

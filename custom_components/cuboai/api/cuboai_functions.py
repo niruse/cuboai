@@ -138,11 +138,48 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
     challenge_responses = aws.process_challenge(challenge_params)
     username = challenge_params["USER_ID_FOR_SRP"]
     challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-    return client.respond_to_auth_challenge(
+    result = client.respond_to_auth_challenge(
         ClientId=client_id,
         ChallengeName="PASSWORD_VERIFIER",
         ChallengeResponses=challenge_responses
-    )["AuthenticationResult"]
+    )
+    # Check if MFA is required
+    if "ChallengeName" in result:
+        return {
+            "challenge": result["ChallengeName"],
+            "session": result["Session"],
+            "challenge_params": result.get("ChallengeParameters", {}),
+            "username": username
+        }
+    return result["AuthenticationResult"]
+
+
+def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"):
+    """
+    Respond to an MFA challenge (SMS_MFA or SOFTWARE_TOKEN_MFA).
+    Creates its own boto3 client to avoid blocking calls in async context.
+    Returns AuthenticationResult tokens on success.
+    """
+    # Create client inside executor job to avoid blocking the event loop
+    client = boto3.client("cognito-idp", region_name=region)
+    
+    challenge_responses = {
+        "USERNAME": username,
+        "SECRET_HASH": get_secret_hash(username, client_id, client_secret),
+    }
+    # Different response key based on MFA type
+    if challenge_name == "SOFTWARE_TOKEN_MFA":
+        challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
+    else:
+        challenge_responses["SMS_MFA_CODE"] = mfa_code
+    
+    result = client.respond_to_auth_challenge(
+        ClientId=client_id,
+        ChallengeName=challenge_name,
+        Session=session,
+        ChallengeResponses=challenge_responses
+    )
+    return result["AuthenticationResult"]
 
 
 def decode_id_token(id_token):
