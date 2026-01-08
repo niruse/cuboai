@@ -25,3 +25,6 @@ Thumbs.db
 
 # Home Assistant config files (generated at runtime)
 *.log
+
+# Scripts with sensitive data (API tokens, etc.)
+scripts/
