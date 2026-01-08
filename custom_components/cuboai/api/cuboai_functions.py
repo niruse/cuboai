@@ -14,8 +14,54 @@ import requests
 
 from custom_components.cuboai.utils import log_to_file
 
-ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
-REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
+# Legacy hardcoded paths (for backwards compatibility - will be removed in future release)
+LEGACY_ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
+LEGACY_REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
+
+# New portable paths (set by __init__.py using hass.config.path())
+ACCESS_TOKEN_FILE = None
+REFRESH_TOKEN_FILE = None
+
+
+def set_token_paths(config_path: str):
+    """Set token file paths based on Home Assistant config directory.
+
+    Called from __init__.py with hass.config.path() for portability.
+    """
+    global ACCESS_TOKEN_FILE, REFRESH_TOKEN_FILE
+    import os
+
+    ACCESS_TOKEN_FILE = os.path.join(config_path, "cuboai_access_token.json")
+    REFRESH_TOKEN_FILE = os.path.join(config_path, "cuboai_refresh_token.json")
+    log_to_file(f"Token paths set to: {ACCESS_TOKEN_FILE}, {REFRESH_TOKEN_FILE}")
+
+
+def _get_access_token_path():
+    """Get the access token file path, with legacy fallback."""
+    import os
+
+    if ACCESS_TOKEN_FILE and os.path.exists(ACCESS_TOKEN_FILE):
+        return ACCESS_TOKEN_FILE
+    # Backwards compatibility: check legacy location
+    if os.path.exists(LEGACY_ACCESS_TOKEN_FILE):
+        log_to_file(f"Using legacy access token path: {LEGACY_ACCESS_TOKEN_FILE}")
+        return LEGACY_ACCESS_TOKEN_FILE
+    # Return new path for writing (even if doesn't exist yet)
+    return ACCESS_TOKEN_FILE or LEGACY_ACCESS_TOKEN_FILE
+
+
+def _get_refresh_token_path():
+    """Get the refresh token file path, with legacy fallback."""
+    import os
+
+    if REFRESH_TOKEN_FILE and os.path.exists(REFRESH_TOKEN_FILE):
+        return REFRESH_TOKEN_FILE
+    # Backwards compatibility: check legacy location
+    if os.path.exists(LEGACY_REFRESH_TOKEN_FILE):
+        log_to_file(f"Using legacy refresh token path: {LEGACY_REFRESH_TOKEN_FILE}")
+        return LEGACY_REFRESH_TOKEN_FILE
+    # Return new path for writing (even if doesn't exist yet)
+    return REFRESH_TOKEN_FILE or LEGACY_REFRESH_TOKEN_FILE
 
 
 # --- Access/Refresh Token Save/Load ---
@@ -28,21 +74,26 @@ def _atomic_write(path, payload: str):
 
 def save_access_token(access_token):
     try:
-        _atomic_write(ACCESS_TOKEN_FILE, json.dumps({"access_token": access_token}))
+        path = _get_access_token_path()
+        _atomic_write(path, json.dumps({"access_token": access_token}))
+        log_to_file(f"Access token saved to: {path}")
     except Exception as e:
         log_to_file(f"Failed to save access_token: {e}")
 
 
 def save_refresh_token(refresh_token):
     try:
-        _atomic_write(REFRESH_TOKEN_FILE, json.dumps({"refresh_token": refresh_token}))
+        path = _get_refresh_token_path()
+        _atomic_write(path, json.dumps({"refresh_token": refresh_token}))
+        log_to_file(f"Refresh token saved to: {path}")
     except Exception as e:
         log_to_file(f"Failed to save refresh_token: {e}")
 
 
 def load_access_token():
     try:
-        with open(ACCESS_TOKEN_FILE, encoding="utf-8") as f:
+        path = _get_access_token_path()
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
             return data.get("access_token")
     except Exception:
@@ -51,7 +102,8 @@ def load_access_token():
 
 def load_refresh_token():
     try:
-        with open(REFRESH_TOKEN_FILE, encoding="utf-8") as f:
+        path = _get_refresh_token_path()
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
             return data.get("refresh_token")
     except Exception:
