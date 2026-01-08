@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 
 from homeassistant.helpers.entity import Entity
 
@@ -20,6 +21,9 @@ from .const import DOMAIN
 from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
+
+# Legacy hardcoded paths (for backwards compatibility)
+LEGACY_IMAGES_DIR = "/config/www/cuboai_images"
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -206,7 +210,7 @@ class CuboLastAlertSensor(CuboBaseSensor):
     Sensor that exposes the latest CuboAI alerts for a specific device.
     - Pulls the latest N alerts using get_n_alerts_paged
     - Parses params into a dict (not a JSON string)
-    - Downloads alert images to /config/www/cuboai_images if enabled
+    - Downloads alert images to www/cuboai_images if enabled
     - Cleans up old images per device (keeps the latest 5)
     - Chooses the state based on the newest alert by ts
     """
@@ -229,12 +233,30 @@ class CuboLastAlertSensor(CuboBaseSensor):
         self._attributes = {}
         self._attr_extra_state_attributes = self._attributes
 
-        # Paths for image storage and web access
-        self._images_dir = "/config/www/cuboai_images"
+        # Portable image storage paths using hass.config.path()
+        # Falls back to legacy path for backwards compatibility
+        self._images_dir = self._get_images_dir()
         self._web_base = "/local/cuboai_images"
 
         # Default behavior can be overridden via options
         self._default_download_images = download_images
+
+    def _get_images_dir(self) -> str:
+        """Get the images directory path with legacy fallback for backwards compatibility."""
+        # Try portable path first
+        portable_path = self.hass.config.path("www", "cuboai_images")
+
+        # If portable path exists, use it
+        if os.path.exists(portable_path):
+            return portable_path
+
+        # If legacy path exists (and portable doesn't), use legacy for backwards compatibility
+        if os.path.exists(LEGACY_IMAGES_DIR):
+            log_to_file(f"Using legacy images path: {LEGACY_IMAGES_DIR}")
+            return LEGACY_IMAGES_DIR
+
+        # Default to portable path for new installations
+        return portable_path
 
     # ---------- Config helpers ----------
 
