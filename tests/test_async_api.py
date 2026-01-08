@@ -351,3 +351,135 @@ class TestNormalizeAlert:
         result = async_api._normalize_alert(alert)
 
         assert result["params"] == "not-valid-json"
+
+
+class TestGetCameraDetailsAsync:
+    """Test async get_camera_details."""
+
+    @pytest.mark.asyncio
+    async def test_returns_camera_details(self):
+        """Test that camera details are extracted correctly."""
+        with aioresponses() as m:
+            m.get(
+                "https://api.getcubo.com/prod/user/cameras",
+                payload={
+                    "data": [
+                        {
+                            "device_id": "device-123",
+                            "license_id": "LICENSE123",
+                            "created": "2023-01-01T00:00:00.000Z",
+                            "role": "admin",
+                            "settings": '{"alexa_enable": true}',
+                        }
+                    ],
+                    "profiles": [
+                        {
+                            "device_id": "device-123",
+                            "profile": '{"baby": "TestBaby", "birth": "2022-06-15", "gender": 1, "avatar": "https://example.com/avatar.jpg"}',
+                        }
+                    ],
+                    "report_settings": [
+                        {
+                            "device_id": "device-123",
+                            "time_zone": "Europe/London",
+                            "sleep_time": "19:00",
+                            "wakeup_time": "07:00",
+                            "report_time": 9,
+                            "gmt_offset": 0,
+                        }
+                    ],
+                },
+            )
+
+            result = await async_api.get_camera_details(
+                device_id="device-123",
+                access_token="test-token",
+                user_agent="TestAgent/1.0",
+            )
+
+            assert result["device_id"] == "device-123"
+            assert result["license_id"] == "LICENSE123"
+            assert result["baby_name"] == "TestBaby"
+            assert result["birth_date"] == "2022-06-15"
+            assert result["gender"] == "female"
+            assert result["avatar_url"] == "https://example.com/avatar.jpg"
+            assert result["alexa_enabled"] is True
+            assert result["timezone"] == "Europe/London"
+            assert result["sleep_time"] == "19:00"
+            assert result["wakeup_time"] == "07:00"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_unknown_device(self):
+        """Test that None is returned for unknown device."""
+        with aioresponses() as m:
+            m.get(
+                "https://api.getcubo.com/prod/user/cameras",
+                payload={
+                    "data": [{"device_id": "other-device"}],
+                    "profiles": [],
+                    "report_settings": [],
+                },
+            )
+
+            result = await async_api.get_camera_details(
+                device_id="unknown-device",
+                access_token="test-token",
+                user_agent="TestAgent/1.0",
+            )
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_handles_missing_profile(self):
+        """Test handling when profile data is missing."""
+        with aioresponses() as m:
+            m.get(
+                "https://api.getcubo.com/prod/user/cameras",
+                payload={
+                    "data": [
+                        {
+                            "device_id": "device-123",
+                            "license_id": "LICENSE123",
+                        }
+                    ],
+                    "profiles": [],
+                    "report_settings": [],
+                },
+            )
+
+            result = await async_api.get_camera_details(
+                device_id="device-123",
+                access_token="test-token",
+                user_agent="TestAgent/1.0",
+            )
+
+            assert result["device_id"] == "device-123"
+            assert result["license_id"] == "LICENSE123"
+            assert result["baby_name"] is None
+            assert result["gender"] is None
+
+    @pytest.mark.asyncio
+    async def test_maps_gender_correctly(self):
+        """Test gender mapping (0=male, 1=female)."""
+        with aioresponses() as m:
+            m.get(
+                "https://api.getcubo.com/prod/user/cameras",
+                payload={
+                    "data": [{"device_id": "device-male"}],
+                    "profiles": [
+                        {
+                            "device_id": "device-male",
+                            "profile": '{"gender": 0}',
+                        }
+                    ],
+                    "report_settings": [],
+                },
+            )
+
+            result = await async_api.get_camera_details(
+                device_id="device-male",
+                access_token="test-token",
+                user_agent="TestAgent/1.0",
+            )
+
+            assert result["gender"] == "male"
