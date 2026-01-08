@@ -1,16 +1,15 @@
 {
     "domain": "cuboai",
     "name": "CuboAi",
-    "version": "1.0.8",
+    "codeowners": ["@niruse"],
+    "config_flow": true,
+    "documentation": "https://github.com/niruse/cuboai",
+    "iot_class": "cloud_polling",
+    "issue_tracker": "https://github.com/niruse/cuboai/issues",
     "requirements": [
         "boto3>=1.26.0",
         "requests",
         "pyjwt"
     ],
-    "codeowners": ["@niruse"],
-    "iot_class": "cloud_polling",
-    "config_flow": true,
-    "dependencies": [],
-    "after_dependencies": [],
-    "platforms": ["sensor"]
+    "version": "1.0.8"
 }
