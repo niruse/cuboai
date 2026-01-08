@@ -27,15 +27,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
 
-      - name: Run tests
-        run: pytest tests/ -v --cov=custom_components/cuboai --cov-report=xml
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v \
+            --cov=custom_components/cuboai \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-report=html
 
-      - name: Upload coverage
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: matrix.python-version == '3.12'
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Coverage summary
+        if: matrix.python-version == '3.12'
+        run: |
+          echo "## Test Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          python -m coverage report --format=markdown >> $GITHUB_STEP_SUMMARY || python -m coverage report >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   validate:
     name: Validate Integration

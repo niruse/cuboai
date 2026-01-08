@@ -1,8 +1,9 @@
 # Test dependencies for CuboAI
 pytest>=7.0.0
 pytest-cov>=4.0.0
+pytest-asyncio>=0.21.0
 
 # Dependencies from the integration (needed for imports)
 boto3>=1.26.0
+pycognito>=2024.5.1
 requests
-pyjwt
