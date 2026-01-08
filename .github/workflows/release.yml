@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION"
+
+      - name: Update version in manifest.json
+        run: |
+          sed -i 's/"version": "[^"]*"/"version": "${{ steps.version.outputs.version }}"/' custom_components/cuboai/manifest.json
+          cat custom_components/cuboai/manifest.json
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/cuboai/manifest.json
+          git commit -m "chore: Bump version to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push origin HEAD:main
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "First release - no previous tag found"
+            COMMITS=$(git log --oneline --no-merges)
+          else
+            echo "Previous tag: $PREV_TAG"
+            COMMITS=$(git log --oneline --no-merges ${PREV_TAG}..HEAD)
+          fi
+          
+          # Create changelog
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS" | while read line; do
+              echo "- $line"
+            done
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.ref_name }}"
+          } > CHANGELOG.md
+          
+          cat CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: CHANGELOG.md
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

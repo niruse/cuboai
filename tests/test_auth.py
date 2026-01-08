@@ -1,7 +1,7 @@
 """Tests for CuboAI authentication flow functions."""
+
 import sys
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Mock homeassistant before importing cuboai modules
 sys.modules["homeassistant"] = MagicMock()
@@ -37,9 +37,7 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
     username = challenge_params["USER_ID_FOR_SRP"]
     challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
     result = client.respond_to_auth_challenge(
-        ClientId=client_id,
-        ChallengeName="PASSWORD_VERIFIER",
-        ChallengeResponses=challenge_responses
+        ClientId=client_id, ChallengeName="PASSWORD_VERIFIER", ChallengeResponses=challenge_responses
     )
     # Check if MFA is required
     if "ChallengeName" in result:
@@ -47,12 +45,14 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
             "challenge": result["ChallengeName"],
             "session": result["Session"],
             "challenge_params": result.get("ChallengeParameters", {}),
-            "username": username
+            "username": username,
         }
     return result["AuthenticationResult"]
 
 
-def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"):
+def respond_to_mfa_challenge(
+    client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"
+):
     """Copy of the function for testing - note: in tests we mock the client creation."""
     # For testing, we create a mock-friendly version
     # The real function creates boto3.client internally
@@ -64,13 +64,15 @@ def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_co
         challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
     else:
         challenge_responses["SMS_MFA_CODE"] = mfa_code
-    
+
     # Note: Real function creates client internally; tests will need to mock boto3.client
     return challenge_responses  # For signature testing only
 
 
 # Test helper that mimics the real function but accepts a mock client
-def _respond_to_mfa_challenge_with_client(client, client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA"):
+def _respond_to_mfa_challenge_with_client(
+    client, client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA"
+):
     """Test helper that accepts a mock client."""
     challenge_responses = {
         "USERNAME": username,
@@ -80,12 +82,9 @@ def _respond_to_mfa_challenge_with_client(client, client_id, client_secret, sess
         challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
     else:
         challenge_responses["SMS_MFA_CODE"] = mfa_code
-    
+
     result = client.respond_to_auth_challenge(
-        ClientId=client_id,
-        ChallengeName=challenge_name,
-        Session=session,
-        ChallengeResponses=challenge_responses
+        ClientId=client_id, ChallengeName=challenge_name, Session=session, ChallengeResponses=challenge_responses
     )
     return result["AuthenticationResult"]
 
@@ -108,6 +107,7 @@ class TestGetSecretHash:
     def test_hash_is_base64_encoded(self):
         """Hash should be a valid base64 string."""
         import base64
+
         hash_value = get_secret_hash("user@test.com", "client123", "secret456")
         # Should not raise an exception
         decoded = base64.b64decode(hash_value)
@@ -122,14 +122,10 @@ class TestRespondToPasswordVerifier:
         # Setup mocks
         mock_aws = MagicMock()
         mock_aws.process_challenge.return_value = {"USERNAME": "testuser"}
-        
-        mock_resp = {
-            "ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}
-        }
-        
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+
+        mock_resp = {"ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}}
+
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         # Call function
         result = respond_to_password_verifier(
@@ -138,7 +134,7 @@ class TestRespondToPasswordVerifier:
             client=mock_cognito_client,
             client_id="test-client-id",
             client_secret="test-client-secret",
-            user_agent="test-agent"
+            user_agent="test-agent",
         )
 
         # Verify
@@ -151,11 +147,9 @@ class TestRespondToPasswordVerifier:
         # Setup mocks
         mock_aws = MagicMock()
         mock_aws.process_challenge.return_value = {"USERNAME": "testuser"}
-        
-        mock_resp = {
-            "ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}
-        }
-        
+
+        mock_resp = {"ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}}
+
         mock_cognito_client.respond_to_auth_challenge.return_value = mock_mfa_challenge
 
         # Call function
@@ -165,7 +159,7 @@ class TestRespondToPasswordVerifier:
             client=mock_cognito_client,
             client_id="test-client-id",
             client_secret="test-client-secret",
-            user_agent="test-agent"
+            user_agent="test-agent",
         )
 
         # Verify MFA challenge info is returned
@@ -180,11 +174,9 @@ class TestRespondToPasswordVerifier:
         """Detects SOFTWARE_TOKEN_MFA (TOTP) challenge."""
         mock_aws = MagicMock()
         mock_aws.process_challenge.return_value = {"USERNAME": "testuser"}
-        
-        mock_resp = {
-            "ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}
-        }
-        
+
+        mock_resp = {"ChallengeParameters": {"USER_ID_FOR_SRP": "testuser"}}
+
         mock_cognito_client.respond_to_auth_challenge.return_value = mock_software_token_mfa_challenge
 
         result = respond_to_password_verifier(
@@ -193,7 +185,7 @@ class TestRespondToPasswordVerifier:
             client=mock_cognito_client,
             client_id="test-client-id",
             client_secret="test-client-secret",
-            user_agent="test-agent"
+            user_agent="test-agent",
         )
 
         assert result["challenge"] == "SOFTWARE_TOKEN_MFA"
@@ -204,9 +196,7 @@ class TestRespondToMfaChallenge:
 
     def test_sms_mfa_success(self, mock_cognito_client, mock_tokens):
         """Successfully responds to SMS MFA challenge."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         result = _respond_to_mfa_challenge_with_client(
             client=mock_cognito_client,
@@ -215,12 +205,12 @@ class TestRespondToMfaChallenge:
             session="test-session",
             username="testuser",
             mfa_code="123456",
-            challenge_name="SMS_MFA"
+            challenge_name="SMS_MFA",
         )
 
         # Verify tokens returned
         assert result == mock_tokens
-        
+
         # Verify correct challenge response was sent
         call_args = mock_cognito_client.respond_to_auth_challenge.call_args
         assert call_args.kwargs["ChallengeName"] == "SMS_MFA"
@@ -229,9 +219,7 @@ class TestRespondToMfaChallenge:
 
     def test_software_token_mfa_success(self, mock_cognito_client, mock_tokens):
         """Successfully responds to SOFTWARE_TOKEN_MFA (TOTP) challenge."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         result = _respond_to_mfa_challenge_with_client(
             client=mock_cognito_client,
@@ -240,7 +228,7 @@ class TestRespondToMfaChallenge:
             session="test-session",
             username="testuser",
             mfa_code="654321",
-            challenge_name="SOFTWARE_TOKEN_MFA"
+            challenge_name="SOFTWARE_TOKEN_MFA",
         )
 
         # Verify correct response key for TOTP
@@ -251,9 +239,7 @@ class TestRespondToMfaChallenge:
 
     def test_default_challenge_name_is_sms(self, mock_cognito_client, mock_tokens):
         """Default MFA type is SMS_MFA."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         _respond_to_mfa_challenge_with_client(
             client=mock_cognito_client,
@@ -261,7 +247,7 @@ class TestRespondToMfaChallenge:
             client_secret="test-client-secret",
             session="test-session",
             username="testuser",
-            mfa_code="123456"
+            mfa_code="123456",
             # No challenge_name specified
         )
 
@@ -270,9 +256,7 @@ class TestRespondToMfaChallenge:
 
     def test_includes_secret_hash_and_username(self, mock_cognito_client, mock_tokens):
         """Challenge response includes required SECRET_HASH and USERNAME."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         _respond_to_mfa_challenge_with_client(
             client=mock_cognito_client,
@@ -280,21 +264,19 @@ class TestRespondToMfaChallenge:
             client_secret="test-client-secret",
             session="test-session",
             username="testuser",
-            mfa_code="123456"
+            mfa_code="123456",
         )
 
         call_args = mock_cognito_client.respond_to_auth_challenge.call_args
         challenge_responses = call_args.kwargs["ChallengeResponses"]
-        
+
         assert "USERNAME" in challenge_responses
         assert challenge_responses["USERNAME"] == "testuser"
         assert "SECRET_HASH" in challenge_responses
 
     def test_passes_session_to_cognito(self, mock_cognito_client, mock_tokens):
         """Session token is passed to Cognito."""
-        mock_cognito_client.respond_to_auth_challenge.return_value = {
-            "AuthenticationResult": mock_tokens
-        }
+        mock_cognito_client.respond_to_auth_challenge.return_value = {"AuthenticationResult": mock_tokens}
 
         _respond_to_mfa_challenge_with_client(
             client=mock_cognito_client,
@@ -302,7 +284,7 @@ class TestRespondToMfaChallenge:
             client_secret="test-client-secret",
             session="my-unique-session-token",
             username="testuser",
-            mfa_code="123456"
+            mfa_code="123456",
         )
 
         call_args = mock_cognito_client.respond_to_auth_challenge.call_args
