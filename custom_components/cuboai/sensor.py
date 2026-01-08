@@ -3,17 +3,20 @@ import json
 import logging
 import os
 
+import aiohttp
 from homeassistant.helpers.entity import Entity
 
-from .api.cuboai_functions import (
+from .api.async_api import (
     download_image,
     get_camera_profiles_raw,
     get_camera_state,
-    get_n_alerts_paged,  # <-- This does the "get up to N alerts, paged" logic
+    get_n_alerts_paged,
     get_subscription_info,
+    refresh_cubo_token,
+)
+from .api.cuboai_functions import (
     load_access_token,
     load_refresh_token,
-    refresh_access_token_only,
     save_access_token,
     save_refresh_token,
 )
@@ -102,9 +105,21 @@ class CuboBaseSensor(Entity):
         self._access_token = access_token
         self._refresh_token = refresh_token
         self._user_agent = user_agent
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp session."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def async_will_remove_from_hass(self):
+        """Clean up session when entity is removed."""
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     async def _load_latest_tokens(self):
-        # Load tokens from disk via executor to avoid blocking the event loop
+        """Load tokens from disk via executor to avoid blocking the event loop."""
         latest_access, latest_refresh = await asyncio.gather(
             self.hass.async_add_executor_job(load_access_token),
             self.hass.async_add_executor_job(load_refresh_token),
@@ -115,19 +130,19 @@ class CuboBaseSensor(Entity):
             self._refresh_token = latest_refresh
 
     async def _external_refresh_token(self):
-        # Always reload the latest tokens before refreshing
+        """Refresh tokens using async API."""
         await self._load_latest_tokens()
-        access_token, refresh_token, _ = await self.hass.async_add_executor_job(
-            refresh_access_token_only,
-            self._refresh_token,
-            self._user_agent,
-        )
+        session = await self._get_session()
+        resp = await refresh_cubo_token(self._refresh_token, self._user_agent, session)
+        log_to_file(f"Token refresh response: {json.dumps(resp, indent=2)}")
+        access_token = resp.get("access_token")
+        new_refresh_token = resp.get("refresh_token", self._refresh_token)
         self._access_token = access_token
-        self._refresh_token = refresh_token
-        # Save tokens back to disk via executor as well
+        self._refresh_token = new_refresh_token
+        # Save tokens back to disk via executor
         await asyncio.gather(
             self.hass.async_add_executor_job(save_access_token, access_token),
-            self.hass.async_add_executor_job(save_refresh_token, refresh_token),
+            self.hass.async_add_executor_job(save_refresh_token, new_refresh_token),
         )
 
 
@@ -170,17 +185,14 @@ class CuboBabyInfoSensor(CuboBaseSensor):
 
         try:
             await self._load_latest_tokens()
+            session = await self._get_session()
             try:
-                profiles = await self.hass.async_add_executor_job(
-                    get_camera_profiles_raw, self._access_token, self._user_agent
-                )
-            except Exception as e:
-                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401:
                     log_to_file(f"Access token expired in BabyInfoSensor: {e}")
                     await self._external_refresh_token()
-                    profiles = await self.hass.async_add_executor_job(
-                        get_camera_profiles_raw, self._access_token, self._user_agent
-                    )
+                    profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
                 else:
                     raise
             found = False
@@ -318,36 +330,56 @@ class CuboLastAlertSensor(CuboBaseSensor):
 
     # ---------- Update logic ----------
 
+    def _cleanup_old_images(self):
+        """Cleanup old images, keeping only the latest 5 per device.
+
+        This is a blocking operation and should be run via executor.
+        """
+        from pathlib import Path
+
+        files = sorted(
+            Path(self._images_dir).glob(f"{self._device_id}_*.jpg"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        for old_file in files[5:]:
+            try:
+                old_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     async def async_update(self):
         import json as _json
-        import os
         import traceback
+
+        import aiofiles.os
 
         try:
             # Ensure we use the newest tokens saved on disk
             await self._load_latest_tokens()
+            session = await self._get_session()
 
             # Fetch alerts, with refresh fallback on 401
             try:
-                alerts = await self.hass.async_add_executor_job(
-                    get_n_alerts_paged,
+                alerts = await get_n_alerts_paged(
                     self._device_id,
                     self._access_token,
                     self._user_agent,
                     self.max_alerts,
                     self.hours_back,
+                    session,
                 )
-            except Exception as e:
-                if "401" in str(e) or "unauthorized" in str(e).lower():
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401:
                     log_to_file(f"[CuboLastAlertSensor] Access token expired: {e}")
                     await self._external_refresh_token()
-                    alerts = await self.hass.async_add_executor_job(
-                        get_n_alerts_paged,
+                    alerts = await get_n_alerts_paged(
                         self._device_id,
                         self._access_token,
                         self._user_agent,
                         self.max_alerts,
                         self.hours_back,
+                        session,
                     )
                 else:
                     raise
@@ -359,11 +391,10 @@ class CuboLastAlertSensor(CuboBaseSensor):
 
             if alerts:
                 # Ensure image dir exists if downloads are enabled
-                exists = await self.hass.async_add_executor_job(os.path.exists, self._images_dir)
+                exists = await aiofiles.os.path.exists(self._images_dir)
                 if self.download_images and not exists:
                     try:
-                        # run makedirs in executor to avoid blocking the loop
-                        await self.hass.async_add_executor_job(os.makedirs, self._images_dir, True)
+                        await aiofiles.os.makedirs(self._images_dir, exist_ok=True)
                         log_to_file(f"[CuboLastAlertSensor] Created images dir: {self._images_dir}")
                     except Exception as e:
                         log_to_file(f"[CuboLastAlertSensor] Failed to create images dir: {e}")
@@ -382,13 +413,13 @@ class CuboLastAlertSensor(CuboBaseSensor):
                     if self.download_images and alert.get("image"):
                         filename = f"{self._device_id}_{alert.get('id')}.jpg"
                         try:
-                            await self.hass.async_add_executor_job(
-                                download_image,
+                            await download_image(
                                 alert.get("image"),
                                 self._access_token,
                                 self._user_agent,
                                 self._images_dir,
                                 filename,
+                                session,
                             )
                             local_image_path = f"{self._web_base}/{filename}"
                             downloaded_filenames.append(filename)
@@ -410,26 +441,10 @@ class CuboLastAlertSensor(CuboBaseSensor):
                     )
 
                 # Cleanup old images per device, keep only the latest 5
-
-                def _cleanup_images(dir_path, prefix):
-                    # Runs in executor, safe to use blocking I/O here
-                    from pathlib import Path
-
-                    files = sorted(
-                        Path(dir_path).glob(f"{prefix}_*.jpg"),
-                        key=lambda f: f.stat().st_mtime,
-                        reverse=True,
-                    )
-                    for old_file in files[5:]:
-                        try:
-                            old_file.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-
-                # inside async_update
                 if self.download_images:
                     try:
-                        await self.hass.async_add_executor_job(_cleanup_images, self._images_dir, self._device_id)
+                        # Run cleanup in executor since it uses blocking pathlib
+                        await self.hass.async_add_executor_job(self._cleanup_old_images)
                     except Exception as e:
                         log_to_file(f"[CuboLastAlertSensor] Error cleaning images: {e}")
 
@@ -483,17 +498,14 @@ class CuboSubscriptionSensor(CuboBaseSensor):
 
         try:
             await self._load_latest_tokens()
+            session = await self._get_session()
             try:
-                data = await self.hass.async_add_executor_job(
-                    get_subscription_info, self._access_token, self._user_agent
-                )
-            except Exception as e:
-                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                data = await get_subscription_info(self._access_token, self._user_agent, session)
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401:
                     log_to_file(f"Access token expired in SubscriptionSensor: {e}")
                     await self._external_refresh_token()
-                    data = await self.hass.async_add_executor_job(
-                        get_subscription_info, self._access_token, self._user_agent
-                    )
+                    data = await get_subscription_info(self._access_token, self._user_agent, session)
                 else:
                     raise
             if data:
@@ -557,17 +569,14 @@ class CuboCameraStateSensor(CuboBaseSensor):
 
         try:
             await self._load_latest_tokens()
+            session = await self._get_session()
             try:
-                data = await self.hass.async_add_executor_job(
-                    get_camera_state, self._device_id, self._access_token, self._user_agent
-                )
-            except Exception as e:
-                if "401" in str(e) or "Unauthorized" in str(e).lower():
+                data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401:
                     log_to_file(f"Access token expired in CameraStateSensor: {e}")
                     await self._external_refresh_token()
-                    data = await self.hass.async_add_executor_job(
-                        get_camera_state, self._device_id, self._access_token, self._user_agent
-                    )
+                    data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
                 else:
                     raise
             if data:
