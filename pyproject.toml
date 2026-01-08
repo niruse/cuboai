@@ -17,7 +17,7 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "B905",   # zip without explicit strict
     "W191",   # indentation contains tabs
-    "E402",   # module level import not at top (needed for test mocking and warrant install)
+    "E402",   # module level import not at top (needed for test mocking)
     "B904",   # raise from in except (verbose for simple reraise)
 ]
 
