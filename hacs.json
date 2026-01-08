@@ -1,14 +1,6 @@
 {
   "name": "CuboAI Home Assistant Integration",
   "content_in_root": false,
-  "domains": ["sensor"],
-  "country": "global",
   "homeassistant": "2024.1.0",
-  "iot_class": "cloud_polling",
-  "render_readme": true,
-  "persistent_directory": "cuboai",
-  "filename": "custom_components/cuboai/manifest.json",
-  "zip_release": false,
-  "version": "1.0.0",
-  "description": "Unofficial Home Assistant integration for CuboAI baby monitor. Shows alerts, camera status, subscription info, and more."
+  "render_readme": true
 }

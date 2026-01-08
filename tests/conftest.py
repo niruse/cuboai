@@ -1,6 +1,8 @@
 """Pytest configuration and fixtures for CuboAI tests."""
+
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture

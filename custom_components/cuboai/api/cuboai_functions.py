@@ -1,19 +1,18 @@
 import base64
 import hashlib
 import hmac
-import boto3
-import requests
-import jwt
-import os
+import importlib
 import json
+import os
+import subprocess
 import sys
 import time
-import glob
-import subprocess
-import importlib
-from datetime import datetime
-from custom_components.cuboai.utils import log_to_file
 
+import boto3
+import jwt
+import requests
+
+from custom_components.cuboai.utils import log_to_file
 
 ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
 REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
@@ -26,11 +25,13 @@ def _atomic_write(path, payload: str):
         f.write(payload)
     os.replace(tmp, path)
 
+
 def save_access_token(access_token):
     try:
         _atomic_write(ACCESS_TOKEN_FILE, json.dumps({"access_token": access_token}))
     except Exception as e:
         log_to_file(f"Failed to save access_token: {e}")
+
 
 def save_refresh_token(refresh_token):
     try:
@@ -41,7 +42,7 @@ def save_refresh_token(refresh_token):
 
 def load_access_token():
     try:
-        with open(ACCESS_TOKEN_FILE, "r", encoding="utf-8") as f:
+        with open(ACCESS_TOKEN_FILE, encoding="utf-8") as f:
             data = json.load(f)
             return data.get("access_token")
     except Exception:
@@ -50,7 +51,7 @@ def load_access_token():
 
 def load_refresh_token():
     try:
-        with open(REFRESH_TOKEN_FILE, "r", encoding="utf-8") as f:
+        with open(REFRESH_TOKEN_FILE, encoding="utf-8") as f:
             data = json.load(f)
             return data.get("refresh_token")
     except Exception:
@@ -84,30 +85,32 @@ def ensure_warrant_installed():
     # Try importing
     try:
         from warrant.aws_srp import AWSSRP  # noqa: F401
+
         return True
     except ImportError:
         try:
             log_to_file("warrant not found, attempting auto-install warrant==0.6.1...")
-            subprocess.check_call([
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-cache-dir",
-                "--upgrade",
-                "--no-deps",
-                "--target",
-                site_packages,
-                "warrant==0.6.1"
-            ])
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-cache-dir",
+                    "--upgrade",
+                    "--no-deps",
+                    "--target",
+                    site_packages,
+                    "warrant==0.6.1",
+                ]
+            )
             importlib.invalidate_caches()
             from warrant.aws_srp import AWSSRP  # noqa: F401
+
             log_to_file("warrant successfully installed.")
             return True
         except Exception as e:
-            raise ImportError(
-                f"Failed to auto-install warrant==0.6.1 into {site_packages}: {e}"
-            )
+            raise ImportError(f"Failed to auto-install warrant==0.6.1 into {site_packages}: {e}")
 
 
 # Make sure warrant is available before import
@@ -126,11 +129,7 @@ def initiate_user_srp_auth(username, password, pool_id, client_id, client_secret
     aws = AWSSRP(username=username, password=password, pool_id=pool_id, client_id=client_id, client=client)
     auth_params = aws.get_auth_params()
     auth_params["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-    return client.initiate_auth(
-        AuthFlow="USER_SRP_AUTH",
-        AuthParameters=auth_params,
-        ClientId=client_id
-    ), aws, client
+    return client.initiate_auth(AuthFlow="USER_SRP_AUTH", AuthParameters=auth_params, ClientId=client_id), aws, client
 
 
 def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent):
@@ -139,9 +138,7 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
     username = challenge_params["USER_ID_FOR_SRP"]
     challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
     result = client.respond_to_auth_challenge(
-        ClientId=client_id,
-        ChallengeName="PASSWORD_VERIFIER",
-        ChallengeResponses=challenge_responses
+        ClientId=client_id, ChallengeName="PASSWORD_VERIFIER", ChallengeResponses=challenge_responses
     )
     # Check if MFA is required
     if "ChallengeName" in result:
@@ -149,12 +146,14 @@ def respond_to_password_verifier(resp, aws, client, client_id, client_secret, us
             "challenge": result["ChallengeName"],
             "session": result["Session"],
             "challenge_params": result.get("ChallengeParameters", {}),
-            "username": username
+            "username": username,
         }
     return result["AuthenticationResult"]
 
 
-def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"):
+def respond_to_mfa_challenge(
+    client_id, client_secret, session, username, mfa_code, challenge_name="SMS_MFA", region="us-east-1"
+):
     """
     Respond to an MFA challenge (SMS_MFA or SOFTWARE_TOKEN_MFA).
     Creates its own boto3 client to avoid blocking calls in async context.
@@ -162,7 +161,7 @@ def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_co
     """
     # Create client inside executor job to avoid blocking the event loop
     client = boto3.client("cognito-idp", region_name=region)
-    
+
     challenge_responses = {
         "USERNAME": username,
         "SECRET_HASH": get_secret_hash(username, client_id, client_secret),
@@ -172,12 +171,9 @@ def respond_to_mfa_challenge(client_id, client_secret, session, username, mfa_co
         challenge_responses["SOFTWARE_TOKEN_MFA_CODE"] = mfa_code
     else:
         challenge_responses["SMS_MFA_CODE"] = mfa_code
-    
+
     result = client.respond_to_auth_challenge(
-        ClientId=client_id,
-        ChallengeName=challenge_name,
-        Session=session,
-        ChallengeResponses=challenge_responses
+        ClientId=client_id, ChallengeName=challenge_name, Session=session, ChallengeResponses=challenge_responses
     )
     return result["AuthenticationResult"]
 
@@ -200,7 +196,7 @@ def cubo_mobile_login(uuid, username, access_token, user_agent):
         "uid_p": uuid,
         "uname_p": username,
         "device_model": "sdk_gphone64_x86_64",
-        "zone_name": "GMT"
+        "zone_name": "GMT",
     }
     headers = {
         "User-Agent": user_agent,
@@ -208,7 +204,7 @@ def cubo_mobile_login(uuid, username, access_token, user_agent):
         "Content-Type": "application/json; charset=UTF-8",
         "x-cb-authorization": f"Bearer {access_token}",
         "x-cspp-authorization": "",
-        "x-refresh-authorization": ""
+        "x-refresh-authorization": "",
     }
     response = requests.post(url, json=payload, headers=headers)
     response.raise_for_status()
@@ -222,7 +218,7 @@ def refresh_cubo_token(refresh_token, user_agent):
         "x-cb-authorization": "",
         "x-cspp-authorization": "",
         "x-refresh-authorization": f"Bearer {refresh_token}",
-        "User-Agent": user_agent
+        "User-Agent": user_agent,
     }
     response = requests.post(url, headers=headers)
     response.raise_for_status()
@@ -250,7 +246,7 @@ def get_camera_profiles(access_token, user_agent):
     headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/json",
-        "x-cspp-authorization": f"Bearer {access_token}"
+        "x-cspp-authorization": f"Bearer {access_token}",
     }
     response = requests.get(url, headers=headers)
     response.raise_for_status()
@@ -272,7 +268,7 @@ def get_camera_profiles_raw(access_token, user_agent):
     headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/json",
-        "x-cspp-authorization": f"Bearer {access_token}"
+        "x-cspp-authorization": f"Bearer {access_token}",
     }
     response = requests.get(url, headers=headers)
     response.raise_for_status()
@@ -280,7 +276,7 @@ def get_camera_profiles_raw(access_token, user_agent):
 
 
 # --- Alerts ---
-'''
+"""
 def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, max_per_call=20):
     now = int(time.time())
     since_ts = now - hours_back * 60 * 60
@@ -308,11 +304,13 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12, 
         oldest_ts = min(a["ts"] for a in filtered)
         since_ts = oldest_ts - 1
     return sorted(all_alerts.values(), key=lambda a: a.get('ts', 0), reverse=True)[:n]
-'''
+"""
 # --- Alerts helpers ---
+
 
 def _normalize_alert(a):
     import json
+
     params = a.get("params")
     if isinstance(params, str):
         try:
@@ -338,7 +336,6 @@ def get_n_alerts_paged(device_id, access_token, user_agent, n=5, hours_back=12):
     Walk forward in time by advancing since to max(ts)+1 per page.
     Return alerts sorted by ts desc and truncated to N.
     """
-    import time
     import requests
 
     now = int(time.time())
@@ -398,11 +395,7 @@ def download_image(url, token, user_agent, save_dir, filename=None):
     if not filename:
         filename = url.split("/")[-1]
     save_path = os.path.join(save_dir, filename)
-    headers = {
-        "User-Agent": user_agent,
-        "x-cspp-authorization": f"Bearer {token}",
-        "Accept-Encoding": "gzip"
-    }
+    headers = {"User-Agent": user_agent, "x-cspp-authorization": f"Bearer {token}", "Accept-Encoding": "gzip"}
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
     with open(save_path, "wb") as f:
@@ -416,7 +409,7 @@ def get_subscription_info(access_token, user_agent):
     headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/json",
-        "x-cspp-authorization": f"Bearer {access_token}"
+        "x-cspp-authorization": f"Bearer {access_token}",
     }
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
@@ -446,7 +439,7 @@ def get_camera_state(device_id, access_token, user_agent):
     headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/json",
-        "x-cspp-authorization": f"Bearer {access_token}"
+        "x-cspp-authorization": f"Bearer {access_token}",
     }
     response = requests.get(url_camera_state, headers=headers)
     response.raise_for_status()
