@@ -247,3 +247,74 @@ class TestRespondToMfaChallenge:
         )
 
         mock_boto_client.assert_called_once_with("cognito-idp", region_name="eu-west-1")
+
+
+class TestPycognitoCompatibility:
+    """Tests to verify compatibility with the pycognito library.
+
+    These tests help detect breaking changes in upstream dependencies
+    by testing against the actual library (not mocked).
+    """
+
+    def test_awssrp_process_challenge_signature(self):
+        """Verify AWSSRP.process_challenge accepts required parameters.
+
+        This test ensures we're compatible with pycognito's API.
+        If pycognito changes their signature again, this test will fail.
+        """
+        import inspect
+
+        from pycognito import AWSSRP
+
+        sig = inspect.signature(AWSSRP.process_challenge)
+        params = list(sig.parameters.keys())
+
+        # Should have: self, challenge_parameters, request_parameters
+        assert "challenge_parameters" in params or len(params) >= 2, (
+            f"AWSSRP.process_challenge signature changed! Got params: {params}"
+        )
+        # The new API requires request_parameters
+        assert "request_parameters" in params or len(params) >= 3, (
+            f"AWSSRP.process_challenge should accept request_parameters. Got: {params}"
+        )
+
+    def test_awssrp_can_be_instantiated(self):
+        """Verify AWSSRP can be instantiated with expected parameters."""
+        from unittest.mock import MagicMock
+
+        from pycognito import AWSSRP
+
+        mock_client = MagicMock()
+
+        # This should not raise an exception
+        aws = AWSSRP(
+            username="test@example.com",
+            password="testpassword",
+            pool_id="us-east-1_TestPool",
+            client_id="test-client-id",
+            client=mock_client,
+        )
+
+        assert aws is not None
+        assert aws.username == "test@example.com"
+
+    def test_awssrp_get_auth_params_returns_expected_keys(self):
+        """Verify get_auth_params returns expected structure."""
+        from unittest.mock import MagicMock
+
+        from pycognito import AWSSRP
+
+        mock_client = MagicMock()
+        aws = AWSSRP(
+            username="test@example.com",
+            password="testpassword",
+            pool_id="us-east-1_TestPool",
+            client_id="test-client-id",
+            client=mock_client,
+        )
+
+        auth_params = aws.get_auth_params()
+
+        assert "USERNAME" in auth_params, "auth_params should contain USERNAME"
+        assert "SRP_A" in auth_params, "auth_params should contain SRP_A"
+        assert auth_params["USERNAME"] == "test@example.com"

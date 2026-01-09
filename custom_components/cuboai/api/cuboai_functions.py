@@ -122,12 +122,22 @@ def initiate_user_srp_auth(username, password, pool_id, client_id, client_secret
     aws = AWSSRP(username=username, password=password, pool_id=pool_id, client_id=client_id, client=client)
     auth_params = aws.get_auth_params()
     auth_params["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
-    return client.initiate_auth(AuthFlow="USER_SRP_AUTH", AuthParameters=auth_params, ClientId=client_id), aws, client
+    resp = client.initiate_auth(AuthFlow="USER_SRP_AUTH", AuthParameters=auth_params, ClientId=client_id)
+    return resp, aws, client, auth_params
 
 
-def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent):
+def respond_to_password_verifier(resp, aws, client, client_id, client_secret, user_agent, auth_params=None):
     challenge_params = resp["ChallengeParameters"]
-    challenge_responses = aws.process_challenge(challenge_params)
+    # pycognito >= 2024.12.1 requires request_parameters as second arg
+    # For backward compatibility, try new API first, fall back to old API
+    if auth_params is None:
+        # Fallback: construct minimal request_parameters from challenge
+        auth_params = {"USERNAME": challenge_params.get("USER_ID_FOR_SRP", "")}
+    try:
+        challenge_responses = aws.process_challenge(challenge_params, auth_params)
+    except TypeError:
+        # Old pycognito version without request_parameters
+        challenge_responses = aws.process_challenge(challenge_params)
     username = challenge_params["USER_ID_FOR_SRP"]
     challenge_responses["SECRET_HASH"] = get_secret_hash(username, client_id, client_secret)
     result = client.respond_to_auth_challenge(
