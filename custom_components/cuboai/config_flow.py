@@ -56,7 +56,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug(f"Generated random User-Agent: {user_agent}")
 
                 # Step 1: Initiate USER_SRP_AUTH
-                resp, aws, client = await self.hass.async_add_executor_job(
+                resp, aws, client, auth_params = await self.hass.async_add_executor_job(
                     api.initiate_user_srp_auth,
                     user_input["username"],
                     user_input["password"],
@@ -69,7 +69,14 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # Step 2: Respond to PASSWORD_VERIFIER
                 tokens = await self.hass.async_add_executor_job(
-                    api.respond_to_password_verifier, resp, aws, client, CLIENT_ID, CLIENT_SECRET, user_agent
+                    api.respond_to_password_verifier,
+                    resp,
+                    aws,
+                    client,
+                    CLIENT_ID,
+                    CLIENT_SECRET,
+                    user_agent,
+                    auth_params,
                 )
                 _LOGGER.debug("Password verifier responded successfully")
 
