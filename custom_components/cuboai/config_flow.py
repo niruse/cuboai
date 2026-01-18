@@ -3,6 +3,7 @@ import random
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 
 from .api import cuboai_functions as api
 from .const import DOMAIN
@@ -245,6 +246,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
+    @callback
     def async_get_options_flow(config_entry):
         return CuboAIOptionsFlowHandler(config_entry)
 
@@ -255,7 +257,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(title="", data={"download_images": user_input.get("download_images", True)})
+            return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="init",
@@ -266,7 +268,13 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                         default=self.config_entry.options.get(
                             "download_images", self.config_entry.data.get("download_images", True)
                         ),
-                    ): bool
+                    ): bool,
+                    vol.Optional(
+                        "alerts_count",
+                        default=self.config_entry.options.get(
+                            "alerts_count", self.config_entry.data.get("alerts_count", 5)
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
                 }
             ),
         )
