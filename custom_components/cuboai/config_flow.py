@@ -253,6 +253,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry):
+        super().__init__()
         self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
@@ -275,6 +276,12 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                             "alerts_count", self.config_entry.data.get("alerts_count", 5)
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+                    vol.Optional(
+                        "hours_back",
+                        default=self.config_entry.options.get(
+                            "hours_back", self.config_entry.data.get("hours_back", 12)
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
                 }
             ),
         )
