@@ -3,6 +3,7 @@ import random
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 
 from .api import cuboai_functions as api
 from .const import DOMAIN
@@ -119,21 +120,19 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for baby_name, device_id in device_map.items():
                     cameras.append({"device_id": device_id, "baby_name": baby_name})
 
-                return self.async_create_entry(
-                    title=f"CuboAI ({user_input['username']})",
-                    data={
-                        "uuid": uuid,
-                        "username": user_input["username"],
-                        "client_id": CLIENT_ID,
-                        "client_secret": CLIENT_SECRET,
-                        "pool_id": POOL_ID,
-                        "region": REGION,
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "user_agent": user_agent,
-                        "cameras": cameras,
-                    },
-                )
+                self._auth_data = {
+                    "uuid": uuid,
+                    "username": user_input["username"],
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "pool_id": POOL_ID,
+                    "region": REGION,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user_agent": user_agent,
+                    "cameras": cameras,
+                }
+                return await self.async_step_config()
 
             except Exception as e:
                 _LOGGER.exception("CuboAI authentication failed: %s", e)
@@ -206,21 +205,19 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for baby_name, device_id in device_map.items():
                     cameras.append({"device_id": device_id, "baby_name": baby_name})
 
-                return self.async_create_entry(
-                    title=f"CuboAI ({self._username_input})",
-                    data={
-                        "uuid": uuid,
-                        "username": self._username_input,
-                        "client_id": CLIENT_ID,
-                        "client_secret": CLIENT_SECRET,
-                        "pool_id": POOL_ID,
-                        "region": REGION,
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "user_agent": self._user_agent,
-                        "cameras": cameras,
-                    },
-                )
+                self._auth_data = {
+                    "uuid": uuid,
+                    "username": self._username_input,
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "pool_id": POOL_ID,
+                    "region": REGION,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user_agent": self._user_agent,
+                    "cameras": cameras,
+                }
+                return await self.async_step_config()
 
             except Exception as e:
                 _LOGGER.exception("MFA verification failed: %s", e)
@@ -244,18 +241,40 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="mfa", data_schema=MFA_SCHEMA, errors=errors, description_placeholders=description_placeholders
         )
 
+    async def async_step_config(self, user_input=None):
+        """Handle configuration options step."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title=f"CuboAI ({self._auth_data['username']})",
+                data=self._auth_data,
+                options=user_input,
+            )
+
+        return self.async_show_form(
+            step_id="config",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("download_images", default=True): bool,
+                    vol.Optional("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+                    vol.Optional("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
+                }
+            ),
+        )
+
     @staticmethod
+    @callback
     def async_get_options_flow(config_entry):
         return CuboAIOptionsFlowHandler(config_entry)
 
 
 class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry):
+        super().__init__()
         self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(title="", data={"download_images": user_input.get("download_images", True)})
+            return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="init",
@@ -266,7 +285,19 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                         default=self.config_entry.options.get(
                             "download_images", self.config_entry.data.get("download_images", True)
                         ),
-                    ): bool
+                    ): bool,
+                    vol.Optional(
+                        "alerts_count",
+                        default=self.config_entry.options.get(
+                            "alerts_count", self.config_entry.data.get("alerts_count", 5)
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+                    vol.Optional(
+                        "hours_back",
+                        default=self.config_entry.options.get(
+                            "hours_back", self.config_entry.data.get("hours_back", 12)
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
                 }
             ),
         )
