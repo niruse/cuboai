@@ -117,7 +117,20 @@ class TestGetCameraProfilesAsync:
                 user_agent="TestAgent/1.0",
             )
 
-            assert result == {"Emma": "device-123", "Liam": "device-456"}
+            assert result == {
+                "Emma": {
+                    "device_id": "device-123",
+                    "dev_admin_id": None,
+                    "dev_admin_pwd": None,
+                    "license_id": None,
+                },
+                "Liam": {
+                    "device_id": "device-456",
+                    "dev_admin_id": None,
+                    "dev_admin_pwd": None,
+                    "license_id": None,
+                },
+            }
 
     @pytest.mark.asyncio
     async def test_handles_empty_profiles(self):

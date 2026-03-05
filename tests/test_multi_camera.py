@@ -9,8 +9,8 @@ def test_multi_camera_entry_structure():
         "refresh_token": "test-refresh-token",
         "user_agent": "test-agent",
         "cameras": [
-            {"device_id": "device-001", "baby_name": "Emma"},
-            {"device_id": "device-002", "baby_name": "Noah"},
+            {"device_id": "device-001", "baby_name": "Emma", "dev_admin_id": "admin-1", "dev_admin_pwd": "pwd-1", "license_id": "lic-1"},
+            {"device_id": "device-002", "baby_name": "Noah", "dev_admin_id": "admin-2", "dev_admin_pwd": "pwd-2", "license_id": "lic-2"},
         ],
     }
 
@@ -23,6 +23,9 @@ def test_multi_camera_entry_structure():
     for camera in entry_data["cameras"]:
         assert "device_id" in camera
         assert "baby_name" in camera
+        assert "dev_admin_id" in camera
+        assert "dev_admin_pwd" in camera
+        assert "license_id" in camera
 
 
 def test_backward_compat_entry_structure():

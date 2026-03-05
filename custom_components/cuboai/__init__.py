@@ -5,7 +5,7 @@ from homeassistant.core import HomeAssistant
 from .api.cuboai_functions import set_token_paths
 from .const import DOMAIN
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.LIGHT]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

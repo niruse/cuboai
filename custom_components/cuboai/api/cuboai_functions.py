@@ -255,12 +255,26 @@ def get_camera_profiles(access_token, user_agent):
     response.raise_for_status()
     data = response.json()
     device_map = {}
+    
+    creds_map = {}
+    for device in data.get("data", []):
+        creds_map[device.get("device_id")] = {
+            "dev_admin_id": device.get("dev_admin_id"),
+            "dev_admin_pwd": device.get("dev_admin_pwd"),
+            "license_id": device.get("license_id"),
+        }
+
     for profile in data.get("profiles", []):
         try:
+            device_id = profile.get("device_id")
             profile_data = json.loads(profile.get("profile", "{}"))
             baby_name = profile_data.get("baby", "Unknown")
-            device_id = profile.get("device_id")
-            device_map[baby_name] = device_id
+            device_map[baby_name] = {
+                "device_id": device_id,
+                "dev_admin_id": creds_map.get(device_id, {}).get("dev_admin_id"),
+                "dev_admin_pwd": creds_map.get(device_id, {}).get("dev_admin_pwd"),
+                "license_id": creds_map.get(device_id, {}).get("license_id"),
+            }
         except Exception:
             continue
     return device_map
@@ -275,7 +289,7 @@ def get_camera_profiles_raw(access_token, user_agent):
     }
     response = requests.get(url, headers=headers)
     response.raise_for_status()
-    return response.json().get("profiles", [])
+    return response.json()
 
 
 # --- Alerts ---

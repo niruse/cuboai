@@ -13,18 +13,24 @@ def test_entry_title_format():
 def test_cameras_data_structure():
     """Test that cameras are stored in correct format."""
     camera_map = {
-        "Emma": "device-001",
-        "Noah": "device-002",
-        "Olivia": "device-003",
+        "Emma": {"device_id": "device-001", "dev_admin_id": "admin-1", "dev_admin_pwd": "pwd-1", "license_id": "lic-1"},
+        "Noah": {"device_id": "device-002", "dev_admin_id": "admin-2", "dev_admin_pwd": "pwd-2", "license_id": "lic-2"},
+        "Olivia": {"device_id": "device-003", "dev_admin_id": "admin-3", "dev_admin_pwd": "pwd-3", "license_id": "lic-3"},
     }
 
     # Convert to list format
     cameras = []
-    for baby_name, device_id in camera_map.items():
-        cameras.append({"device_id": device_id, "baby_name": baby_name})
+    for baby_name, cam_info in camera_map.items():
+        cameras.append({
+            "device_id": cam_info["device_id"], 
+            "baby_name": baby_name,
+            "dev_admin_id": cam_info.get("dev_admin_id"),
+            "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+            "license_id": cam_info.get("license_id"),
+        })
 
     assert len(cameras) == 3
-    assert all("device_id" in cam and "baby_name" in cam for cam in cameras)
+    assert all("device_id" in cam and "baby_name" in cam and "license_id" in cam for cam in cameras)
 
     device_ids = {cam["device_id"] for cam in cameras}
     baby_names = {cam["baby_name"] for cam in cameras}
@@ -35,11 +41,17 @@ def test_cameras_data_structure():
 
 def test_single_camera_entry():
     """Test single camera creates valid structure."""
-    camera_map = {"Emma": "device-001"}
+    camera_map = {"Emma": {"device_id": "device-001", "dev_admin_id": "admin-1", "dev_admin_pwd": "pwd-1", "license_id": "lic-1"}}
 
     cameras = []
-    for baby_name, device_id in camera_map.items():
-        cameras.append({"device_id": device_id, "baby_name": baby_name})
+    for baby_name, cam_info in camera_map.items():
+        cameras.append({
+            "device_id": cam_info["device_id"], 
+            "baby_name": baby_name,
+            "dev_admin_id": cam_info.get("dev_admin_id"),
+            "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+            "license_id": cam_info.get("license_id"),
+        })
 
     assert len(cameras) == 1
     assert cameras[0]["device_id"] == "device-001"
@@ -58,13 +70,31 @@ def test_mfa_flow_camera_storage():
     """Test that MFA flow stores cameras same as normal flow."""
     # Both flows should produce the same camera structure
     camera_map = {
-        "Emma": "device-001",
-        "Noah": "device-002",
+        "Emma": {"device_id": "device-001", "dev_admin_id": "admin-1", "dev_admin_pwd": "pwd-1", "license_id": "lic-1"},
+        "Noah": {"device_id": "device-002", "dev_admin_id": "admin-2", "dev_admin_pwd": "pwd-2", "license_id": "lic-2"},
     }
 
-    cameras_normal = [{"device_id": device_id, "baby_name": baby_name} for baby_name, device_id in camera_map.items()]
+    cameras_normal = [
+        {
+            "device_id": cam_info["device_id"], 
+            "baby_name": baby_name,
+            "dev_admin_id": cam_info.get("dev_admin_id"),
+            "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+            "license_id": cam_info.get("license_id"),
+        } 
+        for baby_name, cam_info in camera_map.items()
+    ]
 
-    cameras_mfa = [{"device_id": device_id, "baby_name": baby_name} for baby_name, device_id in camera_map.items()]
+    cameras_mfa = [
+        {
+            "device_id": cam_info["device_id"], 
+            "baby_name": baby_name,
+            "dev_admin_id": cam_info.get("dev_admin_id"),
+            "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+            "license_id": cam_info.get("license_id"),
+        } 
+        for baby_name, cam_info in camera_map.items()
+    ]
 
     # Both should be identical
     assert len(cameras_normal) == len(cameras_mfa)

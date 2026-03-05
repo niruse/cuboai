@@ -116,8 +116,14 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # Store all cameras for setup
                 cameras = []
-                for baby_name, device_id in device_map.items():
-                    cameras.append({"device_id": device_id, "baby_name": baby_name})
+                for baby_name, cam_info in device_map.items():
+                    cameras.append({
+                        "device_id": cam_info["device_id"], 
+                        "baby_name": baby_name,
+                        "dev_admin_id": cam_info.get("dev_admin_id"),
+                        "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+                        "license_id": cam_info.get("license_id"),
+                    })
 
                 return self.async_create_entry(
                     title=f"CuboAI ({user_input['username']})",
@@ -203,8 +209,14 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # Store all cameras for setup
                 cameras = []
-                for baby_name, device_id in device_map.items():
-                    cameras.append({"device_id": device_id, "baby_name": baby_name})
+                for baby_name, cam_info in device_map.items():
+                    cameras.append({
+                        "device_id": cam_info["device_id"], 
+                        "baby_name": baby_name,
+                        "dev_admin_id": cam_info.get("dev_admin_id"),
+                        "dev_admin_pwd": cam_info.get("dev_admin_pwd"),
+                        "license_id": cam_info.get("license_id"),
+                    })
 
                 return self.async_create_entry(
                     title=f"CuboAI ({self._username_input})",

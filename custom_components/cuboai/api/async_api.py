@@ -128,12 +128,26 @@ async def get_camera_profiles(
             data = await resp.json()
 
         device_map = {}
+        
+        creds_map = {}
+        for device in data.get("data", []):
+            creds_map[device.get("device_id")] = {
+                "dev_admin_id": device.get("dev_admin_id"),
+                "dev_admin_pwd": device.get("dev_admin_pwd"),
+                "license_id": device.get("license_id"),
+            }
+
         for profile in data.get("profiles", []):
             try:
+                device_id = profile.get("device_id")
                 profile_data = json.loads(profile.get("profile", "{}"))
                 baby_name = profile_data.get("baby", "Unknown")
-                device_id = profile.get("device_id")
-                device_map[baby_name] = device_id
+                device_map[baby_name] = {
+                    "device_id": device_id,
+                    "dev_admin_id": creds_map.get(device_id, {}).get("dev_admin_id"),
+                    "dev_admin_pwd": creds_map.get(device_id, {}).get("dev_admin_pwd"),
+                    "license_id": creds_map.get(device_id, {}).get("license_id"),
+                }
             except Exception:
                 continue
         return device_map
