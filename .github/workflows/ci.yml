@@ -36,7 +36,7 @@ jobs:
             --cov-report=html
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         if: matrix.python-version == '3.12'
         with:
           files: ./coverage.xml
