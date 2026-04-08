@@ -330,8 +330,8 @@ class CuboLastAlertSensor(CuboBaseSensor):
 
     # ---------- Update logic ----------
 
-    def _cleanup_old_images(self):
-        """Cleanup old images, keeping only the latest 5 per device.
+    def _cleanup_old_images(self, limit):
+        """Cleanup old images, keeping only the latest N per device.
 
         This is a blocking operation and should be run via executor.
         """
@@ -342,7 +342,7 @@ class CuboLastAlertSensor(CuboBaseSensor):
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )
-        for old_file in files[5:]:
+        for old_file in files[limit:]:
             try:
                 old_file.unlink(missing_ok=True)
             except Exception:
@@ -444,7 +444,7 @@ class CuboLastAlertSensor(CuboBaseSensor):
                 if self.download_images:
                     try:
                         # Run cleanup in executor since it uses blocking pathlib
-                        await self.hass.async_add_executor_job(self._cleanup_old_images)
+                        await self.hass.async_add_executor_job(self._cleanup_old_images, self.max_alerts)
                     except Exception as e:
                         log_to_file(f"[CuboLastAlertSensor] Error cleaning images: {e}")
 
