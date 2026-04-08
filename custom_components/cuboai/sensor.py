@@ -8,7 +8,7 @@ from homeassistant.helpers.entity import Entity
 
 from .api.async_api import (
     download_image,
-    get_camera_profiles_raw,
+    get_camera_details,
     get_camera_state,
     get_n_alerts_paged,
     get_subscription_info,
@@ -147,6 +147,12 @@ class CuboBaseSensor(Entity):
 
 
 class CuboBabyInfoSensor(CuboBaseSensor):
+    """Sensor exposing baby profile and camera details.
+
+    Provides baby info, device registration, and report settings.
+    Also supplies serial_number to the device registry.
+    """
+
     def __init__(self, hass, entry, name, device_id, baby_name, access_token, refresh_token, user_agent):
         super().__init__(hass, entry, access_token, refresh_token, user_agent)
         self._name = name
@@ -154,6 +160,7 @@ class CuboBabyInfoSensor(CuboBaseSensor):
         self._baby_name = baby_name
         self._state = None
         self._attributes = {}
+        self._license_id = None
 
     @property
     def name(self):
@@ -173,12 +180,15 @@ class CuboBabyInfoSensor(CuboBaseSensor):
 
     @property
     def device_info(self):
-        return {
+        info = {
             "identifiers": {(DOMAIN, self._device_id)},
             "name": f"CuboAI {self._baby_name}",
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+        if self._license_id:
+            info["serial_number"] = self._license_id
+        return info
 
     async def async_update(self):
         import traceback
@@ -187,30 +197,37 @@ class CuboBabyInfoSensor(CuboBaseSensor):
             await self._load_latest_tokens()
             session = await self._get_session()
             try:
-                profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
+                data = await get_camera_details(self._device_id, self._access_token, self._user_agent, session)
             except aiohttp.ClientResponseError as e:
                 if e.status == 401:
                     log_to_file(f"Access token expired in BabyInfoSensor: {e}")
                     await self._external_refresh_token()
-                    profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
+                    data = await get_camera_details(self._device_id, self._access_token, self._user_agent, session)
                 else:
                     raise
-            found = False
-            for item in profiles:
-                if item["device_id"] == self._device_id:
-                    profile = json.loads(item.get("profile", "{}"))
-                    birth_date = profile.get("birth")
-                    gender = profile.get("gender")
-                    gender_text = "male" if gender == 0 else "female" if gender == 1 else "unknown"
-                    self._attributes = {
-                        "baby": profile.get("baby"),
-                        "birth": birth_date,
-                        "gender": gender_text,
-                        "device_id": self._device_id,
-                    }
-                    found = True
-                    break
-            if not found:
+
+            if data:
+                self._license_id = data.get("license_id")
+                self._attributes = {
+                    # Baby profile
+                    "baby": data.get("baby_name"),
+                    "birth": data.get("birth_date"),
+                    "gender": data.get("gender"),
+                    "avatar_url": data.get("avatar_url"),
+                    # Device info
+                    "device_id": self._device_id,
+                    "license_id": data.get("license_id"),
+                    "created": data.get("created"),
+                    "role": data.get("role"),
+                    # Settings
+                    "alexa_enabled": data.get("alexa_enabled"),
+                    "timezone": data.get("timezone"),
+                    "sleep_time": data.get("sleep_time"),
+                    "wakeup_time": data.get("wakeup_time"),
+                    "report_time": data.get("report_time"),
+                    "gmt_offset": data.get("gmt_offset"),
+                }
+            else:
                 self._attributes = {"baby": None, "birth": None, "gender": None, "device_id": self._device_id}
         except Exception as e:
             log_to_file(f"Failed to update Cubo baby profile info: {e}\n{traceback.format_exc()}")

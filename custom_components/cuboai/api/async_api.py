@@ -403,3 +403,101 @@ async def get_camera_state(
     finally:
         if close_session:
             await session.close()
+
+
+async def get_camera_details(
+    device_id: str, access_token: str, user_agent: str, session: aiohttp.ClientSession | None = None
+) -> dict | None:
+    """Get detailed camera information from /user/cameras endpoint.
+
+    Extracts and combines data from the camera registration, profile,
+    and report settings for a specific device.
+
+    Args:
+        device_id: Camera device ID
+        access_token: CuboAI access token
+        user_agent: User agent string
+        session: Optional aiohttp session
+
+    Returns:
+        Dict with camera details or None if not found. Keys include:
+        - device_id, license_id, created, role
+        - baby_name, birth_date, gender, avatar_url
+        - timezone, sleep_time, wakeup_time
+        - alexa_enabled
+    """
+    import json
+
+    url = f"{API_BASE}/user/cameras"
+    headers = _get_common_headers(access_token, user_agent)
+
+    close_session = session is None
+    session = session or aiohttp.ClientSession()
+    try:
+        async with session.get(url, headers=headers) as resp:
+            resp.raise_for_status()
+            response_data = await resp.json()
+
+        # Find the camera data
+        camera_data = None
+        for cam in response_data.get("data", []):
+            if cam.get("device_id") == device_id:
+                camera_data = cam
+                break
+
+        if not camera_data:
+            return None
+
+        # Find the profile data
+        profile_data = {}
+        for profile in response_data.get("profiles", []):
+            if profile.get("device_id") == device_id:
+                profile_json = profile.get("profile", "{}")
+                try:
+                    profile_data = json.loads(profile_json) if isinstance(profile_json, str) else profile_json
+                except Exception:
+                    profile_data = {}
+                break
+
+        # Find report settings
+        report_settings = {}
+        for settings in response_data.get("report_settings", []):
+            if settings.get("device_id") == device_id:
+                report_settings = settings
+                break
+
+        # Parse settings JSON from camera data
+        settings = {}
+        settings_json = camera_data.get("settings", "{}")
+        try:
+            settings = json.loads(settings_json) if isinstance(settings_json, str) else settings_json
+        except Exception:
+            settings = {}
+
+        # Map gender: 0=male, 1=female
+        gender_raw = profile_data.get("gender")
+        gender = "male" if gender_raw == 0 else "female" if gender_raw == 1 else None
+
+        return {
+            # Camera registration info
+            "device_id": device_id,
+            "license_id": camera_data.get("license_id"),
+            "created": camera_data.get("created"),
+            "role": camera_data.get("role"),
+            # Profile info
+            "baby_name": profile_data.get("baby"),
+            "birth_date": profile_data.get("birth"),
+            "gender": gender,
+            "avatar_url": profile_data.get("avatar"),
+            # Settings
+            "alexa_enabled": settings.get("alexa_enable", False),
+            # Report settings
+            "timezone": report_settings.get("time_zone"),
+            "sleep_time": report_settings.get("sleep_time"),
+            "wakeup_time": report_settings.get("wakeup_time"),
+            "report_time": report_settings.get("report_time"),
+            "gmt_offset": report_settings.get("gmt_offset"),
+        }
+    finally:
+        if close_session:
+            await session.close()
