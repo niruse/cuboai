@@ -6,6 +6,6 @@ aioresponses>=0.7.0
 
 # Dependencies from the integration (needed for imports)
 aiofiles>=23.0.0
-aiohttp>=3.8.0
+aiohttp>=3.13.5
 boto3>=1.26.0
 pycognito>=2024.5.1
