@@ -104,8 +104,8 @@ async def refresh_cubo_token(refresh_token: str, user_agent: str, session: aioht
 
 async def get_camera_profiles(
     access_token: str, user_agent: str, session: aiohttp.ClientSession | None = None
-) -> dict[str, str]:
-    """Get camera profiles (baby name -> device_id mapping).
+) -> list[dict]:
+    """Get camera profiles (with TUTK credentials).
 
     Args:
         access_token: CuboAI access token
@@ -113,9 +113,10 @@ async def get_camera_profiles(
         session: Optional aiohttp session
 
     Returns:
-        Dict mapping baby names to device IDs
+        List of dicts containing device_id, baby_name, uid, account, password
     """
     import json
+    from ..utils import log_to_file
 
     url = f"{API_BASE}/user/cameras"
     headers = _get_common_headers(access_token, user_agent)
@@ -127,16 +128,65 @@ async def get_camera_profiles(
             resp.raise_for_status()
             data = await resp.json()
 
-        device_map = {}
+        device_data_map = {item.get("device_id"): item for item in data.get("data", [])}
+
+        cameras = []
         for profile in data.get("profiles", []):
             try:
                 profile_data = json.loads(profile.get("profile", "{}"))
                 baby_name = profile_data.get("baby", "Unknown")
                 device_id = profile.get("device_id")
-                device_map[baby_name] = device_id
+                
+                device_item = device_data_map.get(device_id, {})
+                uid = device_item.get("license_id", "")
+                account = device_item.get("dev_admin_id", "")
+                password = device_item.get("dev_admin_pwd", "")
+                
+                camera_ip_raw = (
+                    device_item.get("ip") or 
+                    device_item.get("local_ip") or 
+                    device_item.get("lan_ip") or 
+                    profile.get("ip") or 
+                    profile.get("local_ip") or 
+                    profile.get("lan_ip") or 
+                    profile_data.get("ip") or 
+                    profile_data.get("local_ip") or 
+                    profile_data.get("lan_ip")
+                )
+                
+                import re
+                camera_ip = None
+                
+                if camera_ip_raw and re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', str(camera_ip_raw)):
+                    camera_ip = str(camera_ip_raw)
+                else:
+                    # Search entire profile JSON for a valid IPv4 address as a fallback
+                    match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', json.dumps(profile))
+                    if match:
+                        camera_ip = match.group(0)
+
+                # Verify state and exclude offline/disconnected devices
+                try:
+                    state_data = await get_camera_state(device_id, access_token, user_agent, session)
+                    state = state_data.get("state", "unknown") if isinstance(state_data, dict) else "unknown"
+                    if state in ["disconnect", "offline", "disconnected"]:
+                        log_to_file(f"Excluding offline/disconnected camera {baby_name} ({device_id}) - state: {state}")
+                        continue
+                except Exception as e:
+                    log_to_file(f"Excluding camera {baby_name} ({device_id}) due to state query error: {e}")
+                    continue
+
+                cameras.append({
+                    "device_id": device_id,
+                    "baby_name": baby_name,
+                    "uid": uid,
+                    "account": account,
+                    "password": password,
+                    "camera_ip": camera_ip
+                })
             except Exception:
                 continue
-        return device_map
+        return cameras
     finally:
         if close_session:
             await session.close()

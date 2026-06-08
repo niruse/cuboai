@@ -3,20 +3,38 @@ import random
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 
 from .api import cuboai_functions as api
 from .const import DOMAIN
 
 # Dedicated file logger for CuboAI
-file_handler = logging.FileHandler("/config/cuboai_auth.log")
-file_handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-file_handler.setFormatter(formatter)
 _LOGGER = logging.getLogger(__name__)
-_LOGGER.addHandler(file_handler)
 _LOGGER.setLevel(logging.DEBUG)
+_LOGGER_SETUP_DONE = False
 
-AUTH_SCHEMA = vol.Schema({vol.Required("username"): str, vol.Required("password"): str})
+
+def setup_file_logger(hass):
+    global _LOGGER_SETUP_DONE
+    if _LOGGER_SETUP_DONE:
+        return
+    try:
+        log_path = hass.config.path("cuboai_auth.log")
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        file_handler.setFormatter(formatter)
+        _LOGGER.addHandler(file_handler)
+        _LOGGER_SETUP_DONE = True
+    except Exception as e:
+        _LOGGER.warning("Failed to setup dedicated file logger: %s", e)
+
+AUTH_SCHEMA = vol.Schema(
+    {
+        vol.Required("username"): str,
+        vol.Required("password"): str,
+    }
+)
 
 MFA_SCHEMA = vol.Schema({vol.Required("mfa_code"): str})
 
@@ -48,6 +66,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
+        setup_file_logger(self.hass)
         errors = {}
 
         if user_input is not None:
@@ -115,25 +134,21 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_show_form(step_id="user", data_schema=AUTH_SCHEMA, errors=errors)
 
                 # Store all cameras for setup
-                cameras = []
-                for baby_name, device_id in device_map.items():
-                    cameras.append({"device_id": device_id, "baby_name": baby_name})
+                cameras = device_map
 
-                return self.async_create_entry(
-                    title=f"CuboAI ({user_input['username']})",
-                    data={
-                        "uuid": uuid,
-                        "username": user_input["username"],
-                        "client_id": CLIENT_ID,
-                        "client_secret": CLIENT_SECRET,
-                        "pool_id": POOL_ID,
-                        "region": REGION,
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "user_agent": user_agent,
-                        "cameras": cameras,
-                    },
-                )
+                self._auth_data = {
+                    "uuid": uuid,
+                    "username": user_input["username"],
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "pool_id": POOL_ID,
+                    "region": REGION,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user_agent": user_agent,
+                    "cameras": cameras,
+                }
+                return await self.async_step_config()
 
             except Exception as e:
                 _LOGGER.exception("CuboAI authentication failed: %s", e)
@@ -157,6 +172,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_mfa(self, user_input=None):
         """Handle MFA code input step."""
+        setup_file_logger(self.hass)
         errors = {}
 
         if user_input is not None:
@@ -202,25 +218,21 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_show_form(step_id="mfa", data_schema=MFA_SCHEMA, errors=errors)
 
                 # Store all cameras for setup
-                cameras = []
-                for baby_name, device_id in device_map.items():
-                    cameras.append({"device_id": device_id, "baby_name": baby_name})
+                cameras = device_map
 
-                return self.async_create_entry(
-                    title=f"CuboAI ({self._username_input})",
-                    data={
-                        "uuid": uuid,
-                        "username": self._username_input,
-                        "client_id": CLIENT_ID,
-                        "client_secret": CLIENT_SECRET,
-                        "pool_id": POOL_ID,
-                        "region": REGION,
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "user_agent": self._user_agent,
-                        "cameras": cameras,
-                    },
-                )
+                self._auth_data = {
+                    "uuid": uuid,
+                    "username": self._username_input,
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "pool_id": POOL_ID,
+                    "region": REGION,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user_agent": self._user_agent,
+                    "cameras": cameras,
+                }
+                return await self.async_step_config()
 
             except Exception as e:
                 _LOGGER.exception("MFA verification failed: %s", e)
@@ -244,29 +256,80 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="mfa", data_schema=MFA_SCHEMA, errors=errors, description_placeholders=description_placeholders
         )
 
+    async def async_step_config(self, user_input=None):
+        """Handle configuration options step."""
+        setup_file_logger(self.hass)
+        if user_input is not None:
+            return self.async_create_entry(
+                title=f"CuboAI ({self._auth_data['username']})",
+                data=self._auth_data,
+                options=user_input,
+            )
+
+        return self.async_show_form(
+            step_id="config",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("download_images", default=True): bool,
+                    vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+                    vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
+                    vol.Required("update_interval", default=60): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
+                }
+            ),
+        )
+
     @staticmethod
+    @callback
     def async_get_options_flow(config_entry):
-        return CuboAIOptionsFlowHandler(config_entry)
+        return CuboAIOptionsFlowHandler()
 
 
 class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
+    def __init__(self):
+        super().__init__()
+        # self.config_entry is provided automatically by the base OptionsFlow class
 
     async def async_step_init(self, user_input=None):
+        setup_file_logger(self.hass)
         if user_input is not None:
-            return self.async_create_entry(title="", data={"download_images": user_input.get("download_images", True)})
+            return self.async_create_entry(title="", data=user_input)
+
+        cameras = self.config_entry.data.get("cameras", [])
+        
+        schema = {
+            vol.Required(
+                "download_images",
+                default=self.config_entry.options.get(
+                    "download_images", self.config_entry.data.get("download_images", True)
+                ),
+            ): bool,
+            vol.Required(
+                "alerts_count",
+                default=self.config_entry.options.get(
+                    "alerts_count", self.config_entry.data.get("alerts_count", 5)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+            vol.Required(
+                "hours_back",
+                default=self.config_entry.options.get(
+                    "hours_back", self.config_entry.data.get("hours_back", 12)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
+            vol.Required(
+                "update_interval",
+                default=self.config_entry.options.get(
+                    "update_interval", self.config_entry.data.get("update_interval", 60)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
+        }
+        
+        for cam in cameras:
+            dev_id = cam.get("device_id")
+            name = cam.get("baby_name", dev_id)
+            key = f"camera_ip_{dev_id}"
+            schema[vol.Optional(key, description={"suggested_value": self.config_entry.options.get(key, "")})] = str
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        "download_images",
-                        default=self.config_entry.options.get(
-                            "download_images", self.config_entry.data.get("download_images", True)
-                        ),
-                    ): bool
-                }
-            ),
+            data_schema=vol.Schema(schema),
         )

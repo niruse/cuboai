@@ -254,16 +254,64 @@ def get_camera_profiles(access_token, user_agent):
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     data = response.json()
-    device_map = {}
+    cameras = []
+    
+    device_data_map = {item.get("device_id"): item for item in data.get("data", [])}
+    
     for profile in data.get("profiles", []):
         try:
             profile_data = json.loads(profile.get("profile", "{}"))
             baby_name = profile_data.get("baby", "Unknown")
             device_id = profile.get("device_id")
-            device_map[baby_name] = device_id
+
+            device_item = device_data_map.get(device_id, {})
+            uid = device_item.get("license_id", "")
+            account = device_item.get("dev_admin_id", "")
+            password = device_item.get("dev_admin_pwd", "")
+
+            camera_ip_raw = (
+                device_item.get("ip") or 
+                device_item.get("local_ip") or 
+                device_item.get("lan_ip") or 
+                profile.get("ip") or 
+                profile.get("local_ip") or 
+                profile.get("lan_ip") or 
+                profile_data.get("ip") or 
+                profile_data.get("local_ip") or 
+                profile_data.get("lan_ip")
+            )
+
+            import re
+            camera_ip = None
+            if camera_ip_raw and re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', str(camera_ip_raw)):
+                camera_ip = str(camera_ip_raw)
+            else:
+                match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', json.dumps(profile))
+                if match:
+                    camera_ip = match.group(0)
+
+            # Verify state and exclude offline/disconnected devices
+            try:
+                state_data = get_camera_state(device_id, access_token, user_agent)
+                state = state_data.get("state", "unknown") if isinstance(state_data, dict) else "unknown"
+                if state in ["disconnect", "offline", "disconnected"]:
+                    log_to_file(f"Excluding offline/disconnected camera {baby_name} ({device_id}) - state: {state}")
+                    continue
+            except Exception as e:
+                log_to_file(f"Excluding camera {baby_name} ({device_id}) due to state query error: {e}")
+                continue
+
+            cameras.append({
+                "device_id": device_id,
+                "baby_name": baby_name,
+                "uid": uid,
+                "account": account,
+                "password": password,
+                "camera_ip": camera_ip
+            })
         except Exception:
             continue
-    return device_map
+    return cameras
 
 
 def get_camera_profiles_raw(access_token, user_agent):
