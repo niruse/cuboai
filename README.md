@@ -70,6 +70,11 @@ This integration provides a massive suite of local control and real-time monitor
 
 ## 🛠️ Installation
 
+### ⚠️ Requirements
+Before installing CuboAI, you **must** install the **WebRTC Camera** custom component by AlexxIT (available in HACS). This provides the underlying ultra-low latency WebRTC streaming engine that this integration hooks into!
+
+---
+
 ### 📦 Installation via HACS
 
 1. Go to **HACS** in Home Assistant.
