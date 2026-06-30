@@ -1,0 +1,7 @@
+save_custom_songs:
+  name: Save custom songs
+  description: Save current custom songs to file
+
+save_playlists:
+  name: Save playlists
+  description: Save current playlists to file
