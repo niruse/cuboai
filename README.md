@@ -206,14 +206,15 @@ To use the custom card, you must first install the **WebRTC Camera** custom card
 
 ### 💻 Using the Card in your Dashboard
 
-Go to your dashboard, click "Edit Dashboard", add a "Manual" card, and paste the following YAML. All you need to do is provide your `camera` entity!
+Go to your dashboard, click "Edit Dashboard", add a "Manual" card, and paste the following YAML. Provide your camera's internal `device_id` to link all of its sensors automatically!
 
 ```yaml
-type: custom:cuboai-card
-entity: camera.cuboai_YOUR_BABY_NAME
+type: custom:cuboai-camera-card
+device_id: {cubo_id}
+default_mute_state: unmuted
 ```
 
-The card will automatically detect all the related sensors (temperature, humidity, lullaby, etc.) using your camera's name and seamlessly link them all together!
+The card will automatically detect all the related sensors (temperature, humidity, lullaby, etc.) using your camera's device ID and seamlessly link them all together!
 
 ---
 
