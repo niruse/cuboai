@@ -155,6 +155,11 @@ For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai
 - **Microphone Toggle**: A beautiful, floating microphone button for two-way audio.
 - **Smart Fallback**: Automatically leverages the camera entity to enable fallback to MSE/HLS when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
 - **Lullaby Player**: A dynamic, sliding drawer menu to select, play, and pause lullabies!
+  
+  <p float="left">
+    <img src="docs/images/lullaby_step_1.png" width="300" />
+    <img src="docs/images/lullaby_step_2.png" width="300" />
+  </p>
 
 ### 🛠️ Installing the Custom Card
 
