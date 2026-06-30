@@ -177,6 +177,8 @@ content: >
 
 For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai-card.js`) that automatically wraps the WebRTC Camera card and provides a fully native app-like experience directly in Home Assistant!
 
+![CuboAI Custom Lovelace Card Preview](docs/images/custom_card_preview.png)
+
 ### ✨ Features:
 - **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
 - **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
