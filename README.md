@@ -124,58 +124,40 @@ content: >
 ```
 ---
 
-## 🎤 Two-Way Audio (Microphone Support)
+## 🎨 CuboAI Custom Lovelace Card (Recommended!)
 
-Home Assistant's default camera card does **not** support two-way audio or microphone buttons out of the box. To see the microphone button and use the 2-way talk feature, you need to use the **WebRTC Camera** custom Lovelace card (by AlexxIT), which you can install via HACS.
+For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai-card.js`) that automatically wraps the WebRTC Camera card and provides a fully native app-like experience directly in Home Assistant!
 
-Here is how to get the microphone button on your dashboard:
-
-1. **Install WebRTC Camera:** Go to HACS -> Frontend -> Search for "WebRTC Camera" and install it, then reload your browser.
-2. **Add to Dashboard:** Go to your dashboard, click "Edit Dashboard", and add a "Custom: WebRTC Camera" card.
-3. **Configure the Card:** Set the URL to your camera's exact go2rtc stream ID. You can easily find this ID by looking at the state of the `sensor.cuboai_webrtc_stream_{baby_name}` entity that this integration creates (e.g. `cuboai_YOUR_CAMERA_ID`).
-
-Your card configuration in YAML should look like this:
-
-```yaml
-type: custom:webrtc-camera
-url: cuboai_YOUR_CAMERA_ID
-media: video,audio,microphone
-```
-
-*(Note: Setting `media: video,audio,microphone` is what explicitly tells the WebRTC card to render the Microphone button on the screen!)*
-
-Once you save that card, you will see a microphone icon directly over the video feed. When you click and hold it, it will stream your PC/phone microphone audio directly through the PureSession backchannel to the camera!
-
----
-
-## 🎨 CuboAI Custom Lovelace Card
-
-For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai-card.js`) that automatically wraps the WebRTC Camera card and adds:
+### ✨ Features:
 - **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
 - **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
 - **Microphone Toggle**: A beautiful, floating microphone button for two-way audio.
-- **Smart Fallback**: Automatically leverages the camera entity to enable automatic fallback to MSE when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
+- **Smart Fallback**: Automatically leverages the camera entity to enable fallback to MSE/HLS when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
+- **Lullaby Player**: A dynamic, sliding drawer menu to select, play, and pause lullabies!
 
 ### 🛠️ Installing the Custom Card
 
-If you installed this integration manually or via HACS, the `cuboai-card.js` file is already located in the `www/` folder of the integration.
+To use the custom card, you must first install the **WebRTC Camera** custom card (by AlexxIT) from HACS, as our card uses it under the hood for ultra-low latency video.
 
-1. In Home Assistant, navigate to **Settings** -> **Dashboards** -> **Resources** (You may need to click the 3 dots in the top right to see Resources).
-2. Click **Add Resource**.
-3. Set the URL to: `/local/cuboai-card.js?v=1`
-4. Set the Resource Type to: **JavaScript Module**.
-5. Click **Create**!
+1. **Install WebRTC Camera:** Go to HACS -> Frontend -> Search for "WebRTC Camera" and install it.
+2. **Add CuboAI Card Resource:** 
+   - Navigate to **Settings** -> **Dashboards** -> **Resources** (You may need to click the 3 dots in the top right to see Resources).
+   - Click **Add Resource**.
+   - Set the URL to: `/local/cuboai-card.js?v=1`
+   - Set the Resource Type to: **JavaScript Module**.
+   - Click **Create**!
+3. **Important Cache Note:** If you ever update the integration, change the version number (e.g., `?v=2`) in the Resources menu to force Home Assistant to load the newest code!
 
-### ⚠️ Important: Bypassing the Home Assistant Cache!
+### 💻 Using the Card in your Dashboard
 
-If you ever update the `cuboai-card.js` file, you will notice that the browser **will not** load the new version. This is because Home Assistant's internal web server aggressively caches `/local/` resources using the version string in the URL.
+Go to your dashboard, click "Edit Dashboard", add a "Manual" card, and paste the following YAML. All you need to do is provide your `camera` entity!
 
-**To forcefully update the card after applying fixes:**
-1. Go back to **Settings** -> **Dashboards** -> **Resources**.
-2. Click on `/local/cuboai-card.js?v=1`.
-3. Change the version number (e.g., change `?v=1` to `?v=2` or `?v=99`).
-4. Click **Update**.
-5. Do a hard refresh in your browser (Ctrl+F5) or use an Incognito Window!
+```yaml
+type: custom:cuboai-card
+entity: camera.cuboai_YOUR_BABY_NAME
+```
+
+The card will automatically detect all the related sensors (temperature, humidity, lullaby, etc.) using your camera's name and seamlessly link them all together!
 
 ---
 
