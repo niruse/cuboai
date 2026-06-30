@@ -111,13 +111,25 @@ class TestGetCameraProfilesAsync:
                     ]
                 },
             )
+            m.get(
+                "https://api.getcubo.com/prod/camera/state?device_id=device-123",
+                payload={"state": "online"},
+            )
+            m.get(
+                "https://api.getcubo.com/prod/camera/state?device_id=device-456",
+                payload={"state": "online"},
+            )
 
             result = await async_api.get_camera_profiles(
                 access_token="test-token",
                 user_agent="TestAgent/1.0",
             )
 
-            assert result == {"Emma": "device-123", "Liam": "device-456"}
+            assert len(result) == 2
+            assert result[0]["device_id"] == "device-123"
+            assert result[0]["baby_name"] == "Emma"
+            assert result[1]["device_id"] == "device-456"
+            assert result[1]["baby_name"] == "Liam"
 
     @pytest.mark.asyncio
     async def test_handles_empty_profiles(self):
@@ -133,7 +145,7 @@ class TestGetCameraProfilesAsync:
                 user_agent="TestAgent/1.0",
             )
 
-            assert result == {}
+            assert result == []
 
 
 class TestGetCameraProfilesRawAsync:
