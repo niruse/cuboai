@@ -29,6 +29,7 @@ def setup_file_logger(hass):
     except Exception as e:
         _LOGGER.warning("Failed to setup dedicated file logger: %s", e)
 
+
 AUTH_SCHEMA = vol.Schema(
     {
         vol.Required("username"): str,
@@ -312,9 +313,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             ): bool,
             vol.Required(
                 "alerts_count",
-                default=self.config_entry.options.get(
-                    "alerts_count", self.config_entry.data.get("alerts_count", 5)
-                ),
+                default=self.config_entry.options.get("alerts_count", self.config_entry.data.get("alerts_count", 5)),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required(
                 "max_saved_photos",
@@ -324,9 +323,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required(
                 "hours_back",
-                default=self.config_entry.options.get(
-                    "hours_back", self.config_entry.data.get("hours_back", 12)
-                ),
+                default=self.config_entry.options.get("hours_back", self.config_entry.data.get("hours_back", 12)),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
             vol.Required(
                 "update_interval",
@@ -345,4 +342,3 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(schema),
         )
-

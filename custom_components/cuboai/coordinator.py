@@ -20,9 +20,11 @@ from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
 
+
 def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False):
     """Synchronous function to fetch local data via TUTK."""
     from .utils import log_to_file
+
     log_to_file(f"Starting _fetch_local_data for UID={uid}, IP={camera_ip}")
     try:
         from .tutk.cuboai_messages import CuboAIClient
@@ -34,9 +36,18 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
     data = {}
     try:
         import time
+
         for attempt in range(4):
             try:
-                with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
+                with get_session(
+                    uid,
+                    account,
+                    password,
+                    camera_ip=camera_ip if camera_ip else None,
+                    defer_stream_start=False,
+                    defer_video_start_late=False,
+                    auto_discover_lib=True,
+                ) as sess:
                     client = CuboAIClient(sess)
 
                     # Cleaned up experimental blocks
@@ -147,6 +158,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
 
                     except Exception as e:
                         import traceback
+
                         log_to_file(f"Failed to get hw control: {e}\n{traceback.format_exc()}")
 
                     try:
@@ -163,6 +175,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
 
                     except Exception as e:
                         import traceback
+
                         log_to_file(f"Failed to get lullaby status: {e}\n{traceback.format_exc()}")
 
                     return data
@@ -174,17 +187,20 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                     raise conn_e
     except OSError as e:
         import traceback
+
         error_msg = str(e)
         if ("__register_atfork" in error_msg or "Error relocating" in error_msg) and not is_retry:
             _LOGGER.warning("Missing glibc compat symbols in Alpine Linux. Attempting to install gcompat...")
             log_to_file("Missing glibc compat symbols. Running 'apk add --no-cache gcompat'...")
             import os
+
             res = os.system("apk add --no-cache gcompat")
             log_to_file(f"apk add returned: {res}")
             if res == 0:
                 log_to_file("gcompat installed successfully. Retrying TUTK connection...")
                 try:
                     import ctypes
+
                     try:
                         ctypes.CDLL("libgcompat.so.0", mode=ctypes.RTLD_GLOBAL)
                         log_to_file("Loaded libgcompat.so.0 globally.")
@@ -201,6 +217,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
         log_to_file(f"Failed to connect to camera via TUTK for local polling: {e}\n{traceback.format_exc()}")
     except Exception as e:
         import traceback
+
         log_to_file(f"Failed to connect to camera via TUTK for local polling: {e}\n{traceback.format_exc()}")
     return data
 
@@ -230,6 +247,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
     def _get_images_dir(self) -> str:
         """Get the images directory path with legacy fallback for backwards compatibility."""
         import os
+
         portable_path = self.hass.config.path("www", "cuboai_images")
         legacy_path = "/config/www/cuboai_images"
 
@@ -314,6 +332,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"API error: {e}")
         except Exception as e:
             import traceback
+
             log_to_file(f"[CuboAICoordinator] Unexpected error: {e}\n{traceback.format_exc()}")
             raise UpdateFailed(f"Unexpected error: {e}")
 
@@ -327,18 +346,14 @@ class CuboAICoordinator(DataUpdateCoordinator):
         if not cameras and "device_id" in self._entry.data:
             cameras = [{"device_id": self._entry.data["device_id"], "baby_name": self._entry.data["baby_name"]}]
 
-        result = {
-            "cameras": {},
-            "subscription": None,
-            "last_updated": utcnow().isoformat()
-        }
+        result = {"cameras": {}, "subscription": None, "last_updated": utcnow().isoformat()}
 
         # Concurrently fetch raw profiles for all cameras and subscription info
         try:
             profiles_raw, sub_info = await asyncio.gather(
                 get_camera_profiles_raw(self._access_token, self._user_agent, session),
                 get_subscription_info(self._access_token, self._user_agent, session),
-                return_exceptions=True
+                return_exceptions=True,
             )
 
             if isinstance(sub_info, Exception):
@@ -399,12 +414,10 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
                     ),
                     get_camera_state(device_id, self._access_token, self._user_agent, session),
-
-
-                    self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras) if uid else _dummy_async(),
-
-
-                    return_exceptions=True
+                    self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras)
+                    if uid
+                    else _dummy_async(),
+                    return_exceptions=True,
                 )
             except Exception as e:
                 log_to_file(f"[CuboAICoordinator] Error gathering alerts/state/local for {device_id}: {e}")
@@ -419,9 +432,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
             if isinstance(local_data, Exception):
                 log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
             elif local_data:
-
                 if local_data:
-                    old_local_merged = old_local.copy() if 'old_local' in locals() else {}
+                    old_local_merged = old_local.copy() if "old_local" in locals() else {}
                     old_local_merged.update(local_data)
                     cam_data["local"] = old_local_merged
 
@@ -432,7 +444,6 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         new_options[f"camera_ip_{device_id}"] = fetched_ip
                         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
                         _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
-
 
             # 3. Alerts Processing
             if isinstance(alerts_data, Exception):
@@ -496,4 +507,3 @@ class CuboAICoordinator(DataUpdateCoordinator):
             result["cameras"][device_id] = cam_data
 
         return result
-

@@ -15,6 +15,7 @@ OPTIONS_MAP = {
 }
 REVERSE_MAP = {v: k for k, v in OPTIONS_MAP.items()}
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
@@ -30,14 +31,23 @@ async def async_setup_entry(hass, entry, async_add_entities):
     if entities:
         async_add_entities(entities)
 
+
 def _set_night_vision(uid, account, password, camera_ip, mode: int):
     """Synchronous function to set night vision."""
     try:
         from .tutk.cuboai_messages import build_get_hw_control, build_set_hw_control
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
-            if hasattr(sess, 'ioctl'):
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
+            if hasattr(sess, "ioctl"):
                 resp_type, raw = sess.ioctl(*build_get_hw_control())
                 sess.ioctl(*build_set_hw_control(raw, night_vision_mode=mode))
             else:
@@ -45,6 +55,7 @@ def _set_night_vision(uid, account, password, camera_ip, mode: int):
                 sess._send_ioc(*build_set_hw_control(raw, night_vision_mode=mode))
     except Exception as e:
         _LOGGER.error(f"Failed to set night vision: {e}")
+
 
 class CuboNightVisionSelect(CoordinatorEntity, SelectEntity):
     def __init__(self, coordinator, camera, options):

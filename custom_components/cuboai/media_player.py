@@ -14,6 +14,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the CuboAI media player."""
     domain_data = hass.data[DOMAIN][entry.entry_id]
@@ -39,6 +40,7 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
     """Synchronous function to control lullabies."""
 
     from .utils import log_to_file
+
     log_to_file(f"[Lullaby] cmd={cmd_type} uuid={song_uuid} vol={volume} timer={timer} ip={camera_ip}")
     try:
         from .tutk.cuboai_messages import (
@@ -49,7 +51,15 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
         )
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=True, defer_video_start_late=True, auto_discover_lib=True) as sess:
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=True,
+            defer_video_start_late=True,
+            auto_discover_lib=True,
+        ) as sess:
             client = CuboAIClient(sess)
             if cmd_type == "play":
                 if not song_uuid:
@@ -72,6 +82,7 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                 log_to_file(f"[Lullaby] Play response: {resp}")
 
                 import time
+
                 time.sleep(1)
                 ls = client.get_lullaby_status()
                 log_to_file(f"[Lullaby] Status after play: playing={ls.is_playing}")
@@ -94,6 +105,7 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                     resp = sess._cubo_set(build_set_lullaby_vol_duration(vol, timer_val)[1])
     except Exception as e:
         log_to_file(f"[Lullaby] ERROR: {e}")
+
 
 class CuboAIMediaPlayer(MediaPlayerEntity):
     """Media Player entity to send audio to the CuboAI camera."""
@@ -132,10 +144,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
     @property
     def extra_state_attributes(self):
-        return {
-            "device_id": self._device_id,
-            "uid": self._cam.get("uid", "")
-        }
+        return {"device_id": self._device_id, "uid": self._cam.get("uid", "")}
 
     @property
     def device_info(self):
@@ -156,10 +165,9 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     async def async_browse_media(self, media_content_type=None, media_content_id=None):
         """Implement the websocket media browsing request."""
         from homeassistant.components import media_source
+
         return await media_source.async_browse_media(
-            self.hass,
-            media_content_id,
-            content_filter=lambda item: item.media_content_type.startswith("audio/")
+            self.hass, media_content_id, content_filter=lambda item: item.media_content_type.startswith("audio/")
         )
 
     async def async_media_stop(self) -> None:
@@ -184,7 +192,11 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
         """Send an audio file or TTS to the go2rtc speaker stream."""
         try:
-            await self.hass.services.async_call("persistent_notification", "create", {"title": "CuboAI Debug", "message": f"async_play_media called with {media_id}"})
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {"title": "CuboAI Debug", "message": f"async_play_media called with {media_id}"},
+            )
         except Exception:
             pass
         try:
@@ -192,6 +204,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
             from homeassistant.components.media_player.browse_media import async_process_play_media_url
             from homeassistant.components.media_source import async_resolve_media, is_media_source_id
+
             _LOGGER = logging.getLogger(__name__)
 
             # First resolve media source if it's TTS or local media
@@ -200,7 +213,13 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 media_id = sourced_media.url
 
             # Now check if it's a lullaby (lullabies are raw strings like "CuboAI_Lullaby")
-            is_lullaby = not media_id.startswith("http") and "youtube" not in media_id and "spotify" not in media_id and "ytsearch" not in media_id and not media_id.startswith("/")
+            is_lullaby = (
+                not media_id.startswith("http")
+                and "youtube" not in media_id
+                and "spotify" not in media_id
+                and "ytsearch" not in media_id
+                and not media_id.startswith("/")
+            )
 
             if not is_lullaby:
                 media_id = async_process_play_media_url(self.hass, media_id)
@@ -221,8 +240,9 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self._start_queue_loop()
         except Exception:
             import traceback
+
             log_path = self.hass.config.path("ffmpeg_error.log")
-            with open(log_path, 'a') as f:
+            with open(log_path, "a") as f:
                 f.write(f"Exception in async_play_media:\n{traceback.format_exc()}\n")
 
     def _start_queue_loop(self):
@@ -234,22 +254,33 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     async def _extract_media_url(self, media_id: str) -> str:
         """Extract YouTube or Spotify URL in the background."""
         try:
-            await self.hass.services.async_call("persistent_notification", "create", {"title": "CuboAI Debug", "message": f"_extract_media_url called for {media_id}"})
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {"title": "CuboAI Debug", "message": f"_extract_media_url called for {media_id}"},
+            )
         except Exception:
             pass
         import logging
+
         _LOGGER = logging.getLogger(__name__)
-        if "youtube.com" in media_id or "youtu.be" in media_id or "spotify.com" in media_id or media_id.startswith("ytsearch"):
+        if (
+            "youtube.com" in media_id
+            or "youtu.be" in media_id
+            or "spotify.com" in media_id
+            or media_id.startswith("ytsearch")
+        ):
             if "spotify.com" in media_id:
                 try:
                     import re
                     import urllib.request
-                    req = urllib.request.Request(media_id, headers={'User-Agent': 'Mozilla/5.0'})
-                    html = urllib.request.urlopen(req, timeout=5).read().decode('utf-8')
-                    title_match = re.search(r'<title>(.*?)</title>', html)
+
+                    req = urllib.request.Request(media_id, headers={"User-Agent": "Mozilla/5.0"})
+                    html = urllib.request.urlopen(req, timeout=5).read().decode("utf-8")
+                    title_match = re.search(r"<title>(.*?)</title>", html)
                     if title_match:
                         raw_title = title_match.group(1)
-                        clean_title = raw_title.split('|')[0].replace('- song and lyrics by', '').strip()
+                        clean_title = raw_title.split("|")[0].replace("- song and lyrics by", "").strip()
                         media_id = f"ytsearch1:{clean_title}"
                 except Exception:
                     pass
@@ -259,23 +290,27 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             except ImportError:
                 import subprocess
                 import sys
+
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
                 import yt_dlp
 
             import os
+
             def _extract_yt_url():
-                ydl_opts = {'format': 'bestaudio/best', 'quiet': True, 'noplaylist': True}
+                ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
                 cookie_path = self.hass.config.path("cuboai_cookies.txt")
                 if os.path.exists(cookie_path):
-                    ydl_opts['cookiefile'] = cookie_path
+                    ydl_opts["cookiefile"] = cookie_path
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(media_id, download=False)
-                    if 'entries' in info and len(info['entries']) > 0:
-                        info = info['entries'][0]
+                    if "entries" in info and len(info["entries"]) > 0:
+                        info = info["entries"][0]
                     return info.get("url", media_id)
+
             media_id = await self.hass.async_add_executor_job(_extract_yt_url)
 
         import urllib.parse
+
         parsed = urllib.parse.urlparse(media_id)
         if parsed.path.startswith("/api/") or parsed.path.startswith("/media/") or media_id.startswith("/"):
             media_id = f"http://127.0.0.1:8123{parsed.path}"
@@ -286,17 +321,24 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
     async def _queue_loop(self):
         try:
-            await self.hass.services.async_call("persistent_notification", "create", {"title": "CuboAI Debug", "message": "_queue_loop started!"})
+            await self.hass.services.async_call(
+                "persistent_notification", "create", {"title": "CuboAI Debug", "message": "_queue_loop started!"}
+            )
         except Exception:
             pass
         import asyncio
         import logging
+
         _LOGGER = logging.getLogger(__name__)
         current_task = asyncio.current_task()
         try:
             while self._queue:
                 timer_state = self.hass.states.get(f"number.cuboai_speaker_timer_{self._device_id}")
-                timer_min = int(float(timer_state.state)) if timer_state and timer_state.state not in ('unknown', 'unavailable') else 0
+                timer_min = (
+                    int(float(timer_state.state))
+                    if timer_state and timer_state.state not in ("unknown", "unavailable")
+                    else 0
+                )
                 _ = asyncio.get_event_loop().time()
 
                 raw_media_id = self._queue.pop(0)
@@ -306,17 +348,22 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self._attr_media_title = raw_media_id
                 self.async_write_ha_state()
 
-                is_lullaby = not raw_media_id.startswith("http") and "youtube" not in raw_media_id and "spotify" not in raw_media_id and "ytsearch" not in raw_media_id and not raw_media_id.startswith("/")
+                is_lullaby = (
+                    not raw_media_id.startswith("http")
+                    and "youtube" not in raw_media_id
+                    and "spotify" not in raw_media_id
+                    and "ytsearch" not in raw_media_id
+                    and not raw_media_id.startswith("/")
+                )
 
                 if is_lullaby:
                     # It's a lullaby! Find the lullaby entity and trigger it natively
                     _LOGGER.info(f"Playing lullaby via backend queue: {raw_media_id}")
                     lullaby_entity_id = self.entity_id.replace("_speaker", "_lullaby")
                     if self.hass.states.get(lullaby_entity_id):
-                        await self.hass.services.async_call("media_player", "select_source", {
-                            "entity_id": lullaby_entity_id,
-                            "source": raw_media_id
-                        })
+                        await self.hass.services.async_call(
+                            "media_player", "select_source", {"entity_id": lullaby_entity_id, "source": raw_media_id}
+                        )
                         # Lullabies loop forever natively. We clear the queue because a playlist stops at a lullaby.
                         self._queue.clear()
                         # Wait an hour or until stopped
@@ -330,8 +377,9 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     extracted_url = await self._extract_media_url(raw_media_id)
                 except Exception:
                     import traceback
+
                     log_path = self.hass.config.path("ffmpeg_error.log")
-                    with open(log_path, 'a') as f:
+                    with open(log_path, "a") as f:
                         f.write(f"Exception in _extract_media_url:\n{traceback.format_exc()}\n")
                     continue
 
@@ -348,10 +396,12 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 log_path = self.hass.config.path("ffmpeg_error.log")
 
                 self._backchannel_proc = await asyncio.create_subprocess_exec(
-                    "python3", script_path, extracted_url,
+                    "python3",
+                    script_path,
+                    extracted_url,
                     stdout=asyncio.subprocess.DEVNULL,
-                    stderr=open(log_path, 'a'),
-                    env=env
+                    stderr=open(log_path, "a"),
+                    env=env,
                 )
 
                 if timer_min > 0:
@@ -359,7 +409,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                         await asyncio.wait_for(self._backchannel_proc.wait(), timeout=timer_min * 60)
                     except TimeoutError:
                         _LOGGER.info(f"Speaker sleep timer expired ({timer_min} min)")
-                        self._queue.clear() # clear queue to stop playing
+                        self._queue.clear()  # clear queue to stop playing
                         if getattr(self, "_backchannel_proc", None):
                             try:
                                 self._backchannel_proc.terminate()
@@ -393,8 +443,9 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self._queue_task = None
         except Exception:
             import traceback
+
             log_path = self.hass.config.path("ffmpeg_error.log")
-            with open(log_path, 'a') as f:
+            with open(log_path, "a") as f:
                 f.write(f"Exception in _queue_loop:\n{traceback.format_exc()}\n")
             if self._queue_task == current_task:
                 self._attr_state = MediaPlayerState.IDLE
@@ -439,6 +490,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         )
 
         from .tutk.cuboai_messages import LULLABY_CATALOG
+
         self._catalog = LULLABY_CATALOG
         self._attr_source_list = sorted([v[1] for v in LULLABY_CATALOG.values()])
 
@@ -479,7 +531,9 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def async_media_play(self):
         timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-        timer = int(float(timer_state.state)) if timer_state and timer_state.state not in ('unknown', 'unavailable') else 0
+        timer = (
+            int(float(timer_state.state)) if timer_state and timer_state.state not in ("unknown", "unavailable") else 0
+        )
 
         # Optimistic update
         if self.coordinator.data and "cameras" in self.coordinator.data:
@@ -519,7 +573,11 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         uuid = next((k for k, v in self._catalog.items() if v[1] == source), None)
         if uuid:
             timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-            timer = int(float(timer_state.state)) if timer_state and timer_state.state not in ('unknown', 'unavailable') else 0
+            timer = (
+                int(float(timer_state.state))
+                if timer_state and timer_state.state not in ("unknown", "unavailable")
+                else 0
+            )
 
             # Optimistic update
             if self.coordinator.data and "cameras" in self.coordinator.data:
@@ -530,7 +588,15 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
             self.async_write_ha_state()
 
             await self.hass.async_add_executor_job(
-                _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", uuid, None, timer
+                _execute_lullaby_cmd,
+                self._uid,
+                self._account,
+                self._password,
+                self._camera_ip,
+                "play",
+                uuid,
+                None,
+                timer,
             )
             try:
                 await self.coordinator.async_request_refresh()
@@ -541,9 +607,21 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         if media_type == MediaType.MUSIC:
             uuid = next((k for k, v in self._catalog.items() if v[1] == media_id), media_id)
             timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-            timer = int(float(timer_state.state)) if timer_state and timer_state.state not in ('unknown', 'unavailable') else 0
+            timer = (
+                int(float(timer_state.state))
+                if timer_state and timer_state.state not in ("unknown", "unavailable")
+                else 0
+            )
             await self.hass.async_add_executor_job(
-                _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", uuid, None, timer
+                _execute_lullaby_cmd,
+                self._uid,
+                self._account,
+                self._password,
+                self._camera_ip,
+                "play",
+                uuid,
+                None,
+                timer,
             )
             try:
                 await self.coordinator.async_request_refresh()
@@ -554,7 +632,17 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         # HA volume is 0.0 to 1.0, API is 0 to 100
         vol_int = int(volume * 100)
         timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-        timer = int(float(timer_state.state)) if timer_state and timer_state.state not in ('unknown', 'unavailable') else 0
+        timer = (
+            int(float(timer_state.state)) if timer_state and timer_state.state not in ("unknown", "unavailable") else 0
+        )
         await self.hass.async_add_executor_job(
-            _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "volume", None, vol_int, timer
+            _execute_lullaby_cmd,
+            self._uid,
+            self._account,
+            self._password,
+            self._camera_ip,
+            "volume",
+            None,
+            vol_int,
+            timer,
         )

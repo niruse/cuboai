@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class CuboMediaLibrary:
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
@@ -29,8 +30,8 @@ class CuboMediaLibrary:
             _LOGGER.error(f"Failed to save CuboAI media library: {e}")
 
     def update_custom_songs(self, songs):
-        _LOGGER.warning(f'Updating custom songs. Old: {len(self._data.get("custom_songs", []))} New: {len(songs)}')
-        _LOGGER.warning('Calling async_dispatcher_send soon...')
+        _LOGGER.warning(f"Updating custom songs. Old: {len(self._data.get('custom_songs', []))} New: {len(songs)}")
+        _LOGGER.warning("Calling async_dispatcher_send soon...")
         self._data["custom_songs"] = songs
         self._save()
         self.hass.loop.call_soon_threadsafe(self._update_sensor)
@@ -47,11 +48,13 @@ class CuboMediaLibrary:
         import time
 
         from homeassistant.helpers.dispatcher import async_dispatcher_send
-        self.hass.data['cuboai_media_library_update_time'] = time.time()
+
+        self.hass.data["cuboai_media_library_update_time"] = time.time()
         async_dispatcher_send(self.hass, "cuboai_media_library_updated")
 
     def init_sensor(self):
         self._update_sensor()
+
 
 def async_setup_services(hass: HomeAssistant):
     if "cuboai_media_library_instance" in hass.data:
@@ -71,5 +74,3 @@ def async_setup_services(hass: HomeAssistant):
 
     hass.services.async_register("cuboai", "save_custom_songs", handle_save_custom_songs)
     hass.services.async_register("cuboai", "save_playlists", handle_save_playlists)
-
-

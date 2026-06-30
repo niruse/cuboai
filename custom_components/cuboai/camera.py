@@ -7,6 +7,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
@@ -22,6 +23,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     if camera_entities:
         async_add_entities(camera_entities)
 
+
 class CuboLocalCamera(CoordinatorEntity, Camera):
     def __init__(self, coordinator, camera):
         super().__init__(coordinator)
@@ -35,14 +37,12 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     @property
     def extra_state_attributes(self):
-        return {
-            "device_id": self._device_id,
-            "uid": self._device_id
-        }
+        return {"device_id": self._device_id, "uid": self._device_id}
 
     @property
     def supported_features(self) -> int:
         from homeassistant.components.camera import CameraEntityFeature
+
         features = CameraEntityFeature.STREAM
         # Dynamically add WEB_RTC if the current HA version supports it
         if hasattr(CameraEntityFeature, "WEB_RTC"):
@@ -53,6 +53,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
     def frontend_stream_type(self) -> str | None:
         """Return the type of stream supported by this camera."""
         from homeassistant.components.camera import StreamType
+
         # If WebRTC is supported, force WebRTC on frontend to avoid HLS HEVC failure
         return getattr(StreamType, "WEB_RTC", "web_rtc")
 
@@ -60,6 +61,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         """Return a still image response from the camera."""
         # 1. Try to get a LIVE snapshot from go2rtc API
         import aiohttp
+
         url = f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_{self._device_id}"
         try:
             async with aiohttp.ClientSession() as session:
@@ -80,11 +82,13 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             alert_id = latest_alert.get("id")
             if alert_id:
                 import os
+
                 filename = f"{self._device_id}_{alert_id}.jpg"
                 local_path = os.path.join(self.coordinator._images_dir, filename)
                 try:
                     import aiofiles
                     import aiofiles.os
+
                     if await aiofiles.os.path.exists(local_path):
                         async with aiofiles.open(local_path, "rb") as f:
                             return await f.read()
@@ -101,15 +105,12 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
     async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
         """Handle the WebRTC offer and return an answer."""
         import aiohttp
+
         # We use the combined stream to enable the WebRTC native two-way audio mic button
         url = f"http://127.0.0.1:1985/api/webrtc?src=cuboai_combined_{self._device_id}"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    data=offer_sdp,
-                    headers={"Content-Type": "application/sdp"}
-                ) as resp:
+                async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:
                     if resp.status == 200:
                         return await resp.text()
                     else:
@@ -126,4 +127,3 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
-
