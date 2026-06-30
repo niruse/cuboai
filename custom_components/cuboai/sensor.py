@@ -111,6 +111,7 @@ class CuboBabyInfoSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboMediaLibrarySensor(SensorEntity):
     def __init__(self, hass):
         self.hass = hass
@@ -123,10 +124,9 @@ class CuboMediaLibrarySensor(SensorEntity):
         """Run when entity about to be added to hass."""
         self.hass.data["cuboai_media_library_entity_id"] = self.entity_id
         from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
         self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, "cuboai_media_library_updated", self.async_write_ha_state
-            )
+            async_dispatcher_connect(self.hass, "cuboai_media_library_updated", self.async_write_ha_state)
         )
 
     @property
@@ -136,9 +136,11 @@ class CuboMediaLibrarySensor(SensorEntity):
             data = library.get_data()
             return {
                 "custom_songs": data.get("custom_songs", []),
-                "playlists": data.get("playlists", []), "last_update": self.hass.data.get("cuboai_media_library_update_time", 0)
+                "playlists": data.get("playlists", []),
+                "last_update": self.hass.data.get("cuboai_media_library_update_time", 0),
             }
         return {"custom_songs": [], "playlists": []}
+
 
 class CuboLastAlertSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -191,11 +193,9 @@ class CuboSessionHistorySensor(CoordinatorEntity, SensorEntity):
         history = []
         if alerts:
             for a in alerts:
-                history.append({
-                    "type": a.get("type", "unknown"),
-                    "time": a.get("created", ""),
-                    "image_url": a.get("image", "")
-                })
+                history.append(
+                    {"type": a.get("type", "unknown"), "time": a.get("created", ""), "image_url": a.get("image", "")}
+                )
         return {"alerts": history}
 
     @property
@@ -230,10 +230,7 @@ class CuboCameraStateSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         state = cam.get("camera_state", {})
-        return {
-            "timestamp": state.get("ts"),
-            "current_state": state.get("state")
-        }
+        return {"timestamp": state.get("ts"), "current_state": state.get("state")}
 
     @property
     def device_info(self):
@@ -274,7 +271,7 @@ class CuboSubscriptionSensor(CoordinatorEntity, SensorEntity):
             "service_start_date": sub.get("service_start_date"),
             "service_end_date": sub.get("service_end_date"),
             "auto_renewal": sub.get("auto_renewal"),
-            "order_id": sub.get("order_id")
+            "order_id": sub.get("order_id"),
         }
 
 
@@ -291,6 +288,7 @@ class CuboLastUpdateSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         import datetime
+
         val = self.coordinator.data.get("last_updated")
         if val:
             return datetime.datetime.fromisoformat(val)
@@ -304,6 +302,7 @@ class CuboLastUpdateSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboTemperatureSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -329,6 +328,7 @@ class CuboTemperatureSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboHumiditySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -353,6 +353,7 @@ class CuboHumiditySensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboAIFirmwareSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -375,6 +376,7 @@ class CuboAIFirmwareSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboCryDetectSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -400,6 +402,7 @@ class CuboCryDetectSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboCoughDetectSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -424,6 +427,7 @@ class CuboCoughDetectSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboSleepSafetySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -442,9 +446,7 @@ class CuboSleepSafetySensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        return {
-            "raw_value": cam.get("local", {}).get("sleep_safety_raw")
-        }
+        return {"raw_value": cam.get("local", {}).get("sleep_safety_raw")}
 
     @property
     def device_info(self):
@@ -454,9 +456,6 @@ class CuboSleepSafetySensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
-
-
-
 
 
 class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
@@ -478,7 +477,7 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
             "go2rtc_server": "http://127.0.0.1:1985",
             "rtsp_url": f"rtsp://127.0.0.1:8555/cuboai_{self._device_id}",
             "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
-            "stream_id": f"cuboai_{self._device_id}"
+            "stream_id": f"cuboai_{self._device_id}",
         }
 
     @property
@@ -516,6 +515,7 @@ class CuboWifiSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboWifiSSIDSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -539,6 +539,7 @@ class CuboWifiSSIDSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboConnectionModeSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -564,6 +565,7 @@ class CuboConnectionModeSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboConnectedUsersSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -588,13 +590,14 @@ class CuboConnectedUsersSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboMatBPMSensor(CoordinatorEntity, SensorEntity):
 
+class CuboMatBPMSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         state = cam.get("local", {}).get("mat_state")
         return state is not None and state != 0
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -618,13 +621,14 @@ class CuboMatBPMSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboMatStateSensor(CoordinatorEntity, SensorEntity):
 
+class CuboMatStateSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         state = cam.get("local", {}).get("mat_state")
         return state is not None and state != 0
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -649,12 +653,13 @@ class CuboMatStateSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboThermometerSensor(CoordinatorEntity, SensorEntity):
 
+class CuboThermometerSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         return cam.get("local", {}).get("smart_temp") is not None
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -677,6 +682,7 @@ class CuboThermometerSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboStandTypeSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -702,13 +708,14 @@ class CuboStandTypeSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboMatBatterySensor(CoordinatorEntity, SensorEntity):
 
+class CuboMatBatterySensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         state = cam.get("local", {}).get("mat_state")
         return state is not None and state != 0
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -733,12 +740,13 @@ class CuboMatBatterySensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboThermometerBatterySensor(CoordinatorEntity, SensorEntity):
 
+class CuboThermometerBatterySensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         return cam.get("local", {}).get("smart_temp") is not None
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -788,6 +796,7 @@ class CuboIPAddressSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboMACAddressSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -811,6 +820,7 @@ class CuboMACAddressSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboWiFiRSSISensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -837,6 +847,7 @@ class CuboWiFiRSSISensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboWiFiNoiseSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -862,6 +873,7 @@ class CuboWiFiNoiseSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboWiFiChannelSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -885,6 +897,7 @@ class CuboWiFiChannelSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboTempAlertHighSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -910,6 +923,7 @@ class CuboTempAlertHighSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboTempAlertLowSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -933,6 +947,7 @@ class CuboTempAlertLowSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboHumiAlertHighSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -958,6 +973,7 @@ class CuboHumiAlertHighSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
+
 class CuboHumiAlertLowSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
@@ -982,12 +998,13 @@ class CuboHumiAlertLowSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboFeverAlertHighSensor(CoordinatorEntity, SensorEntity):
 
+class CuboFeverAlertHighSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         return cam.get("local", {}).get("fever_alert_high") is not None
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -1011,12 +1028,13 @@ class CuboFeverAlertHighSensor(CoordinatorEntity, SensorEntity):
             "model": "Baby Monitor",
         }
 
-class CuboFeverAlertLowSensor(CoordinatorEntity, SensorEntity):
 
+class CuboFeverAlertLowSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         return cam.get("local", {}).get("fever_alert_low") is not None
+
     def __init__(self, coordinator, device_id, baby_name):
         super().__init__(coordinator)
         self._device_id = device_id
@@ -1039,6 +1057,7 @@ class CuboFeverAlertLowSensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
 
 class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, device_id, baby_name):
@@ -1069,4 +1088,3 @@ class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
-

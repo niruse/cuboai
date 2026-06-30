@@ -7,6 +7,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
@@ -22,13 +23,22 @@ async def async_setup_entry(hass, entry, async_add_entities):
     if lights:
         async_add_entities(lights)
 
+
 def _set_night_light(uid, account, password, camera_ip, on: bool, brightness: int = None):
     """Synchronous function to set night light."""
     try:
         from .tutk.cuboai_messages import CuboAIClient
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
             client = CuboAIClient(sess)
             if brightness is not None:
                 client.set_brightness(brightness)
@@ -36,6 +46,7 @@ def _set_night_light(uid, account, password, camera_ip, on: bool, brightness: in
                 client.set_night_light(on)
     except Exception as e:
         _LOGGER.error(f"Failed to set night light: {e}")
+
 
 class CuboNightLight(CoordinatorEntity, LightEntity):
     def __init__(self, coordinator, camera, options):

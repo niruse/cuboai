@@ -270,23 +270,24 @@ def get_camera_profiles(access_token, user_agent):
             password = device_item.get("dev_admin_pwd", "")
 
             camera_ip_raw = (
-                device_item.get("ip") or
-                device_item.get("local_ip") or
-                device_item.get("lan_ip") or
-                profile.get("ip") or
-                profile.get("local_ip") or
-                profile.get("lan_ip") or
-                profile_data.get("ip") or
-                profile_data.get("local_ip") or
-                profile_data.get("lan_ip")
+                device_item.get("ip")
+                or device_item.get("local_ip")
+                or device_item.get("lan_ip")
+                or profile.get("ip")
+                or profile.get("local_ip")
+                or profile.get("lan_ip")
+                or profile_data.get("ip")
+                or profile_data.get("local_ip")
+                or profile_data.get("lan_ip")
             )
 
             import re
+
             camera_ip = None
-            if camera_ip_raw and re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', str(camera_ip_raw)):
+            if camera_ip_raw and re.match(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", str(camera_ip_raw)):
                 camera_ip = str(camera_ip_raw)
             else:
-                match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', json.dumps(profile))
+                match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", json.dumps(profile))
                 if match:
                     camera_ip = match.group(0)
 
@@ -301,14 +302,16 @@ def get_camera_profiles(access_token, user_agent):
                 log_to_file(f"Excluding camera {baby_name} ({device_id}) due to state query error: {e}")
                 continue
 
-            cameras.append({
-                "device_id": device_id,
-                "baby_name": baby_name,
-                "uid": uid,
-                "account": account,
-                "password": password,
-                "camera_ip": camera_ip
-            })
+            cameras.append(
+                {
+                    "device_id": device_id,
+                    "baby_name": baby_name,
+                    "uid": uid,
+                    "account": account,
+                    "password": password,
+                    "camera_ip": camera_ip,
+                }
+            )
         except Exception:
             continue
     return cameras

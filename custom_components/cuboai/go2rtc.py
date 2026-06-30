@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class Go2RTCManager:
     """Manages the internal go2rtc subprocess for CuboAI local streaming."""
 
@@ -36,31 +37,31 @@ class Go2RTCManager:
             camera_ip = self._options.get(f"camera_ip_{dev_id}", "") or cam.get("camera_ip", "")
 
             # We MUST set CUBOAI_MUX_AUDIO=1 so the upstream engine embeds the AAC audio into the MPEG-TS stream
-            env_vars = f'env CUBOAI_UID={uid} CUBOAI_ACCOUNT={account} CUBOAI_PASSWORD={pwd} CUBOAI_MUX_AUDIO=1 '
+            env_vars = f"env CUBOAI_UID={uid} CUBOAI_ACCOUNT={account} CUBOAI_PASSWORD={pwd} CUBOAI_MUX_AUDIO=1 "
             if camera_ip:
-                env_vars += f'CUBOAI_CAMERA_IP={camera_ip} '
+                env_vars += f"CUBOAI_CAMERA_IP={camera_ip} "
 
             backchannel_script = os.path.join(script_dir, "cuboai_stream_backchannel.py")
 
             # The 1st stream runs the pure-python engine which outputs native A/V MPEG-TS.
             # The 2nd stream uses ffmpeg to seamlessly transcode the AAC audio to Opus for WebRTC compatibility.
             self._streams[f"cuboai_{dev_id}"] = [
-                f'exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}',
-                f'ffmpeg:cuboai_{dev_id}#video=copy#audio=opus'
+                f"exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}",
+                f"ffmpeg:cuboai_{dev_id}#video=copy#audio=opus",
             ]
 
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
             self._streams[f"cuboai_speaker_{dev_id}"] = [
-                f'exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma'
+                f"exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma"
             ]
 
             # The combined stream: video from the main camera stream + backchannel for two-way audio.
             # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
             # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
             self._streams[f"cuboai_combined_{dev_id}"] = [
-                f'exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}',
-                f'ffmpeg:cuboai_combined_{dev_id}#video=copy#audio=opus',
-                f'exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma',
+                f"exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}",
+                f"ffmpeg:cuboai_combined_{dev_id}#video=copy#audio=opus",
+                f"exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
     async def _generate_config(self):
@@ -111,21 +112,22 @@ class Go2RTCManager:
         log_file_path = os.path.join(os.path.dirname(self._config_path), "go2rtc.log")
         _LOGGER.info("Starting internal go2rtc streaming server (log: %s)...", log_file_path)
         try:
+
             def _open_log():
                 return open(log_file_path, "a")
+
             log_file = await self.hass.async_add_executor_job(_open_log)
             self.process = await asyncio.create_subprocess_exec(
-                self._binary_path,
-                "-config", self._config_path,
-                stdout=log_file,
-                stderr=log_file
+                self._binary_path, "-config", self._config_path, stdout=log_file, stderr=log_file
             )
             _LOGGER.info(f"go2rtc started with PID {self.process.pid}")
 
             # Health check — wait a moment then verify process is still alive
             await asyncio.sleep(1)
             if self.process.returncode is not None:
-                _LOGGER.error("go2rtc exited immediately with code %s — check %s", self.process.returncode, log_file_path)
+                _LOGGER.error(
+                    "go2rtc exited immediately with code %s — check %s", self.process.returncode, log_file_path
+                )
                 self.process = None
         except Exception as e:
             _LOGGER.error(f"Failed to start go2rtc: {e}")
