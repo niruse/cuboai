@@ -5,7 +5,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 
 from .api.async_api import get_camera_profiles, refresh_cubo_token
 from .api.cuboai_functions import (
