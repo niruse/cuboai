@@ -105,7 +105,7 @@ You can adjust:
 - **Max Saved Photos:** The maximum number of images to keep on disk.
 - **Hours Back:** How far back in time to fetch alerts on startup.
 - **Update Interval:** How often to poll the API for changes.
-- **Camera IP (Optional):** Manually override the local IP of your camera for WebRTC.
+- **Camera IP (Optional):** Your camera's local IP is **discovered automatically**, so you can leave this blank! You only need to manually enter the IP if your Home Assistant is on a different VLAN or complex network that prevents auto-discovery.
 
 ### ❌ Missing / Unsupported Features
 While we provide a massive suite of entities, some native CuboAI app features cannot be implemented in Home Assistant currently:
