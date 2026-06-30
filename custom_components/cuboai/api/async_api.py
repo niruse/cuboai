@@ -116,6 +116,7 @@ async def get_camera_profiles(
         List of dicts containing device_id, baby_name, uid, account, password
     """
     import json
+
     from ..utils import log_to_file
 
     url = f"{API_BASE}/user/cameras"
@@ -136,17 +137,17 @@ async def get_camera_profiles(
                 profile_data = json.loads(profile.get("profile", "{}"))
                 baby_name = profile_data.get("baby", "Unknown")
                 device_id = profile.get("device_id")
-                
+
                 device_item = device_data_map.get(device_id, {})
                 uid = device_item.get("license_id", "")
                 account = device_item.get("dev_admin_id", "")
                 password = device_item.get("dev_admin_pwd", "")
-                
+
                 camera_ip_raw = (
-                    device_item.get("ip") or 
-                    device_item.get("local_ip") or 
-                    device_item.get("lan_ip") or 
-                    profile.get("ip") or 
+                    device_item.get("ip") or
+                    device_item.get("local_ip") or
+                    device_item.get("lan_ip") or
+                    profile.get("ip") or
                     profile.get("local_ip") or 
                     profile.get("lan_ip") or 
                     profile_data.get("ip") or 
