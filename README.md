@@ -92,6 +92,29 @@ This integration provides a massive suite of local control and real-time monitor
 
 ---
 
+### ⚙️ Configuration & Settings
+
+After adding the integration, you can click on **Configure** at any time to tweak its behavior. 
+These settings can be changed seamlessly without needing to log out or remove the integration!
+
+<img src="docs/images/config_options.png" width="400" />
+
+You can adjust:
+- **Download Images:** Toggle whether to save event thumbnails locally.
+- **Alerts Count:** How many recent alerts to track in the sensor.
+- **Max Saved Photos:** The maximum number of images to keep on disk.
+- **Hours Back:** How far back in time to fetch alerts on startup.
+- **Update Interval:** How often to poll the API for changes.
+- **Camera IP (Optional):** Manually override the local IP of your camera for WebRTC.
+
+### ❌ Missing / Unsupported Features
+While we provide a massive suite of entities, some native CuboAI app features cannot be implemented in Home Assistant currently:
+- **Past Video Playback (Timeline):** Home Assistant cannot fetch or stream the historical 18-hour video timeline from the camera. Only live streaming is supported.
+- **Native Two-Way Audio (Without Custom Card):** Home Assistant's default WebRTC implementation does not natively support microphone backchannel audio without using our provided `cuboai-card.js` Custom Lovelace card.
+- **Pan / Tilt:** The CuboAI camera is fixed and does not physically support PTZ (Pan-Tilt-Zoom).
+
+---
+
 ## Sample Images of Sensors
 
 Here are example screenshots from the CuboAI integration:
