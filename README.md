@@ -182,7 +182,6 @@ For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai
 ### ✨ Features:
 - **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
 - **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
-- **Microphone Toggle**: A beautiful, floating microphone button for two-way audio.
 - **Smart Fallback**: Automatically leverages the camera entity to enable fallback to MSE/HLS when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
 - **Lullaby Player**: A dynamic, sliding drawer menu to select, play, and pause lullabies!
   
