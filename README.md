@@ -28,22 +28,43 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
 
 ## ✨ Features
 
-- Sensor for **baby info** (name, gender, birth date)
-- Sensor for **last CuboAI alerts** (with image thumbnails)
-- Optionally **download alert images** locally for fast, private display
-- Sensor for **subscription status** (Premium, trial, grace period, etc.)
-- Sensor for **camera online/offline state**
-- **[NEW] Local Control & Live Features** via direct LAN connection:
-  - **Live Detection Sensors**: Cry Detection, Cough Detection, and Sleep Safety (covered face/rollover)
-  - **Night Light Control**: Native Home Assistant brightness slider for the night light (1% - 100%)
-  - **Lullaby Controls**: Play/stop lullabies directly from Home Assistant
-  - **Status LED Switch**: Toggle the physical status indicator LED on the camera
-  - **Sleep Mode Switch**: Turn the camera's sleep mode on/off
-  - **Environmental Sensors**: Live Temperature and Humidity readings
-  - **Firmware Version**: Display the camera's active firmware version
-  - **JPEG Snapshot**: Display live camera snapshot in Home Assistant via go2rtc
-- Support for multiple CuboAI cameras (multi-instance integration)
-- Easy authentication with CuboAI (uses pycognito for SRP/AWS Cognito)
+This integration provides a massive suite of local control and real-time monitoring entities for your CuboAI cameras! 
+
+### 🎛️ Controls
+- **Night Light Brightness**: Native Home Assistant brightness slider (1% - 100%)
+- **Night Light Switch**: Toggle the night light on/off
+- **Lullaby Player**: Media player to start, stop, and select lullabies
+- **Lullaby Timer**: Set the duration for lullabies to play
+- **Speaker Play Time**: Adjust how long the speaker stays active
+- **Flip Screen**: Toggle the camera's physical video orientation
+- **Night Vision**: Switch between Auto, On, and Off
+- **Sleep Mode**: Put the camera into privacy sleep mode
+- **Status LED**: Toggle the physical status indicator LED
+- **Baby Presence**: Toggle baby presence tracking
+
+### 📊 Live Sensors
+- **Baby Info**: Demographics (Name, Age, etc.)
+- **Camera State**: Online/Offline/Streaming status
+- **Detection Statuses**: Cry Detection, Cough Detection, Sleep Safety (Face Covered/Rollover)
+- **Cry Sensitivity**: Current sensitivity level for cry detection
+- **Temperature & Humidity**: Real-time environmental readings
+- **Temperature & Humidity Alerts**: High/Low thresholds configured in the app
+- **Sleep Sensor Pad (Mat)**: Live BPM (Heart Rate) and Mat Battery/State
+- **Thermometer**: Live reading and battery state of the external thermometer
+- **Last Alert**: Image thumbnail and time of the last captured event
+- **Firmware Version**: The active firmware installed on the camera
+- **WebRTC Stream**: Raw stream ID for embedding ultra-low latency go2rtc video
+
+### 🛠️ Diagnostics
+- **WiFi Diagnostics**: Signal strength (RSSI), Quality (%), Noise, Channel, and SSID
+- **Network Info**: Local IP Address and MAC Address
+- **Connection Details**: Connection Mode (LAN vs P2P) and Connected Users count
+- **Hardware Info**: Camera Stand Type and Session History
+
+### 🌟 Plus:
+- **Zero-Delay Local Streaming**: Video is fetched directly from the camera on your local network!
+- **Multi-Camera Support**: Add as many CuboAI cameras as you own!
+- **Secure Authentication**: Uses native AWS Cognito SRP authentication.
 
 ---
 
