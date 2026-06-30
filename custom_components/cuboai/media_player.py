@@ -144,7 +144,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._cam.get("device_id", ""))},
-            "name": f"CuboAI {self._cam.get('name', 'Camera')}",
+            "name": f"CuboAI {self._cam.get('baby_name', 'Camera')}",
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
