@@ -183,7 +183,10 @@ For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai
 - **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
 - **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
 - **Smart Fallback**: Automatically leverages the camera entity to enable fallback to MSE/HLS when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
-- **Lullaby Player**: A dynamic, sliding drawer menu to select, play, and pause lullabies!
+- **Advanced Lullaby Player**: A dynamic, sliding drawer menu to manage lullabies and speaker logic natively:
+  - **Sources**: Play songs directly from **YouTube**, or use **Spotify** links (currently in testing mode).
+  - **Library Management**: Create custom playlists, add your own songs, and use the built-in search logic to find tracks easily.
+  - **Playback Control**: Manage play time filters and the underlying speaker logic intuitively from the UI.
   
   <p float="left">
     <img src="docs/images/lullaby_step_1.png" width="300" />
