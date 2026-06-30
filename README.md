@@ -142,7 +142,7 @@ Here are example screenshots from the CuboAI integration:
 Below is a sample of how you might present the alerts in a Markdown card, including event images:
 ![CuboAI Dashboard sample](https://github.com/user-attachments/assets/4acccaf6-451e-4b34-96bd-e97271ebb800)
 
-> 💡 Replace `{{Your Baby Name}}` with the actual entity suffix (e.g., `nir`).
+> 💡 Replace `{{Your Baby Name}}` with the actual entity suffix (e.g., `john`).
 
 ```yaml
 type: markdown
