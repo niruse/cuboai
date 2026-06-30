@@ -215,6 +215,12 @@ default_mute_state: unmuted
 
 The card will automatically detect all the related sensors (temperature, humidity, lullaby, etc.) using your camera's device ID and seamlessly link them all together!
 
+### 📱 Using the Custom Features
+Once the card is on your dashboard, you have full control over the camera directly from the video feed:
+- **Night Light:** Tap on the Night Light icon overlay to instantly toggle the camera's physical night light on or over.
+- **Lullabies:** Click the music note icon to open the sliding Lullaby drawer. You can select a song, adjust the timer, and play/pause the music natively. 
+- **Instant Syncing:** Because this hooks directly into the Home Assistant entities, any action you take (like turning on a lullaby) will **instantly synchronize across all devices**. If you play a lullaby on your iPad, your phone's dashboard will immediately reflect that the lullaby is playing!
+
 ---
 
 ## 🤝 Contributing
