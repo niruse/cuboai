@@ -21,6 +21,7 @@ sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.const"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.entity"] = MagicMock()
+sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 
 # Mock cuboai utils to avoid file I/O during tests
 _mock_utils = MagicMock()
