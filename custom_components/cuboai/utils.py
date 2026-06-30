@@ -19,4 +19,3 @@ def log_to_file(msg):
             f.write(f"{datetime.now()} - {msg}\n")
     except Exception:
         pass
-

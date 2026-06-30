@@ -7,6 +7,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
@@ -67,8 +68,17 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         vol = cam_data.get("local", {}).get("lullaby_volume", 50)
 
         from .media_player import _execute_lullaby_cmd
+
         await self.hass.async_add_executor_job(
-            _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "volume", None, vol, self._timer_value
+            _execute_lullaby_cmd,
+            self._uid,
+            self._account,
+            self._password,
+            self._camera_ip,
+            "volume",
+            None,
+            vol,
+            self._timer_value,
         )
         await self.coordinator.async_request_refresh()
 
@@ -106,6 +116,7 @@ class CuboSpeakerTimerNumber(CoordinatorEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         self._timer_value = int(value)
         self.async_write_ha_state()
+
 
 class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
     def __init__(self, coordinator, camera, options):
@@ -150,7 +161,15 @@ class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
         from .tutk.cuboai_session import get_session
 
         def _set_brightness():
-            with get_session(self._uid, self._account, self._password, camera_ip=self._camera_ip if self._camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
+            with get_session(
+                self._uid,
+                self._account,
+                self._password,
+                camera_ip=self._camera_ip if self._camera_ip else None,
+                defer_stream_start=False,
+                defer_video_start_late=False,
+                auto_discover_lib=True,
+            ) as sess:
                 client = CuboAIClient(sess)
                 client.set_brightness(bright_pct)
 

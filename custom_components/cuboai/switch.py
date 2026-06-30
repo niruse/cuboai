@@ -8,6 +8,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
@@ -26,19 +27,29 @@ async def async_setup_entry(hass, entry, async_add_entities):
     if switches:
         async_add_entities(switches)
 
+
 def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set sleep mode."""
     try:
         from .tutk.cuboai_messages import build_set_sleep_mode
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
-            if hasattr(sess, 'ioctl'):
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
+            if hasattr(sess, "ioctl"):
                 sess.ioctl(*build_set_sleep_mode(on))
             else:
                 sess._cubo_set(build_set_sleep_mode(on)[1])
     except Exception as e:
         _LOGGER.error(f"Failed to set sleep mode: {e}")
+
 
 class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, camera, options):
@@ -85,6 +96,7 @@ class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
         cam.setdefault("local", {})["sleep_mode_on"] = False
         self.async_write_ha_state()
 
+
 def _set_status_led(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set status led."""
     try:
@@ -93,14 +105,23 @@ def _set_status_led(uid, account, password, camera_ip, on: bool):
         from .tutk.cuboai_messages import IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
-            payload = struct.pack('<III', 0, 1 if on else 0, 0)
-            if hasattr(sess, 'ioctl'):
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
+            payload = struct.pack("<III", 0, 1 if on else 0, 0)
+            if hasattr(sess, "ioctl"):
                 sess.ioctl(IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ, payload)
             else:
                 sess._send_ioc(IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ, payload)
     except Exception as e:
         _LOGGER.error(f"Failed to set status led: {e}")
+
 
 class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, camera, options):
@@ -147,14 +168,23 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
         cam.setdefault("local", {})["status_led_on"] = False
         self.async_write_ha_state()
 
+
 def _set_flip_screen(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set flip screen."""
     try:
         from .tutk.cuboai_messages import build_get_hw_control, build_set_hw_control
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
-            if hasattr(sess, 'ioctl'):
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
+            if hasattr(sess, "ioctl"):
                 resp_type, raw = sess.ioctl(*build_get_hw_control())
                 sess.ioctl(*build_set_hw_control(raw, video_v_flip=on))
             else:
@@ -162,6 +192,7 @@ def _set_flip_screen(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(*build_set_hw_control(raw, video_v_flip=on))
     except Exception as e:
         _LOGGER.error(f"Failed to set flip screen: {e}")
+
 
 class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, camera, options):
@@ -208,14 +239,23 @@ class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
         cam.setdefault("local", {})["video_v_flip"] = False
         self.async_write_ha_state()
 
+
 def _set_baby_presence(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set baby presence alert."""
     try:
         from .tutk.cuboai_messages import build_get_sleep_safety_setting, build_set_sleep_safety_setting
         from .tutk.cuboai_session import get_session
 
-        with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
-            if hasattr(sess, 'ioctl'):
+        with get_session(
+            uid,
+            account,
+            password,
+            camera_ip=camera_ip if camera_ip else None,
+            defer_stream_start=False,
+            defer_video_start_late=False,
+            auto_discover_lib=True,
+        ) as sess:
+            if hasattr(sess, "ioctl"):
                 resp_type, raw = sess.ioctl(*build_get_sleep_safety_setting())
                 sess.ioctl(*build_set_sleep_safety_setting(raw, baby_presence_alert=on))
             else:
@@ -223,6 +263,7 @@ def _set_baby_presence(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(*build_set_sleep_safety_setting(raw, baby_presence_alert=on))
     except Exception as e:
         _LOGGER.error(f"Failed to set baby presence: {e}")
+
 
 class CuboBabyPresenceSwitch(CoordinatorEntity, SwitchEntity):
     def __init__(self, coordinator, camera, options):

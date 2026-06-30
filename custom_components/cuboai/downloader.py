@@ -15,12 +15,14 @@ DOCKER_AUTH = "https://auth.docker.io/token?service=registry.docker.io&scope=rep
 
 GO2RTC_REPO = "AlexxIT/go2rtc"
 
+
 async def _get_docker_token(session: aiohttp.ClientSession) -> str:
     """Get anonymous pull token for wyze-bridge from Docker Hub."""
     async with session.get(DOCKER_AUTH) as resp:
         resp.raise_for_status()
         data = await resp.json()
         return data["token"]
+
 
 async def _download_tutk_libs(arch: str, dest_dir: str):
     """Download TUTK libraries from wyze-bridge docker image."""
@@ -48,7 +50,9 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
         headers = {"Authorization": f"Bearer {token}"}
 
         # 1. Get manifest list
-        headers["Accept"] = "application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json"
+        headers["Accept"] = (
+            "application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json"
+        )
 
         async with session.get(f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/manifests/latest", headers=headers) as resp:
             resp.raise_for_status()
@@ -82,7 +86,9 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
             layer_digest = layer["digest"]
             _LOGGER.debug(f"Downloading layer {layer_digest}...")
 
-            async with session.get(f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/blobs/{layer_digest}", headers=headers) as resp:
+            async with session.get(
+                f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/blobs/{layer_digest}", headers=headers
+            ) as resp:
                 resp.raise_for_status()
                 tar_bytes = await resp.read()
 
@@ -101,6 +107,7 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
 
         if found_count < len(targets):
             raise RuntimeError(f"Could not find all TUTK libraries in docker image for {arch}")
+
 
 async def _download_go2rtc(arch: str, dest_dir: str):
     """Download go2rtc binary from GitHub."""
@@ -129,6 +136,7 @@ async def _download_go2rtc(arch: str, dest_dir: str):
             os.chmod(binary_path, st.st_mode | stat.S_IEXEC)
             _LOGGER.debug("go2rtc downloaded and marked as executable.")
 
+
 async def async_ensure_dependencies(hass) -> bool:
     """Ensure all proprietary Native libraries and go2rtc are downloaded."""
     # Determine arch
@@ -146,10 +154,7 @@ async def async_ensure_dependencies(hass) -> bool:
     bin_dir = os.path.join(base_dir, "bin")
 
     try:
-        await asyncio.gather(
-            _download_tutk_libs(arch, libs_dir),
-            _download_go2rtc(arch, bin_dir)
-        )
+        await asyncio.gather(_download_tutk_libs(arch, libs_dir), _download_go2rtc(arch, bin_dir))
         return True
     except Exception as e:
         _LOGGER.error(f"Failed to download CuboAI native dependencies: {e}")

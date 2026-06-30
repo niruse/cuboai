@@ -22,7 +22,15 @@ from .utils import set_log_path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CAMERA, Platform.LIGHT, Platform.SWITCH, Platform.MEDIA_PLAYER, Platform.NUMBER, Platform.SELECT]
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.CAMERA,
+    Platform.LIGHT,
+    Platform.SWITCH,
+    Platform.MEDIA_PLAYER,
+    Platform.NUMBER,
+    Platform.SELECT,
+]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -56,12 +64,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             import datetime
             import traceback
+
             with open("/config/cuboai_last_alert_debug.log", "a") as f:
                 f.write(f"{datetime.datetime.now()} - Frontend register error: {e}\n{traceback.format_exc()}\n")
         except Exception:
             pass
 
     from .media_library import async_setup_services
+
     async_setup_services(hass)
 
     return True
@@ -75,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Ensure media library services are set up
     from .media_library import async_setup_services
+
     async_setup_services(hass)
 
     # Ensure dependencies
@@ -116,7 +127,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 new_cameras = device_map
 
                 old_cameras = entry.data.get("cameras", [])
-                if sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(old_cameras, key=lambda c: c["device_id"]):
+                if sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(
+                    old_cameras, key=lambda c: c["device_id"]
+                ):
                     _LOGGER.info("Dynamic camera list update detected: %s", new_cameras)
                     new_data = dict(entry.data)
                     new_data["cameras"] = new_cameras
@@ -134,9 +147,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     from .coordinator import CuboAICoordinator
 
-    coordinator = CuboAICoordinator(
-        hass, entry, latest_access, latest_refresh, user_agent
-    )
+    coordinator = CuboAICoordinator(hass, entry, latest_access, latest_refresh, user_agent)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
