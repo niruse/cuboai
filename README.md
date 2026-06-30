@@ -33,9 +33,17 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
 - Optionally **download alert images** locally for fast, private display
 - Sensor for **subscription status** (Premium, trial, grace period, etc.)
 - Sensor for **camera online/offline state**
+- **[NEW] Local Control & Live Features** via direct LAN connection:
+  - **Live Detection Sensors**: Cry Detection, Cough Detection, and Sleep Safety (covered face/rollover)
+  - **Night Light Control**: Native Home Assistant brightness slider for the night light (1% - 100%)
+  - **Lullaby Controls**: Play/stop lullabies directly from Home Assistant
+  - **Status LED Switch**: Toggle the physical status indicator LED on the camera
+  - **Sleep Mode Switch**: Turn the camera's sleep mode on/off
+  - **Environmental Sensors**: Live Temperature and Humidity readings
+  - **Firmware Version**: Display the camera's active firmware version
+  - **JPEG Snapshot**: Display live camera snapshot in Home Assistant via go2rtc
 - Support for multiple CuboAI cameras (multi-instance integration)
 - Easy authentication with CuboAI (uses pycognito for SRP/AWS Cognito)
-- All data stays local—no cloud polling from Home Assistant servers
 
 ---
 
@@ -114,6 +122,61 @@ content: >
   {% endif %}
 
 ```
+---
+
+## 🎤 Two-Way Audio (Microphone Support)
+
+Home Assistant's default camera card does **not** support two-way audio or microphone buttons out of the box. To see the microphone button and use the 2-way talk feature, you need to use the **WebRTC Camera** custom Lovelace card (by AlexxIT), which you can install via HACS.
+
+Here is how to get the microphone button on your dashboard:
+
+1. **Install WebRTC Camera:** Go to HACS -> Frontend -> Search for "WebRTC Camera" and install it, then reload your browser.
+2. **Add to Dashboard:** Go to your dashboard, click "Edit Dashboard", and add a "Custom: WebRTC Camera" card.
+3. **Configure the Card:** Set the URL to your camera's exact go2rtc stream ID. You can easily find this ID by looking at the state of the `sensor.cuboai_webrtc_stream_{baby_name}` entity that this integration creates (e.g. `cuboai_YOUR_CAMERA_ID`).
+
+Your card configuration in YAML should look like this:
+
+```yaml
+type: custom:webrtc-camera
+url: cuboai_YOUR_CAMERA_ID
+media: video,audio,microphone
+```
+
+*(Note: Setting `media: video,audio,microphone` is what explicitly tells the WebRTC card to render the Microphone button on the screen!)*
+
+Once you save that card, you will see a microphone icon directly over the video feed. When you click and hold it, it will stream your PC/phone microphone audio directly through the PureSession backchannel to the camera!
+
+---
+
+## 🎨 CuboAI Custom Lovelace Card
+
+For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai-card.js`) that automatically wraps the WebRTC Camera card and adds:
+- **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
+- **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
+- **Microphone Toggle**: A beautiful, floating microphone button for two-way audio.
+- **Smart Fallback**: Automatically leverages the camera entity to enable automatic fallback to MSE when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
+
+### 🛠️ Installing the Custom Card
+
+If you installed this integration manually or via HACS, the `cuboai-card.js` file is already located in the `www/` folder of the integration.
+
+1. In Home Assistant, navigate to **Settings** -> **Dashboards** -> **Resources** (You may need to click the 3 dots in the top right to see Resources).
+2. Click **Add Resource**.
+3. Set the URL to: `/local/cuboai-card.js?v=1`
+4. Set the Resource Type to: **JavaScript Module**.
+5. Click **Create**!
+
+### ⚠️ Important: Bypassing the Home Assistant Cache!
+
+If you ever update the `cuboai-card.js` file, you will notice that the browser **will not** load the new version. This is because Home Assistant's internal web server aggressively caches `/local/` resources using the version string in the URL.
+
+**To forcefully update the card after applying fixes:**
+1. Go back to **Settings** -> **Dashboards** -> **Resources**.
+2. Click on `/local/cuboai-card.js?v=1`.
+3. Change the version number (e.g., change `?v=1` to `?v=2` or `?v=99`).
+4. Click **Update**.
+5. Do a hard refresh in your browser (Ctrl+F5) or use an Incognito Window!
+
 ---
 
 ## 🤝 Contributing
