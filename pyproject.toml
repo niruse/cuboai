@@ -1,6 +1,7 @@
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+exclude = ["custom_components/cuboai/tutk"]
 
 [tool.ruff.lint]
 select = [
