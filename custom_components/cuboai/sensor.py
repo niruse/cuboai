@@ -1,175 +1,105 @@
-import asyncio
-import json
 import logging
-import os
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import EntityCategory
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-import aiohttp
-from homeassistant.helpers.entity import Entity
-
-from .api.async_api import (
-    download_image,
-    get_camera_profiles_raw,
-    get_camera_state,
-    get_n_alerts_paged,
-    get_subscription_info,
-    refresh_cubo_token,
-)
-from .api.cuboai_functions import (
-    load_access_token,
-    load_refresh_token,
-    save_access_token,
-    save_refresh_token,
-)
 from .const import DOMAIN
-from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
 
-# Legacy hardcoded paths (for backwards compatibility)
-LEGACY_IMAGES_DIR = "/config/www/cuboai_images"
-
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    access_token = entry.data["access_token"]
-    refresh_token = entry.data["refresh_token"]
-    user_agent = entry.data["user_agent"]
-    download_images = entry.options.get("download_images", entry.data.get("download_images", True))
-
-    # Get all cameras from entry data
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    
     cameras = entry.data.get("cameras", [])
-
-    # For backward compatibility with old single-camera entries
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
 
     sensors = []
-
-    # Create sensors for each camera
     for camera in cameras:
         device_id = camera["device_id"]
         baby_name = camera["baby_name"]
-
+        
         sensors.extend(
             [
-                CuboBabyInfoSensor(
-                    hass=hass,
-                    entry=entry,
-                    name=f"CuboAI Baby Info {baby_name}",
-                    device_id=device_id,
-                    baby_name=baby_name,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
-                    user_agent=user_agent,
-                ),
-                CuboLastAlertSensor(
-                    hass=hass,
-                    entry=entry,
-                    device_id=device_id,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
-                    user_agent=user_agent,
-                    name=f"CuboAI Last Alert {baby_name}",
-                    download_images=download_images,
-                ),
-                CuboCameraStateSensor(
-                    hass=hass,
-                    entry=entry,
-                    device_id=device_id,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
-                    user_agent=user_agent,
-                    name=f"CuboAI Camera State {baby_name}",
-                ),
+                CuboBabyInfoSensor(coordinator, device_id, baby_name),
+                CuboLastAlertSensor(coordinator, device_id, baby_name),
+                CuboSessionHistorySensor(coordinator, device_id, baby_name),
+                CuboCameraStateSensor(coordinator, device_id, baby_name),
+                CuboWebRTCStreamSensor(coordinator, device_id, baby_name),
             ]
         )
+        if "uid" in camera:
+            sensors.extend(
+                [
+                    CuboTemperatureSensor(coordinator, device_id, baby_name),
+                    CuboHumiditySensor(coordinator, device_id, baby_name),
+                    CuboAIFirmwareSensor(coordinator, device_id, baby_name),
+                    CuboCryDetectSensor(coordinator, device_id, baby_name),
+                    CuboCoughDetectSensor(coordinator, device_id, baby_name),
+                    CuboSleepSafetySensor(coordinator, device_id, baby_name),
+                    CuboWifiSensor(coordinator, device_id, baby_name),
+                    CuboWifiSSIDSensor(coordinator, device_id, baby_name),
+                    CuboStandTypeSensor(coordinator, device_id, baby_name),
+                    CuboMatBPMSensor(coordinator, device_id, baby_name),
+                    CuboMatStateSensor(coordinator, device_id, baby_name),
+                    CuboMatBatterySensor(coordinator, device_id, baby_name),
+                    CuboThermometerSensor(coordinator, device_id, baby_name),
+                    CuboThermometerBatterySensor(coordinator, device_id, baby_name),
+                    CuboConnectionModeSensor(coordinator, device_id, baby_name),
+                    CuboConnectedUsersSensor(coordinator, device_id, baby_name),
+                    CuboIPAddressSensor(coordinator, device_id, baby_name),
+                    CuboMACAddressSensor(coordinator, device_id, baby_name),
+                    CuboWiFiRSSISensor(coordinator, device_id, baby_name),
+                    CuboWiFiNoiseSensor(coordinator, device_id, baby_name),
+                    CuboWiFiChannelSensor(coordinator, device_id, baby_name),
+                    CuboTempAlertHighSensor(coordinator, device_id, baby_name),
+                    CuboTempAlertLowSensor(coordinator, device_id, baby_name),
+                    CuboHumiAlertHighSensor(coordinator, device_id, baby_name),
+                    CuboHumiAlertLowSensor(coordinator, device_id, baby_name),
+                    CuboFeverAlertHighSensor(coordinator, device_id, baby_name),
+                    CuboFeverAlertLowSensor(coordinator, device_id, baby_name),
+                    CuboCrySensitivitySensor(coordinator, device_id, baby_name),
+                ]
+            )
 
-    # Add subscription sensor once per account (not per camera)
-    sensors.append(
-        CuboSubscriptionSensor(
-            hass=hass,
-            entry=entry,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            user_agent=user_agent,
-            name="CuboAI Subscription",
-        )
-    )
+        sensors.append(CuboLastUpdateSensor(coordinator, device_id, baby_name))
 
-    async_add_entities(sensors, update_before_add=True)
-
-
-class CuboBaseSensor(Entity):
-    def __init__(self, hass, entry, access_token, refresh_token, user_agent):
-        self.hass = hass
-        self._entry = entry
-        self._access_token = access_token
-        self._refresh_token = refresh_token
-        self._user_agent = user_agent
-        self._session: aiohttp.ClientSession | None = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def async_will_remove_from_hass(self):
-        """Clean up session when entity is removed."""
-        if self._session and not self._session.closed:
-            await self._session.close()
-
-    async def _load_latest_tokens(self):
-        """Load tokens from disk via executor to avoid blocking the event loop."""
-        latest_access, latest_refresh = await asyncio.gather(
-            self.hass.async_add_executor_job(load_access_token),
-            self.hass.async_add_executor_job(load_refresh_token),
-        )
-        if latest_access:
-            self._access_token = latest_access
-        if latest_refresh:
-            self._refresh_token = latest_refresh
-
-    async def _external_refresh_token(self):
-        """Refresh tokens using async API."""
-        await self._load_latest_tokens()
-        session = await self._get_session()
-        resp = await refresh_cubo_token(self._refresh_token, self._user_agent, session)
-        log_to_file(f"Token refresh response: {json.dumps(resp, indent=2)}")
-        access_token = resp.get("access_token")
-        new_refresh_token = resp.get("refresh_token", self._refresh_token)
-        self._access_token = access_token
-        self._refresh_token = new_refresh_token
-        # Save tokens back to disk via executor
-        await asyncio.gather(
-            self.hass.async_add_executor_job(save_access_token, access_token),
-            self.hass.async_add_executor_job(save_refresh_token, new_refresh_token),
-        )
+    sensors.append(CuboSubscriptionSensor(coordinator, entry.entry_id))
+    
+    # Ensure global media library sensor is only created once even with multiple cameras
+    if "cuboai_media_library_added" not in hass.data:
+        hass.data["cuboai_media_library_added"] = True
+        sensors.append(CuboMediaLibrarySensor(hass))
+    
+    # We do not need update_before_add=True because Coordinator already fetched data during async_setup_entry
+    async_add_entities(sensors)
 
 
-class CuboBabyInfoSensor(CuboBaseSensor):
-    def __init__(self, hass, entry, name, device_id, baby_name, access_token, refresh_token, user_agent):
-        super().__init__(hass, entry, access_token, refresh_token, user_agent)
-        self._name = name
+class CuboBabyInfoSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
         self._device_id = device_id
         self._baby_name = baby_name
-        self._state = None
-        self._attributes = {}
+        self._attr_name = f"CuboAI Baby Info {baby_name}"
+        self._attr_unique_id = f"cuboai_baby_info_{device_id}"
 
     @property
-    def name(self):
-        return self._name
-
-    @property
-    def unique_id(self):
-        return f"cuboai_baby_info_{self._device_id}"
-
-    @property
-    def state(self):
-        return self._baby_name
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        profile = cam.get("profile", {})
+        return profile.get("baby", self._baby_name)
 
     @property
     def extra_state_attributes(self):
-        return self._attributes
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        profile = cam.get("profile", {})
+        return {
+            "baby": profile.get("baby"),
+            "birth": profile.get("birth"),
+            "gender": profile.get("gender"),
+            "device_id": profile.get("device_id"),
+        }
 
     @property
     def device_info(self):
@@ -180,412 +110,961 @@ class CuboBabyInfoSensor(CuboBaseSensor):
             "model": "Baby Monitor",
         }
 
-    async def async_update(self):
-        import traceback
+class CuboMediaLibrarySensor(SensorEntity):
+    def __init__(self, hass):
+        self.hass = hass
+        self._attr_name = "CuboAI Media Library"
+        self._attr_unique_id = "cuboai_media_library_global"
+        self._attr_icon = "mdi:music-box-multiple"
+        self._attr_native_value = "active"
 
-        try:
-            await self._load_latest_tokens()
-            session = await self._get_session()
-            try:
-                profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
-            except aiohttp.ClientResponseError as e:
-                if e.status == 401:
-                    log_to_file(f"Access token expired in BabyInfoSensor: {e}")
-                    await self._external_refresh_token()
-                    profiles = await get_camera_profiles_raw(self._access_token, self._user_agent, session)
-                else:
-                    raise
-            found = False
-            for item in profiles:
-                if item["device_id"] == self._device_id:
-                    profile = json.loads(item.get("profile", "{}"))
-                    birth_date = profile.get("birth")
-                    gender = profile.get("gender")
-                    gender_text = "male" if gender == 0 else "female" if gender == 1 else "unknown"
-                    self._attributes = {
-                        "baby": profile.get("baby"),
-                        "birth": birth_date,
-                        "gender": gender_text,
-                        "device_id": self._device_id,
-                    }
-                    found = True
-                    break
-            if not found:
-                self._attributes = {"baby": None, "birth": None, "gender": None, "device_id": self._device_id}
-        except Exception as e:
-            log_to_file(f"Failed to update Cubo baby profile info: {e}\n{traceback.format_exc()}")
-            self._attributes = {"baby": None, "birth": None, "gender": None, "device_id": self._device_id}
-
-
-class CuboLastAlertSensor(CuboBaseSensor):
-    """
-    Sensor that exposes the latest CuboAI alerts for a specific device.
-    - Pulls the latest N alerts using get_n_alerts_paged
-    - Parses params into a dict (not a JSON string)
-    - Downloads alert images to www/cuboai_images if enabled
-    - Cleans up old images per device (keeps the latest 5)
-    - Chooses the state based on the newest alert by ts
-    """
-
-    def __init__(
-        self,
-        hass,
-        entry,
-        device_id,
-        access_token,
-        refresh_token,
-        user_agent,
-        name="CuboAI Last Alert",
-        download_images=True,
-    ):
-        super().__init__(hass, entry, access_token, refresh_token, user_agent)
-        self._device_id = device_id
-        self._name = name
-        self._state = None
-        self._attributes = {}
-        self._attr_extra_state_attributes = self._attributes
-
-        # Portable image storage paths using hass.config.path()
-        # Falls back to legacy path for backwards compatibility
-        self._images_dir = self._get_images_dir()
-        self._web_base = "/local/cuboai_images"
-
-        # Default behavior can be overridden via options
-        self._default_download_images = download_images
-
-    def _get_images_dir(self) -> str:
-        """Get the images directory path with legacy fallback for backwards compatibility."""
-        # Try portable path first
-        portable_path = self.hass.config.path("www", "cuboai_images")
-
-        # If portable path exists, use it
-        if os.path.exists(portable_path):
-            return portable_path
-
-        # If legacy path exists (and portable doesn't), use legacy for backwards compatibility
-        if os.path.exists(LEGACY_IMAGES_DIR):
-            log_to_file(f"Using legacy images path: {LEGACY_IMAGES_DIR}")
-            return LEGACY_IMAGES_DIR
-
-        # Default to portable path for new installations
-        return portable_path
-
-    # ---------- Config helpers ----------
-
-    @property
-    def download_images(self) -> bool:
-        # Prefer options over data, fallback to default ctor value
-        return self._entry.options.get(
-            "download_images",
-            self._entry.data.get("download_images", self._default_download_images),
+    async def async_added_to_hass(self):
+        """Run when entity about to be added to hass."""
+        self.hass.data["cuboai_media_library_entity_id"] = self.entity_id
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, "cuboai_media_library_updated", self.async_write_ha_state
+            )
         )
 
     @property
-    def hours_back(self) -> int:
-        # Allow narrowing the window via options for closer parity with manual tests
-        return int(self._entry.options.get("hours_back", self._entry.data.get("hours_back", 12)))
+    def extra_state_attributes(self):
+        if "cuboai_media_library_instance" in self.hass.data:
+            library = self.hass.data["cuboai_media_library_instance"]
+            data = library.get_data()
+            return {
+                "custom_songs": data.get("custom_songs", []),
+                "playlists": data.get("playlists", []), "last_update": self.hass.data.get("cuboai_media_library_update_time", 0)
+            }
+        return {"custom_songs": [], "playlists": []}
+
+class CuboLastAlertSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Last Alert {baby_name}"
+        self._attr_unique_id = f"cuboai_last_alert_{device_id}"
 
     @property
-    def max_alerts(self) -> int:
-        # How many alerts to keep in attributes
-        return int(self._entry.options.get("alerts_count", self._entry.data.get("alerts_count", 5)))
-
-    # ---------- Entity basics ----------
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def unique_id(self):
-        return f"cuboai_last_alert_{self._device_id}"
-
-    @property
-    def state(self):
-        return self._state
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("latest_alert", "No alerts")
 
     @property
     def extra_state_attributes(self):
-        return self._attributes
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        alerts = cam.get("alerts", [])
+        return {"alerts": alerts}
 
     @property
     def device_info(self):
-        # Get baby name from entry data
-        cameras = self._entry.data.get("cameras", [])
-        baby_name = "Unknown"
-        for cam in cameras:
-            if cam["device_id"] == self._device_id:
-                baby_name = cam["baby_name"]
-                break
-        # Fallback for backward compatibility
-        if baby_name == "Unknown" and self._entry.data.get("device_id") == self._device_id:
-            baby_name = self._entry.data.get("baby_name", "Unknown")
-
         return {
             "identifiers": {(DOMAIN, self._device_id)},
-            "name": f"CuboAI {baby_name}",
+            "name": f"CuboAI {self._baby_name}",
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
 
-    # ---------- Update logic ----------
 
-    def _cleanup_old_images(self):
-        """Cleanup old images, keeping only the latest 5 per device.
-
-        This is a blocking operation and should be run via executor.
-        """
-        from pathlib import Path
-
-        files = sorted(
-            Path(self._images_dir).glob(f"{self._device_id}_*.jpg"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-        for old_file in files[5:]:
-            try:
-                old_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    async def async_update(self):
-        import json as _json
-        import traceback
-
-        import aiofiles.os
-
-        try:
-            # Ensure we use the newest tokens saved on disk
-            await self._load_latest_tokens()
-            session = await self._get_session()
-
-            # Fetch alerts, with refresh fallback on 401
-            try:
-                alerts = await get_n_alerts_paged(
-                    self._device_id,
-                    self._access_token,
-                    self._user_agent,
-                    self.max_alerts,
-                    self.hours_back,
-                    session,
-                )
-            except aiohttp.ClientResponseError as e:
-                if e.status == 401:
-                    log_to_file(f"[CuboLastAlertSensor] Access token expired: {e}")
-                    await self._external_refresh_token()
-                    alerts = await get_n_alerts_paged(
-                        self._device_id,
-                        self._access_token,
-                        self._user_agent,
-                        self.max_alerts,
-                        self.hours_back,
-                        session,
-                    )
-                else:
-                    raise
-
-            log_to_file(f"[CuboLastAlertSensor] Fetched alerts raw: {_json.dumps(alerts, ensure_ascii=False)[:2000]}")
-
-            alert_dicts = []
-            downloaded_filenames = []
-
-            if alerts:
-                # Ensure image dir exists if downloads are enabled
-                exists = await aiofiles.os.path.exists(self._images_dir)
-                if self.download_images and not exists:
-                    try:
-                        await aiofiles.os.makedirs(self._images_dir, exist_ok=True)
-                        log_to_file(f"[CuboLastAlertSensor] Created images dir: {self._images_dir}")
-                    except Exception as e:
-                        log_to_file(f"[CuboLastAlertSensor] Failed to create images dir: {e}")
-
-                for alert in alerts:
-                    # params can arrive as dict already if get_n_alerts_paged normalized it
-                    params = alert.get("params")
-                    if isinstance(params, str):
-                        try:
-                            params = _json.loads(params)
-                        except Exception:
-                            # Leave as string if not valid JSON
-                            pass
-
-                    local_image_path = None
-                    if self.download_images and alert.get("image"):
-                        filename = f"{self._device_id}_{alert.get('id')}.jpg"
-                        try:
-                            await download_image(
-                                alert.get("image"),
-                                self._access_token,
-                                self._user_agent,
-                                self._images_dir,
-                                filename,
-                                session,
-                            )
-                            local_image_path = f"{self._web_base}/{filename}"
-                            downloaded_filenames.append(filename)
-                            log_to_file(f"[CuboLastAlertSensor] Downloaded image: {local_image_path}")
-                        except Exception as e:
-                            log_to_file(f"[CuboLastAlertSensor] Image download failed: {e}")
-                            local_image_path = None
-
-                    alert_dicts.append(
-                        {
-                            "type": alert.get("type"),
-                            "created": alert.get("created"),
-                            "params": params,
-                            "image": local_image_path,
-                            "id": alert.get("id"),
-                            "ts": alert.get("ts"),
-                            "device_id": alert.get("device_id"),
-                        }
-                    )
-
-                # Cleanup old images per device, keep only the latest 5
-                if self.download_images:
-                    try:
-                        # Run cleanup in executor since it uses blocking pathlib
-                        await self.hass.async_add_executor_job(self._cleanup_old_images)
-                    except Exception as e:
-                        log_to_file(f"[CuboLastAlertSensor] Error cleaning images: {e}")
-
-                # Choose latest by ts
-                latest = max(alert_dicts, key=lambda a: a.get("ts", 0) or 0)
-                self._state = latest.get("type", "Unknown")
-                self._attributes = {"alerts": alert_dicts}
-                self._attr_extra_state_attributes = self._attributes
-
-                log_to_file(f"[CuboLastAlertSensor] State set to: {self._state}. Attributes count: {len(alert_dicts)}")
-            else:
-                self._state = "No alerts"
-                self._attributes = {"alerts": []}
-                self._attr_extra_state_attributes = self._attributes
-                log_to_file("[CuboLastAlertSensor] No alerts found in window.")
-
-        except Exception as e:
-            err_msg = f"[CuboLastAlertSensor] Error updating alerts: {e}\n{traceback.format_exc()}"
-            log_to_file(err_msg)
-            self._state = "Error"
-            self._attributes = {"alerts": []}
-            self._attr_extra_state_attributes = self._attributes
-
-
-class CuboSubscriptionSensor(CuboBaseSensor):
-    def __init__(self, hass, entry, access_token, refresh_token, user_agent, name="CuboAI Subscription"):
-        super().__init__(hass, entry, access_token, refresh_token, user_agent)
-        self._name = name
-        self._state = None
-        self._attributes = {}
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def unique_id(self):
-        # Use entry_id to make it unique per integration instance
-        return f"cuboai_subscription_{self._entry.entry_id}"
-
-    @property
-    def state(self):
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        return self._attributes
-
-    async def async_update(self):
-        import traceback
-
-        try:
-            await self._load_latest_tokens()
-            session = await self._get_session()
-            try:
-                data = await get_subscription_info(self._access_token, self._user_agent, session)
-            except aiohttp.ClientResponseError as e:
-                if e.status == 401:
-                    log_to_file(f"Access token expired in SubscriptionSensor: {e}")
-                    await self._external_refresh_token()
-                    data = await get_subscription_info(self._access_token, self._user_agent, session)
-                else:
-                    raise
-            if data:
-                self._state = data.get("status", "unknown")
-                self._attributes = data
-            else:
-                self._state = "No subscription"
-                self._attributes = {}
-        except Exception as e:
-            self._state = "Error"
-            self._attributes = {}
-            log_to_file(f"Error fetching CuboAI subscription: {e}\n{traceback.format_exc()}")
-
-
-class CuboCameraStateSensor(CuboBaseSensor):
-    def __init__(self, hass, entry, device_id, access_token, refresh_token, user_agent, name="CuboAI Camera State"):
-        super().__init__(hass, entry, access_token, refresh_token, user_agent)
+class CuboSessionHistorySensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
         self._device_id = device_id
-        self._name = name
-        self._state = None
-        self._attributes = {}
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Session History {baby_name}"
+        self._attr_unique_id = f"cuboai_session_history_{device_id}"
+        self._attr_icon = "mdi:history"
 
     @property
-    def name(self):
-        return self._name
-
-    @property
-    def unique_id(self):
-        return f"cuboai_camera_state_{self._device_id}"
-
-    @property
-    def state(self):
-        return self._state
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        alerts = cam.get("alerts", [])
+        return len(alerts) if alerts is not None else 0
 
     @property
     def extra_state_attributes(self):
-        return self._attributes
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        alerts = cam.get("alerts", [])
+        history = []
+        if alerts:
+            for a in alerts:
+                history.append({
+                    "type": a.get("type", "unknown"),
+                    "time": a.get("created", ""),
+                    "image_url": a.get("image", "")
+                })
+        return {"alerts": history}
 
     @property
     def device_info(self):
-        # Get baby name from entry data
-        cameras = self._entry.data.get("cameras", [])
-        baby_name = "Unknown"
-        for cam in cameras:
-            if cam["device_id"] == self._device_id:
-                baby_name = cam["baby_name"]
-                break
-        # Fallback for backward compatibility
-        if baby_name == "Unknown" and self._entry.data.get("device_id") == self._device_id:
-            baby_name = self._entry.data.get("baby_name", "Unknown")
-
         return {
             "identifiers": {(DOMAIN, self._device_id)},
-            "name": f"CuboAI {baby_name}",
+            "name": f"CuboAI {self._baby_name}",
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
 
-    async def async_update(self):
-        import traceback
 
-        try:
-            await self._load_latest_tokens()
-            session = await self._get_session()
-            try:
-                data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
-            except aiohttp.ClientResponseError as e:
-                if e.status == 401:
-                    log_to_file(f"Access token expired in CameraStateSensor: {e}")
-                    await self._external_refresh_token()
-                    data = await get_camera_state(self._device_id, self._access_token, self._user_agent, session)
-                else:
-                    raise
-            if data:
-                self._state = data.get("state", "unknown")
-                self._attributes = data
-            else:
-                self._state = "Unknown"
-                self._attributes = {}
-        except Exception as e:
-            self._state = "Error"
-            self._attributes = {}
-            log_to_file(f"Error fetching CuboAI camera state: {e}\n{traceback.format_exc()}")
+class CuboCameraStateSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Camera State {baby_name}"
+        self._attr_unique_id = f"cuboai_camera_state_{device_id}"
+        self._attr_device_class = SensorDeviceClass.ENUM
+        self._attr_options = ["online", "offline", "unknown"]
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        raw = str(cam.get("camera_state", {}).get("state", "unknown")).lower()
+        if raw in ("disconnect", "disconnected", "offline"):
+            return "offline"
+        return raw if raw == "online" else "unknown"
+
+    @property
+    def extra_state_attributes(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        state = cam.get("camera_state", {})
+        return {
+            "timestamp": state.get("ts"),
+            "current_state": state.get("state")
+        }
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+class CuboSubscriptionSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, entry_id):
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._attr_name = "CuboAI Subscription"
+        self._attr_unique_id = f"cuboai_subscription_{entry_id}"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        sub = self.coordinator.data.get("subscription")
+        if sub:
+            return sub.get("status", "unknown")
+        return "No subscription"
+
+    @property
+    def extra_state_attributes(self):
+        sub = self.coordinator.data.get("subscription")
+        if not sub: return {}
+        return {
+            "status": sub.get("status"),
+            "kind": sub.get("kind"),
+            "service_id": sub.get("service_id"),
+            "device_id": sub.get("device_id"),
+            "platform": sub.get("platform"),
+            "service_start_date": sub.get("service_start_date"),
+            "service_end_date": sub.get("service_end_date"),
+            "auto_renewal": sub.get("auto_renewal"),
+            "order_id": sub.get("order_id")
+        }
+
+
+class CuboLastUpdateSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Last Update {baby_name}"
+        self._attr_unique_id = f"cuboai_last_update_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        import datetime
+        val = self.coordinator.data.get("last_updated")
+        if val:
+            return datetime.datetime.fromisoformat(val)
+        return None
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboTemperatureSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Temperature {baby_name}"
+        self._attr_unique_id = f"cuboai_temperature_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("temperature")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboHumiditySensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Humidity {baby_name}"
+        self._attr_unique_id = f"cuboai_humidity_{device_id}"
+        self._attr_device_class = SensorDeviceClass.HUMIDITY
+        self._attr_native_unit_of_measurement = "%"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("humidity")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboAIFirmwareSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Firmware {baby_name}"
+        self._attr_unique_id = f"cuboai_firmware_{device_id}"
+        self._attr_icon = "mdi:information-outline"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("firmware_version", "Unknown")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboCryDetectSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Cry Detection Status {baby_name}"
+        self._attr_unique_id = f"cuboai_cry_detect_{device_id}"
+        self._attr_icon = "mdi:baby-face-outline"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        val = cam.get("local", {}).get("cry_detect")
+        return "On" if val else "Off" if val is False else "Unknown"
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboCoughDetectSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Cough Detection Status {baby_name}"
+        self._attr_unique_id = f"cuboai_cough_detect_{device_id}"
+        self._attr_icon = "mdi:account-voice"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        val = cam.get("local", {}).get("cough_detect")
+        return "On" if val else "Off" if val is False else "Unknown"
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboSleepSafetySensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Sleep Safety Status {baby_name}"
+        self._attr_unique_id = f"cuboai_sleep_safety_{device_id}"
+        self._attr_icon = "mdi:shield-check"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        val = cam.get("local", {}).get("sleep_safety")
+        return "On" if val else "Off" if val is False else "Unknown"
+
+    @property
+    def extra_state_attributes(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return {
+            "raw_value": cam.get("local", {}).get("sleep_safety_raw")
+        }
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+
+
+
+class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WebRTC Stream {baby_name}"
+        self._attr_unique_id = f"cuboai_webrtc_stream_{device_id}"
+        self._attr_icon = "mdi:cctv"
+
+    @property
+    def native_value(self):
+        return f"cuboai_{self._device_id}"
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "go2rtc_server": "http://127.0.0.1:1985",
+            "rtsp_url": f"rtsp://127.0.0.1:8555/cuboai_{self._device_id}",
+            "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
+            "stream_id": f"cuboai_{self._device_id}"
+        }
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+class CuboWifiSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WiFi Quality {baby_name}"
+        self._attr_unique_id = f"cuboai_wifi_{device_id}"
+        self._attr_icon = "mdi:wifi"
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_quality")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboWifiSSIDSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WiFi SSID {baby_name}"
+        self._attr_unique_id = f"cuboai_ssid_{device_id}"
+        self._attr_icon = "mdi:wifi-cog"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("ssid")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboConnectionModeSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Connection Mode {baby_name}"
+        self._attr_unique_id = f"cuboai_conn_mode_{device_id}"
+        self._attr_icon = "mdi:network"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("connection_mode")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboConnectedUsersSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Connected Users {baby_name}"
+        self._attr_unique_id = f"cuboai_users_{device_id}"
+        self._attr_icon = "mdi:account-group"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("connected_users")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboMatBPMSensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        state = cam.get("local", {}).get("mat_state")
+        return state is not None and state != 0
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Mat BPM {baby_name}"
+        self._attr_unique_id = f"cuboai_mat_bpm_{device_id}"
+        self._attr_icon = "mdi:heart-pulse"
+        self._attr_native_unit_of_measurement = "bpm"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("mat_bpm")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboMatStateSensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        state = cam.get("local", {}).get("mat_state")
+        return state is not None and state != 0
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Mat State {baby_name}"
+        self._attr_unique_id = f"cuboai_mat_state_{device_id}"
+        self._attr_icon = "mdi:bed"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        val = cam.get("local", {}).get("mat_state")
+        return str(val) if val is not None else None
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboThermometerSensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("smart_temp") is not None
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Thermometer Temperature {baby_name}"
+        self._attr_unique_id = f"cuboai_smart_temp_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("smart_temp")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboStandTypeSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Stand Type {baby_name}"
+        self._attr_unique_id = f"cuboai_stand_{device_id}"
+        self._attr_icon = "mdi:human-cane"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("stand_type")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboMatBatterySensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        state = cam.get("local", {}).get("mat_state")
+        return state is not None and state != 0
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Mat Battery {baby_name}"
+        self._attr_unique_id = f"cuboai_mat_battery_{device_id}"
+        self._attr_device_class = SensorDeviceClass.BATTERY
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("mat_battery")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboThermometerBatterySensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("smart_temp") is not None
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Thermometer Battery {baby_name}"
+        self._attr_unique_id = f"cuboai_smart_temp_battery_{device_id}"
+        self._attr_device_class = SensorDeviceClass.BATTERY
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("smart_temp_battery")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+class CuboIPAddressSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI IP Address {baby_name}"
+        self._attr_unique_id = f"cuboai_ip_{device_id}"
+        self._attr_icon = "mdi:ip-network"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_ip")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboMACAddressSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI MAC Address {baby_name}"
+        self._attr_unique_id = f"cuboai_mac_{device_id}"
+        self._attr_icon = "mdi:network"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_mac")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboWiFiRSSISensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WiFi RSSI {baby_name}"
+        self._attr_unique_id = f"cuboai_rssi_{device_id}"
+        self._attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+        self._attr_native_unit_of_measurement = "dBm"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_rssi")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboWiFiNoiseSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WiFi Noise {baby_name}"
+        self._attr_unique_id = f"cuboai_noise_{device_id}"
+        self._attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+        self._attr_native_unit_of_measurement = "dBm"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_noise")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboWiFiChannelSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI WiFi Channel {baby_name}"
+        self._attr_unique_id = f"cuboai_channel_{device_id}"
+        self._attr_icon = "mdi:router-wireless"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("wifi_channel")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboTempAlertHighSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Temp Alert High {baby_name}"
+        self._attr_unique_id = f"cuboai_temp_alert_high_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("temp_alert_high")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboTempAlertLowSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Temp Alert Low {baby_name}"
+        self._attr_unique_id = f"cuboai_temp_alert_low_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("temp_alert_low")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboHumiAlertHighSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Humidity Alert High {baby_name}"
+        self._attr_unique_id = f"cuboai_humi_alert_high_{device_id}"
+        self._attr_device_class = SensorDeviceClass.HUMIDITY
+        self._attr_native_unit_of_measurement = "%"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("humi_alert_high")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboHumiAlertLowSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Humidity Alert Low {baby_name}"
+        self._attr_unique_id = f"cuboai_humi_alert_low_{device_id}"
+        self._attr_device_class = SensorDeviceClass.HUMIDITY
+        self._attr_native_unit_of_measurement = "%"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("humi_alert_low")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboFeverAlertHighSensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("fever_alert_high") is not None
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Fever Alert High {baby_name}"
+        self._attr_unique_id = f"cuboai_fever_alert_high_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("fever_alert_high")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboFeverAlertLowSensor(CoordinatorEntity, SensorEntity):
+
+    @property
+    def available(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("fever_alert_low") is not None
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Fever Alert Low {baby_name}"
+        self._attr_unique_id = f"cuboai_fever_alert_low_{device_id}"
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = "°C"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("fever_alert_low")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, device_id, baby_name):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._attr_name = f"CuboAI Cry Sensitivity {baby_name}"
+        self._attr_unique_id = f"cuboai_cry_sensitivity_{device_id}"
+        self._attr_icon = "mdi:tune"
+
+    @property
+    def native_value(self):
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        val = cam.get("local", {}).get("cry_detect_sensitivity")
+        if val == 1:
+            return "High"
+        if val == 2:
+            return "Medium"
+        if val == 3:
+            return "Low"
+        return val
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+

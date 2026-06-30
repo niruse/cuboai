@@ -266,16 +266,23 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 options=user_input,
             )
 
+        schema = {
+            vol.Required("download_images", default=True): bool,
+            vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+            vol.Required("max_saved_photos", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+            vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
+            vol.Required("update_interval", default=60): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
+        }
+        
+        # Add dynamic fields for each camera IP
+        for cam in self._auth_data.get("cameras", []):
+            dev_id = cam.get("device_id")
+            key = f"camera_ip_{dev_id}"
+            schema[vol.Optional(key, description={"suggested_value": ""})] = str
+
         return self.async_show_form(
             step_id="config",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("download_images", default=True): bool,
-                    vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
-                    vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
-                    vol.Required("update_interval", default=60): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
-                }
-            ),
+            data_schema=vol.Schema(schema),
         )
 
     @staticmethod
@@ -310,6 +317,12 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required(
+                "max_saved_photos",
+                default=self.config_entry.options.get(
+                    "max_saved_photos", self.config_entry.data.get("max_saved_photos", 10)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+            vol.Required(
                 "hours_back",
                 default=self.config_entry.options.get(
                     "hours_back", self.config_entry.data.get("hours_back", 12)
@@ -333,3 +346,4 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(schema),
         )
+

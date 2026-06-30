@@ -24,8 +24,8 @@ THE BROADCAST REDIRECT SHIM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 On Linux, the TUTK library discovers cameras by broadcasting an nL probe
-to the network's broadcast address (e.g. 192.168.1.255:32761) using IPv6
-with IPv4-mapped addresses (::ffff:192.168.1.255). In some network configs
+to the network's broadcast address (e.g. 192.0.2.255:32761) using IPv6
+with IPv4-mapped addresses (::ffff:192.0.2.255). In some network configs
 (VMs, containers, certain Linux setups), broadcast packets don't reach the
 camera even when it's on the same subnet.
 
@@ -61,8 +61,9 @@ Despite the codec_id field in the frame info struct reading 0x0088, the
 actual format is ADTS-AAC. The codec_id interpretation is incorrect for
 this camera (it doesn't map to standard TUTK codec constants).
 
-Confirmed working: CuboAI firmware 3.0.1369, app v2.23.2, lib 4.2.1.1-H.
-See LIBRARY_SETUP.md for how to obtain the library.
+This native backend is optional: it is used only if you supply your own TUTK
+library via lib_path (or CUBOAI_LIB). The pure-Python backend is the default and
+needs no library. The shared library is not distributed with this project.
 """
 import ctypes
 import io
@@ -130,54 +131,73 @@ SHIM_SRC   = '/tmp/cuboai_redirect.c'
 
 
 def _ensure_shim_compiled() -> bool:
-    """Compile the broadcast redirect shim if not already compiled."""
+    """Compile the broadcast redirect shim if not already compiled.
+
+    Best-effort: returns False (never raises) when gcc is missing, the /tmp
+    source can't be written, or compilation fails. The caller then proceeds
+    WITHOUT the shim — native streaming still works wherever the LAN delivers
+    the TUTK broadcast probe to the camera (the shim is only a workaround for
+    broadcast-blocked setups like VMs/containers).
+    """
     if os.path.exists(SHIM_PATH):
         return True
-    with open(SHIM_SRC, 'w') as f:
-        f.write(_REDIRECT_C)
     try:
+        with open(SHIM_SRC, 'w') as f:
+            f.write(_REDIRECT_C)
         ret = subprocess.run(
             ['gcc', '-shared', '-fPIC', '-O2', '-o', SHIM_PATH, SHIM_SRC, '-ldl'],
             capture_output=True
         )
         return ret.returncode == 0
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
+        # gcc not installed (FileNotFoundError) or any I/O error — skip the shim.
         return False
 
 
 def _load_redirect_shim(camera_ip: str) -> None:
-    """Install broadcast redirect shim (Linux only).
+    """Install the broadcast redirect shim (Linux only) — BEST-EFFORT, never raises.
 
-    LD_PRELOAD must be set before the TUTK library loads.
-    If not already active, relaunches the current process with LD_PRELOAD set.
+    LD_PRELOAD must be set before the TUTK library loads, so when the shim is not
+    already active we compile it and re-exec the process with LD_PRELOAD set.
+
+    The shim ONLY matters in broadcast-blocked networks (VMs/containers). When
+    gcc is missing or anything else fails we return silently and let the native
+    lib connect via ordinary LAN broadcast discovery — which works on a normal
+    LAN where the camera and host share a subnet. So a box without gcc still
+    streams; it just loses the broadcast-redirect fallback.
     """
     global _redirect_lib
     if platform.system() != 'Linux':
         return
 
-    # Check if shim is already active (LD_PRELOAD was set before process start)
-    if SHIM_PATH in os.environ.get('LD_PRELOAD', ''):
-        # Already injected — just update the camera IP
-        if _redirect_lib is None:
-            _redirect_lib = ctypes.CDLL(SHIM_PATH)
-        parts = list(map(int, camera_ip.split('.')))
-        _redirect_lib.set_camera_ip.argtypes = [ctypes.c_ubyte] * 4
-        _redirect_lib.set_camera_ip(*parts)
+    try:
+        # Already active (LD_PRELOAD was set before process start) — just set the IP.
+        if SHIM_PATH in os.environ.get('LD_PRELOAD', ''):
+            if _redirect_lib is None:
+                _redirect_lib = ctypes.CDLL(SHIM_PATH)
+            parts = list(map(int, camera_ip.split('.')))
+            _redirect_lib.set_camera_ip.argtypes = [ctypes.c_ubyte] * 4
+            _redirect_lib.set_camera_ip(*parts)
+            return
+
+        # Not active — compile and relaunch with LD_PRELOAD. If gcc is missing,
+        # _ensure_shim_compiled() returns False and we skip (no shim, no re-exec).
+        if not _ensure_shim_compiled():
+            return
+
+        import sys
+        env = os.environ.copy()
+        existing = env.get('LD_PRELOAD', '')
+        env['LD_PRELOAD'] = (SHIM_PATH + ':' + existing).strip(':')
+        env['CUBOAI_CAMERA_IP'] = camera_ip
+        # Relaunch current process with LD_PRELOAD (replaces this process).
+        os.execve(sys.executable, [sys.executable] + sys.argv, env)
+        # execve replaces the process — code below never runs
+    except Exception:
+        # CDLL load / execve / malformed IP / any failure: proceed WITHOUT the
+        # shim rather than crashing the session. Native still connects wherever
+        # LAN broadcast reaches the camera.
         return
-
-    # Shim not active — compile and relaunch with LD_PRELOAD
-    if not _ensure_shim_compiled():
-        return  # gcc not available, skip
-
-    import sys
-    env = os.environ.copy()
-    existing = env.get('LD_PRELOAD', '')
-    env['LD_PRELOAD'] = (SHIM_PATH + ':' + existing).strip(':')
-    env['CUBOAI_CAMERA_IP'] = camera_ip
-
-    # Relaunch current process with LD_PRELOAD
-    os.execve(sys.executable, [sys.executable] + sys.argv, env)
-    # execve replaces the process — code below never runs
 
 
 class _AVClientStartInConfig(Structure):
@@ -208,20 +228,32 @@ class _AVClientStartOutConfig(Structure):
 
 
 def _find_library(hint: Optional[str] = None) -> str:
-    if hint and os.path.exists(hint):
-        return hint
+    # An explicit path (e.g. --lib) is honored strictly: if it is given but does
+    # not exist, fail clearly NAMING it rather than silently falling through to
+    # the auto-detect search (which produced a misleading "Searched: [...]" that
+    # didn't even mention the path the user asked for).
+    if hint:
+        if os.path.exists(hint):
+            return hint
+        raise FileNotFoundError(f"native library not found at the given path: {hint}")
     arch = platform.machine().lower()
     base = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(base, 'libs', arch, 'libIOTCAPIs_ALL.so'),
-        os.path.join(base, 'lib', 'libIOTCAPIs_ALL.so'),
-        '/tmp/libIOTCAPIs_ALL.so',
-    ]
+    # host shared-library extension first (.so Linux / .dylib macOS / .dll Windows),
+    # other extensions tried as fallbacks; on Linux .so is first so this is unchanged.
+    sysname = platform.system()
+    exts = {'Darwin': ('.dylib', '.so'), 'Windows': ('.dll',)}.get(sysname, ('.so',))
+    names, seen = [], set()
+    for e in (*exts, '.so', '.dylib', '.dll'):
+        n = 'libIOTCAPIs_ALL' + e
+        if n not in seen:
+            seen.add(n); names.append(n)
+    dirs = [os.path.join(base, 'libs', arch), os.path.join(base, 'lib'), '/tmp']
+    candidates = [os.path.join(d, n) for d in dirs for n in names]
     for p in candidates:
         if os.path.exists(p):
             return p
     raise FileNotFoundError(
-        f"TUTK library not found for '{arch}'. Searched: {candidates}"
+        f"TUTK library not found for '{arch}' on {sysname}. Searched: {candidates}"
     )
 
 
@@ -234,7 +266,7 @@ class TUTKSession:
     Usage::
 
         with TUTKSession(uid, account, password, lib_path,
-                         camera_ip='192.168.1.x') as sess:
+                         camera_ip='192.0.2.10') as sess:
             tc, data = sess.ioctl(4384, b'\\x00'*8)   # GET_HW_CONTROL
             jpeg = sess.snapshot()                      # HEVC → JPEG
     """
@@ -335,6 +367,31 @@ class TUTKSession:
             raise TimeoutError(f"IOCTL {type_code} timed out (err={r})")
         return tc_arr[0], bytes(resp[:r])
 
+    # ── high-level GET commands ───────────────────────────────────────────────
+    # Same thin wrappers as the pure backend (cuboai_pure.TUTKDirectSession), using
+    # the SHARED cuboai_messages parsers so native and pure decode to identical
+    # dicts. GET only (no SET commands).
+    def _cubo_get(self, name):
+        import cuboai_messages as cm
+        builder, want_resp, parser = cm.GET_METHODS[name]
+        io_type, payload = builder()
+        rt, data = self.ioctl(io_type, payload)
+        result = parser(data)
+        if rt != want_resp:
+            result['resp_type'] = rt
+            result['warning'] = f"unexpected resp type {rt} (wanted {want_resp})"
+        return result
+
+    def get_hw_control(self):        return self._cubo_get('get_hw_control')
+    def get_light_style(self):       return self._cubo_get('get_light_style')
+    def get_sleep_safety(self):      return self._cubo_get('get_sleep_safety')
+    def get_sleep_mode(self):        return self._cubo_get('get_sleep_mode')
+    def get_lullaby(self):           return self._cubo_get('get_lullaby')
+    def get_cry_detection(self):     return self._cubo_get('get_cry_detection')
+    def get_cough_detection(self):   return self._cubo_get('get_cough_detection')
+    def check_firmware_update(self): return self._cubo_get('check_firmware_update')
+    def get_connected_users(self):   return self._cubo_get('get_connected_users')
+
     def start_video(self) -> None:
         """Send stream start commands to camera."""
         SETRESOLUTION = 255
@@ -422,6 +479,41 @@ class TUTKSession:
                 container.close()
 
         raise TimeoutError(f"No HEVC keyframe within {timeout_sec}s")
+
+    def save_snapshot(self, path: str, timeout_sec: float = 20.0,
+                      quality: int = 90) -> str:
+        """Capture a snapshot and save it as JPEG. Returns the path.
+
+        Native snapshot() already returns JPEG bytes, so this just writes them.
+        """
+        jpeg = self.snapshot(timeout_sec=timeout_sec)
+        path = os.path.expanduser(path)
+        with open(path, 'wb') as f:
+            f.write(jpeg)
+        return path
+
+    def record_audio(self, path: str, duration_sec: float = 10.0) -> str:
+        """Record audio for duration_sec to a raw AAC-ADTS .aac file. Returns path."""
+        path = os.path.expanduser(path)
+        with open(path, 'wb') as f:
+            for kind, data in self.av_frames(duration=duration_sec):
+                if kind == 'audio':
+                    f.write(data)
+        return path
+
+    def record_video(self, path: str, duration_sec: float = 10.0) -> str:
+        """Record video+audio for duration_sec and mux to a playable .mp4. Returns path."""
+        from cuboai_pure import mux_to_mp4
+        path = os.path.expanduser(path)
+        video, audio = [], []
+        t0 = time.time()
+        for kind, data in self.av_frames(duration=duration_sec):
+            (video if kind == 'video' else audio).append(data)
+        elapsed = max(1e-3, time.time() - t0)
+        if not video:
+            raise RuntimeError("no video frames captured")
+        mux_to_mp4(path, video, audio, video_fps=max(1.0, len(video) / elapsed))
+        return path
 
     def recv_audio_frame(self) -> Optional[bytes]:
         """Receive one AAC-ADTS audio frame. Returns None on timeout/error.
@@ -557,96 +649,50 @@ class TUTKSession:
             stop.set()
 
     def send_audio_file(self, path: str) -> None:
-        """Send an audio file to the camera speaker (talk-to-baby feature).
+        """Send an audio file to the camera speaker (talk-to-baby / two-way audio).
 
-        Converts audio to G.711 μ-law 8kHz mono and sends via avSendAudioData.
-        Uses PyAV for decoding (already required for snapshots) + a pure Python
-        PCM→G.711 encoder (no ffmpeg, no audioop dependency).
+        Transcodes the file to G.711 µ-law 8 kHz mono (the TUTK uplink format) and
+        sends it via avSendAudioData in real-time-paced chunks. Any format PyAV can
+        decode is accepted (WAV, MP3, M4A, OGG, ...).
 
-        Supports any format PyAV can decode: WAV, MP3, M4A, OGG, FLAC, etc.
-
-        STATUS: Implemented but untested against the camera speaker.
-        The send mechanism is correct but the camera may expect a different
-        codec_id or frame format. Verify with Frida if audio doesn't play.
+        Requires PyAV (`pip install av`). The transcode uses PyAV end-to-end; the
+        stdlib `audioop` µ-law encoder was removed in Python 3.13, so PyAV is the
+        forward-compatible path (and is already a project dependency).
 
         Args:
-            path: Path to audio file to send
+            path: Path to the audio file.
         """
         import struct as _s
+        from cuboai_pure import _file_to_ulaw_8k_mono
 
-        path = os.path.expanduser(path)
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Audio file not found: {path}")
+        if not path.startswith("http"):
+            path = os.path.expanduser(path)
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Audio file not found: {path}")
 
-        # ── Pure Python PCM16 → G.711 μ-law encoder ─────────────────────
-        # G.711 μ-law (PCMU) encoding table, derived from the ITU-T standard.
-        # This is a standard algorithm — no dependencies needed.
-        def _pcm16_to_ulaw(pcm_bytes: bytes) -> bytes:
-            """Convert signed 16-bit PCM samples to G.711 μ-law bytes."""
-            BIAS = 0x84
-            CLIP = 32635
-            out = bytearray(len(pcm_bytes) // 2)
-            for i in range(len(out)):
-                sample = _s.unpack_from('<h', pcm_bytes, i * 2)[0]
-                # Bias and clip
-                sign = 0 if sample >= 0 else 0x80
-                sample = min(abs(sample) + BIAS, CLIP)
-                # Find segment (log compression)
-                exp = 7
-                exp_mask = 0x4000
-                while exp > 0 and (sample & exp_mask) == 0:
-                    exp -= 1
-                    exp_mask >>= 1
-                mantissa = (sample >> (exp + 3)) & 0x0F
-                ulaw_byte = ~(sign | (exp << 4) | mantissa) & 0xFF
-                out[i] = ulaw_byte
-            return bytes(out)
+        # Transcode to raw G.711 µ-law, 8 kHz mono (shared with the pure backend).
+        ulaw_data = _file_to_ulaw_8k_mono(path)
 
-        # ── Decode audio file to PCM 8kHz mono using PyAV ────────────────
-        try:
-            import av as _av
-        except ImportError:
-            raise ImportError(
-                "send_audio_file requires PyAV: pip install av\n"
-                "PyAV is also needed for snapshots."
-            )
-
-        pcm_8k_mono = bytearray()
-        with _av.open(path) as container:
-            # Resample to 8kHz mono s16le (G.711 standard)
-            resampler = _av.AudioResampler(
-                format='s16',
-                layout='mono',
-                rate=8000,
-            )
-            for frame in container.decode(audio=0):
-                for resampled in resampler.resample(frame):
-                    pcm_8k_mono.extend(bytes(resampled.planes[0]))
-            # Flush resampler
-            for resampled in resampler.resample(None):
-                pcm_8k_mono.extend(bytes(resampled.planes[0]))
-
-        # ── Encode to G.711 μ-law ─────────────────────────────────────────
-        ulaw_data = _pcm16_to_ulaw(bytes(pcm_8k_mono))
-
-        # ── Build frame info struct ───────────────────────────────────────
-        # codec_id=4 (MEDIA_CODEC_AUDIO_G711U = μ-law), sample_rate=8000, mono
-        frame_info = (c_char * 256)()
-        _s.pack_into('<HBBi', frame_info, 0,
-                     4,      # codec_id: G.711 μ-law (PCMU)
-                     1,      # channels: 1 (mono)
-                     0,      # data_type: 0
-                     8000)   # sample_rate: 8000 Hz
-
+        # Send in 320-byte chunks (40ms at 8kHz)
+        CHUNK_SIZE = 320
         lib = self._lib
+
+        # Build audio frame info struct (codec=1 for G711 ulaw, sample_rate=8000)
+        frame_info = (c_char * 256)()
+        # AudioFrameInfoStruct: codec_id(2) + channel(1) + date_type(1) + ...
+        _s.pack_into('<HBBi', frame_info, 0,
+                     1,     # codec_id=1 (MEDIA_CODEC_AUDIO_G711U)
+                     1,     # channel=1 (mono)
+                     0,     # data_type
+                     8000)  # sample_rate
+
         lib.avSendAudioData.restype  = c_int
         lib.avSendAudioData.argtypes = [
             c_int, POINTER(c_char), c_int,
             POINTER(c_char), c_int,
         ]
 
-        # ── Send in 320-byte chunks (40ms per chunk at 8kHz) ─────────────
-        CHUNK_SIZE = 320
+        import time as _t
         for i in range(0, len(ulaw_data), CHUNK_SIZE):
             chunk = ulaw_data[i:i + CHUNK_SIZE]
             chunk_buf = (c_char * len(chunk))(*chunk)
@@ -657,8 +703,8 @@ class TUTKSession:
             )
             if r < 0:
                 raise RuntimeError(f"avSendAudioData failed: {r}")
-            # Pace to real-time: 40ms per 320-byte chunk at 8kHz
-            time.sleep(0.04)
+            # Pace sending at 40ms per chunk (real-time)
+            _t.sleep(0.04)
 
     def video_frames(self, max_frames: Optional[int] = None):
         """Generator yielding raw HEVC frame bytes for live streaming."""

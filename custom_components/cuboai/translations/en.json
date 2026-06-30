@@ -15,6 +15,17 @@
         "data": {
           "mfa_code": "Verification Code"
         }
+      },
+      "config": {
+        "title": "Configure CuboAI Integration",
+        "description": "Configure the alert and download behavior for your CuboAI cameras.",
+        "data": {
+          "download_images": "Download alert images locally",
+          "alerts_count": "Number of alerts to retain in state attributes",
+          "max_saved_photos": "Maximum number of downloaded photos to keep",
+          "hours_back": "Time window to check for alerts (hours)",
+          "update_interval": "Update interval (seconds)"
+        }
       }
     },
     "error": {
@@ -35,9 +46,14 @@
       "init": {
         "title": "CuboAI Options",
         "data": {
-          "download_images": "Download alert images locally"
+          "download_images": "Download alert images locally",
+          "alerts_count": "Number of alerts to retain in state attributes",
+          "max_saved_photos": "Maximum number of downloaded photos to keep",
+          "hours_back": "Time window to check for alerts (hours)",
+          "update_interval": "Update interval (seconds)"
         }
       }
     }
   }
 }
+
