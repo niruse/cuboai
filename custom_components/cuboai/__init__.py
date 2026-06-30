@@ -15,9 +15,9 @@ from .api.cuboai_functions import (
     save_refresh_token,
     set_token_paths,
 )
+from .const import DOMAIN
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
-from .const import DOMAIN
 from .utils import set_log_path
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,20 +32,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Set portable token storage and log paths based on HA config directory
     set_token_paths(hass.config.path())
     set_log_path(hass.config.path())
-    
+
     # Register frontend card
     try:
         import os
         import shutil
+
         from homeassistant.components.frontend import add_extra_js_url
-        
+
         # Copy the card JS into the user's /config/www directory so HA serves it natively at /local/
         www_dir = hass.config.path("www")
         os.makedirs(www_dir, exist_ok=True)
         src = hass.config.path("custom_components", "cuboai", "www", "cuboai-card.js")
         dst = os.path.join(www_dir, "cuboai-card.js")
         shutil.copy2(src, dst)
-        
+
         # Add the script to the frontend using the reliable /local/ path
         # Use file mtime as cache-buster so browsers always pick up changes after a restart
         mtime = int(os.path.getmtime(dst))
@@ -53,11 +54,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception as e:
         _LOGGER.error(f"Failed to register CuboAI frontend card: {e}")
         try:
-            import traceback
             import datetime
+            import traceback
             with open("/config/cuboai_last_alert_debug.log", "a") as f:
                 f.write(f"{datetime.datetime.now()} - Frontend register error: {e}\n{traceback.format_exc()}\n")
-        except:
+        except Exception:
             pass
 
     from .media_library import async_setup_services
@@ -146,7 +147,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     go2rtc_manager = Go2RTCManager(hass)
     go2rtc_manager.update_streams(entry.data.get("cameras", []), dict(entry.options))
     await go2rtc_manager.start()
-    
+
     hass.data[DOMAIN][entry.entry_id]["go2rtc"] = go2rtc_manager
 
     # Register update listener to reload when options change
@@ -169,7 +170,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator = data.get("coordinator")
         if coordinator:
             await coordinator.async_close()
-        
+
         go2rtc = data.get("go2rtc")
         if go2rtc:
             await go2rtc.stop()

@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
-import platform
+
 import yaml
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +25,6 @@ class Go2RTCManager:
 
     async def _resolve_codecs(self):
         """Resolve video codecs for all cameras asynchronously."""
-        import json
         script_dir = os.path.join(os.path.dirname(__file__), "tutk")
         video_script = os.path.join(script_dir, "cuboai_stream_video.py")
 
@@ -50,7 +48,7 @@ class Go2RTCManager:
                 f'exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}',
                 f'ffmpeg:cuboai_{dev_id}#video=copy#audio=opus'
             ]
-            
+
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
             self._streams[f"cuboai_speaker_{dev_id}"] = [
                 f'exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma'
@@ -80,16 +78,16 @@ class Go2RTCManager:
         }
         if "streams" not in config:
             config["streams"] = {}
-            
+
         # Overwrite our streams, keeping any other streams (e.g. from user)
         for k, v in self._streams.items():
             config["streams"][k] = v
-        
+
         def _write():
             os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
             with open(self._config_path, "w") as f:
                 yaml.dump(config, f)
-                
+
         await self.hass.async_add_executor_job(_write)
 
     async def start(self):
@@ -123,7 +121,7 @@ class Go2RTCManager:
                 stderr=log_file
             )
             _LOGGER.info(f"go2rtc started with PID {self.process.pid}")
-            
+
             # Health check — wait a moment then verify process is still alive
             await asyncio.sleep(1)
             if self.process.returncode is not None:
@@ -139,7 +137,7 @@ class Go2RTCManager:
             try:
                 self.process.terminate()
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.process.kill()
             except ProcessLookupError:
                 pass

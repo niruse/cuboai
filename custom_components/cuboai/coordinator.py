@@ -1,10 +1,9 @@
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 
 import aiofiles.os
 import aiohttp
-
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api.async_api import (
@@ -16,7 +15,7 @@ from .api.async_api import (
     refresh_cubo_token,
 )
 from .api.cuboai_functions import save_access_token, save_refresh_token
-from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL
+from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,8 +25,8 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
     from .utils import log_to_file
     log_to_file(f"Starting _fetch_local_data for UID={uid}, IP={camera_ip}")
     try:
-        from .tutk.cuboai_session import get_session
         from .tutk.cuboai_messages import CuboAIClient
+        from .tutk.cuboai_session import get_session
     except ImportError as e:
         log_to_file(f"ImportError in _fetch_local_data: {e}")
         return {}
@@ -39,9 +38,9 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
             try:
                 with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
                     client = CuboAIClient(sess)
-                    
+
                     # Cleaned up experimental blocks
-                    
+
                     try:
                         hw = client.get_hw_control()
                         data["night_light_on"] = hw.night_light_on_off == 1
@@ -58,38 +57,38 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                         except Exception as e:
                             log_to_file(f"Failed to get lightweight status for firmware: {e}")
                             data["firmware_version"] = hw.fw_version if hw.fw_version else "Unknown"
-                        
+
                         try:
                             th = client.get_temp_humidity()
                             data["temperature"] = th.temperature
                             data["humidity"] = th.humidity
                         except Exception as e:
                             log_to_file(f"Failed to get temp_humidity: {e}")
-        
+
                         try:
                             data["sleep_mode_on"] = client.get_sleep_mode().get("enabled")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_mode: {e}")
-        
+
                         try:
                             cry_res = client.get_cry_detect_status()
                             data["cry_detect"] = cry_res.get("enabled")
                             data["cry_detect_sensitivity"] = cry_res.get("sensitivity")
                         except Exception as e:
                             log_to_file(f"Failed to get cry_detect: {e}")
-                        
+
                         try:
                             ss_status = client.get_sleep_safety_status()
                             data["sleep_safety"] = ss_status.get("enabled")
                             data["baby_presence"] = ss_status.get("baby_presence_alert")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_safety: {e}")
-                            
+
                         try:
                             data["cough_detect"] = client.get_cough_status().get("enabled")
                         except Exception as e:
                             log_to_file(f"Failed to get cough_detect: {e}")
-        
+
                         try:
                             mat = client.get_mat_info()
                             data["mat_state"] = mat.get("state")
@@ -97,20 +96,20 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                             data["mat_bpm"] = mat.get("bpm")
                         except Exception as e:
                             log_to_file(f"Failed to get mat info: {e}")
-        
+
                         try:
                             temp_info = client.get_smart_temp_info()
                             data["smart_temp"] = temp_info.get("temp_c")
                             data["smart_temp_battery"] = temp_info.get("battery")
                         except Exception as e:
                             log_to_file(f"Failed to get smart temp info: {e}")
-        
+
                         try:
                             stats = client.get_session_stats()
                             data["connection_mode"] = stats.get("mode")
                         except Exception as e:
                             log_to_file(f"Failed to get session stats: {e}")
-        
+
                         try:
                             if fetch_extras:
                                 wifi = client.get_wifi()
@@ -121,7 +120,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                                 data["wifi_channel"] = wifi.get("channel")
                         except Exception as e:
                             log_to_file(f"Failed to get wifi info: {e}")
-                            
+
                         try:
                             if fetch_extras:
                                 policy = client.get_hw_policy()
@@ -131,7 +130,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                                 data["humi_alert_low"] = policy.get("humi_low_pct")
                         except Exception as e:
                             log_to_file(f"Failed to get hw policy: {e}")
-                            
+
                         try:
                             if fetch_extras:
                                 st_cfg = client.get_smart_temp_config()
@@ -139,33 +138,33 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                                 data["fever_alert_low"] = st_cfg.get("low_temp_c")
                         except Exception as e:
                             log_to_file(f"Failed to get smart temp config: {e}")
-        
+
                         try:
                             users = client.get_connected_users()
                             data["connected_users"] = users.get("count", 0)
                         except Exception as e:
                             log_to_file(f"Failed to get connected users: {e}")
-        
+
                     except Exception as e:
                         import traceback
                         log_to_file(f"Failed to get hw control: {e}\n{traceback.format_exc()}")
-                        
+
                     try:
                         ls = client.get_lullaby_status()
                         data["lullaby_playing"] = ls.is_playing
                         data["lullaby_song"] = ls.current_song_uuid
-                        
+
                         try:
                             sched = client.get_lullaby_schedule()
                             data["lullaby_volume"] = sched.volume
                         except Exception as e:
                             log_to_file(f"Failed to get lullaby schedule: {e}")
                             data["lullaby_volume"] = 50
-        
+
                     except Exception as e:
                         import traceback
                         log_to_file(f"Failed to get lullaby status: {e}\n{traceback.format_exc()}")
-                    
+
                     return data
             except Exception as conn_e:
                 log_to_file(f"Connection attempt {attempt + 1} failed: {conn_e}")
@@ -189,13 +188,13 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                     try:
                         ctypes.CDLL("libgcompat.so.0", mode=ctypes.RTLD_GLOBAL)
                         log_to_file("Loaded libgcompat.so.0 globally.")
-                    except Exception as gerr:
+                    except Exception:
                         try:
                             ctypes.CDLL("libgcompat.so", mode=ctypes.RTLD_GLOBAL)
                             log_to_file("Loaded libgcompat.so globally.")
                         except Exception as gerr2:
                             log_to_file(f"Failed to load libgcompat.so: {gerr2}")
-                    
+
                     return _fetch_local_data(uid, account, password, camera_ip, fetch_extras, is_retry=True)
                 except Exception as retry_e:
                     log_to_file(f"Alpine retry failed: {retry_e}\n{traceback.format_exc()}")
@@ -323,13 +322,13 @@ class CuboAICoordinator(DataUpdateCoordinator):
         import json as _json
 
         from homeassistant.util.dt import utcnow
-        
+
         cameras = self._entry.data.get("cameras", [])
         if not cameras and "device_id" in self._entry.data:
             cameras = [{"device_id": self._entry.data["device_id"], "baby_name": self._entry.data["baby_name"]}]
 
         result = {
-            "cameras": {}, 
+            "cameras": {},
             "subscription": None,
             "last_updated": utcnow().isoformat()
         }
@@ -341,13 +340,13 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 get_subscription_info(self._access_token, self._user_agent, session),
                 return_exceptions=True
             )
-            
+
             if isinstance(sub_info, Exception):
                 log_to_file(f"[CuboAICoordinator] Failed to fetch subscription: {sub_info}")
                 result["subscription"] = None
             else:
                 result["subscription"] = sub_info
-                
+
             if isinstance(profiles_raw, Exception):
                 log_to_file(f"[CuboAICoordinator] Failed to fetch profiles: {profiles_raw}")
                 profiles_raw = []
@@ -374,7 +373,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         profile = _json.loads(profile_str)
                     except Exception:
                         profile = {}
-                    
+
                     gender = profile.get("gender")
                     gender_text = "male" if gender == 0 else "female" if gender == 1 else "unknown"
                     cam_data["profile"] = {
@@ -400,7 +399,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
                     ),
                     get_camera_state(device_id, self._access_token, self._user_agent, session),
-                    
+
 
                     self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras) if uid else _dummy_async(),
 
@@ -416,16 +415,16 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 log_to_file(f"[CuboAICoordinator] State fetch failed for {device_id}: {state_data}")
             elif state_data:
                 cam_data["camera_state"] = state_data
-                
+
             if isinstance(local_data, Exception):
                 log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
             elif local_data:
-                
+
                 if local_data:
                     old_local_merged = old_local.copy() if 'old_local' in locals() else {}
                     old_local_merged.update(local_data)
                     cam_data["local"] = old_local_merged
-                    
+
                     fetched_ip = local_data.get("wifi_ip")
                     current_ip = self._entry.options.get(f"camera_ip_{device_id}")
                     if fetched_ip and not current_ip:
@@ -491,7 +490,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 if alert_dicts:
                     latest = max(alert_dicts, key=lambda a: a.get("ts", 0) or 0)
                     cam_data["latest_alert"] = latest.get("type", "Unknown")
-                
+
                 cam_data["alerts"] = alert_dicts
 
             result["cameras"][device_id] = cam_data

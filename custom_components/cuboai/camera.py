@@ -1,4 +1,5 @@
 import logging
+
 from homeassistant.components.camera import Camera
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -8,7 +9,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    
+
     cameras = entry.data.get("cameras", [])
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
@@ -17,7 +18,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     for camera in cameras:
         if "uid" in camera:
             camera_entities.append(CuboLocalCamera(coordinator, camera))
-            
+
     if camera_entities:
         async_add_entities(camera_entities)
 
@@ -27,7 +28,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         Camera.__init__(self)
         self._device_id = camera["device_id"]
         self._baby_name = camera["baby_name"]
-        
+
         self._attr_name = f"{self._baby_name} Local Camera"
         self._attr_unique_id = f"cuboai_local_camera_{self._device_id}"
         self._attr_is_streaming = True
@@ -45,7 +46,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         features = CameraEntityFeature.STREAM
         # Dynamically add WEB_RTC if the current HA version supports it
         if hasattr(CameraEntityFeature, "WEB_RTC"):
-            features |= getattr(CameraEntityFeature, "WEB_RTC")
+            features |= CameraEntityFeature.WEB_RTC
         return features
 
     @property

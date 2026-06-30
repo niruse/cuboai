@@ -1,11 +1,8 @@
-import asyncio
 import logging
-import os
-import platform
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
@@ -13,7 +10,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    
+
     cameras = entry.data.get("cameras", [])
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
@@ -25,16 +22,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
             switches.append(CuboStatusLEDSwitch(coordinator, camera, entry.options))
             switches.append(CuboFlipScreenSwitch(coordinator, camera, entry.options))
             switches.append(CuboBabyPresenceSwitch(coordinator, camera, entry.options))
-            
+
     if switches:
         async_add_entities(switches)
 
 def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set sleep mode."""
     try:
-        from .tutk.cuboai_session import get_session
         from .tutk.cuboai_messages import build_set_sleep_mode
-        
+        from .tutk.cuboai_session import get_session
+
         with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
             if hasattr(sess, 'ioctl'):
                 sess.ioctl(*build_set_sleep_mode(on))
@@ -52,7 +49,7 @@ class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
         self._account = camera["account"]
         self._password = camera["password"]
         self._camera_ip = options.get(f"camera_ip_{self._device_id}", "") or camera.get("camera_ip")
-        
+
         self._attr_name = f"{self._baby_name} Sleep Mode"
         self._attr_unique_id = f"cuboai_sleep_mode_{self._device_id}"
         self._attr_icon = "mdi:sleep"
@@ -91,10 +88,11 @@ class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
 def _set_status_led(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set status led."""
     try:
-        from .tutk.cuboai_session import get_session
-        from .tutk.cuboai_messages import IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ
         import struct
-        
+
+        from .tutk.cuboai_messages import IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ
+        from .tutk.cuboai_session import get_session
+
         with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
             payload = struct.pack('<III', 0, 1 if on else 0, 0)
             if hasattr(sess, 'ioctl'):
@@ -113,7 +111,7 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
         self._account = camera["account"]
         self._password = camera["password"]
         self._camera_ip = options.get(f"camera_ip_{self._device_id}", "") or camera.get("camera_ip")
-        
+
         self._attr_name = f"{self._baby_name} Status LED"
         self._attr_unique_id = f"cuboai_status_led_{self._device_id}"
         self._attr_icon = "mdi:led-on"
@@ -152,9 +150,9 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
 def _set_flip_screen(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set flip screen."""
     try:
-        from .tutk.cuboai_session import get_session
         from .tutk.cuboai_messages import build_get_hw_control, build_set_hw_control
-        
+        from .tutk.cuboai_session import get_session
+
         with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
             if hasattr(sess, 'ioctl'):
                 resp_type, raw = sess.ioctl(*build_get_hw_control())
@@ -174,7 +172,7 @@ class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
         self._account = camera["account"]
         self._password = camera["password"]
         self._camera_ip = options.get(f"camera_ip_{self._device_id}", "") or camera.get("camera_ip")
-        
+
         self._attr_name = f"{self._baby_name} Flip Screen"
         self._attr_unique_id = f"cuboai_flip_screen_{self._device_id}"
         self._attr_icon = "mdi:flip-vertical"
@@ -213,9 +211,9 @@ class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
 def _set_baby_presence(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set baby presence alert."""
     try:
-        from .tutk.cuboai_session import get_session
         from .tutk.cuboai_messages import build_get_sleep_safety_setting, build_set_sleep_safety_setting
-        
+        from .tutk.cuboai_session import get_session
+
         with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
             if hasattr(sess, 'ioctl'):
                 resp_type, raw = sess.ioctl(*build_get_sleep_safety_setting())
@@ -235,7 +233,7 @@ class CuboBabyPresenceSwitch(CoordinatorEntity, SwitchEntity):
         self._account = camera["account"]
         self._password = camera["password"]
         self._camera_ip = options.get(f"camera_ip_{self._device_id}", "") or camera.get("camera_ip")
-        
+
         self._attr_name = f"{self._baby_name} Baby Presence"
         self._attr_unique_id = f"cuboai_baby_presence_{self._device_id}"
         self._attr_icon = "mdi:baby-face-outline"

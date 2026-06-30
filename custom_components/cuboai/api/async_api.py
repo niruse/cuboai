@@ -148,16 +148,16 @@ async def get_camera_profiles(
                     device_item.get("local_ip") or
                     device_item.get("lan_ip") or
                     profile.get("ip") or
-                    profile.get("local_ip") or 
-                    profile.get("lan_ip") or 
-                    profile_data.get("ip") or 
-                    profile_data.get("local_ip") or 
+                    profile.get("local_ip") or
+                    profile.get("lan_ip") or
+                    profile_data.get("ip") or
+                    profile_data.get("local_ip") or
                     profile_data.get("lan_ip")
                 )
-                
+
                 import re
                 camera_ip = None
-                
+
                 if camera_ip_raw and re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', str(camera_ip_raw)):
                     camera_ip = str(camera_ip_raw)
                 else:
