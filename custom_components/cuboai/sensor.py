@@ -1,4 +1,5 @@
 import logging
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -10,7 +11,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    
+
     cameras = entry.data.get("cameras", [])
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
@@ -19,7 +20,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     for camera in cameras:
         device_id = camera["device_id"]
         baby_name = camera["baby_name"]
-        
+
         sensors.extend(
             [
                 CuboBabyInfoSensor(coordinator, device_id, baby_name),
@@ -66,12 +67,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
         sensors.append(CuboLastUpdateSensor(coordinator, device_id, baby_name))
 
     sensors.append(CuboSubscriptionSensor(coordinator, entry.entry_id))
-    
+
     # Ensure global media library sensor is only created once even with multiple cameras
     if "cuboai_media_library_added" not in hass.data:
         hass.data["cuboai_media_library_added"] = True
         sensors.append(CuboMediaLibrarySensor(hass))
-    
+
     # We do not need update_before_add=True because Coordinator already fetched data during async_setup_entry
     async_add_entities(sensors)
 
@@ -262,7 +263,8 @@ class CuboSubscriptionSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         sub = self.coordinator.data.get("subscription")
-        if not sub: return {}
+        if not sub:
+            return {}
         return {
             "status": sub.get("status"),
             "kind": sub.get("kind"),

@@ -1,8 +1,8 @@
 import logging
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
@@ -17,7 +17,7 @@ REVERSE_MAP = {v: k for k, v in OPTIONS_MAP.items()}
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    
+
     cameras = entry.data.get("cameras", [])
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
@@ -26,16 +26,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
     for camera in cameras:
         if "uid" in camera:
             entities.append(CuboNightVisionSelect(coordinator, camera, entry.options))
-            
+
     if entities:
         async_add_entities(entities)
 
 def _set_night_vision(uid, account, password, camera_ip, mode: int):
     """Synchronous function to set night vision."""
     try:
-        from .tutk.cuboai_session import get_session
         from .tutk.cuboai_messages import build_get_hw_control, build_set_hw_control
-        
+        from .tutk.cuboai_session import get_session
+
         with get_session(uid, account, password, camera_ip=camera_ip if camera_ip else None, defer_stream_start=False, defer_video_start_late=False, auto_discover_lib=True) as sess:
             if hasattr(sess, 'ioctl'):
                 resp_type, raw = sess.ioctl(*build_get_hw_control())
@@ -55,7 +55,7 @@ class CuboNightVisionSelect(CoordinatorEntity, SelectEntity):
         self._account = camera["account"]
         self._password = camera["password"]
         self._camera_ip = options.get(f"camera_ip_{self._device_id}", "") or camera.get("camera_ip")
-        
+
         self._attr_name = f"{self._baby_name} Night Vision"
         self._attr_unique_id = f"cuboai_night_vision_{self._device_id}"
         self._attr_icon = "mdi:theme-light-dark"

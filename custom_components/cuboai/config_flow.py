@@ -273,7 +273,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
             vol.Required("update_interval", default=60): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
         }
-        
+
         # Add dynamic fields for each camera IP
         for cam in self._auth_data.get("cameras", []):
             dev_id = cam.get("device_id")
@@ -302,7 +302,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         cameras = self.config_entry.data.get("cameras", [])
-        
+
         schema = {
             vol.Required(
                 "download_images",
@@ -335,10 +335,9 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
         }
-        
+
         for cam in cameras:
             dev_id = cam.get("device_id")
-            name = cam.get("baby_name", dev_id)
             key = f"camera_ip_{dev_id}"
             schema[vol.Optional(key, description={"suggested_value": self.config_entry.options.get(key, "")})] = str
 

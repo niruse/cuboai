@@ -1,10 +1,11 @@
 import asyncio
+import io
 import logging
 import os
 import platform
 import stat
 import tarfile
-import io
+
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,9 +25,9 @@ async def _get_docker_token(session: aiohttp.ClientSession) -> str:
 async def _download_tutk_libs(arch: str, dest_dir: str):
     """Download TUTK libraries from wyze-bridge docker image."""
     docker_arch = "amd64" if arch == "x86_64" else "arm64"
-    
+
     os.makedirs(dest_dir, exist_ok=True)
-    
+
     # Target files
     targets = ["libIOTCAPIs_ALL.so"]
 
@@ -41,14 +42,14 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
         return
 
     _LOGGER.info(f"Downloading TUTK native libraries for {arch}...")
-    
+
     async with aiohttp.ClientSession() as session:
         token = await _get_docker_token(session)
         headers = {"Authorization": f"Bearer {token}"}
-        
+
         # 1. Get manifest list
         headers["Accept"] = "application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json"
-        
+
         async with session.get(f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/manifests/latest", headers=headers) as resp:
             resp.raise_for_status()
             manifest = await resp.json()
@@ -60,10 +61,10 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
                 if m.get("platform", {}).get("architecture") == docker_arch:
                     digest = m["digest"]
                     break
-            
+
             if not digest:
                 raise RuntimeError(f"Could not find Docker manifest for architecture {docker_arch}")
-                
+
             headers["Accept"] = "application/vnd.docker.distribution.manifest.v2+json"
             async with session.get(f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/manifests/{digest}", headers=headers) as resp:
                 resp.raise_for_status()
@@ -73,18 +74,18 @@ async def _download_tutk_libs(arch: str, dest_dir: str):
         # We will iterate backwards through the layers to find the files
         layers = reversed(manifest.get("layers", []))
         found_count = 0
-        
+
         for layer in layers:
             if found_count == len(targets):
                 break
-                
+
             layer_digest = layer["digest"]
             _LOGGER.debug(f"Downloading layer {layer_digest}...")
-            
+
             async with session.get(f"{DOCKER_REGISTRY}/mrlt8/wyze-bridge/blobs/{layer_digest}", headers=headers) as resp:
                 resp.raise_for_status()
                 tar_bytes = await resp.read()
-                
+
                 # Extract target files from tarball
                 with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
                     for member in tar.getmembers():
@@ -105,24 +106,24 @@ async def _download_go2rtc(arch: str, dest_dir: str):
     """Download go2rtc binary from GitHub."""
     os.makedirs(dest_dir, exist_ok=True)
     binary_path = os.path.join(dest_dir, "go2rtc")
-    
+
     if os.path.exists(binary_path):
         _LOGGER.debug("go2rtc binary already downloaded.")
         return
-        
+
     go2rtc_arch = "amd64" if arch == "x86_64" else "arm64"
     url = f"https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_{go2rtc_arch}"
-    
+
     _LOGGER.info(f"Downloading go2rtc for {go2rtc_arch}...")
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             resp.raise_for_status()
             content = await resp.read()
-            
+
             with open(binary_path, "wb") as f:
                 f.write(content)
-                
+
             # Make executable
             st = os.stat(binary_path)
             os.chmod(binary_path, st.st_mode | stat.S_IEXEC)

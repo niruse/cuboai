@@ -255,9 +255,9 @@ def get_camera_profiles(access_token, user_agent):
     response.raise_for_status()
     data = response.json()
     cameras = []
-    
+
     device_data_map = {item.get("device_id"): item for item in data.get("data", [])}
-    
+
     for profile in data.get("profiles", []):
         try:
             profile_data = json.loads(profile.get("profile", "{}"))
@@ -270,14 +270,14 @@ def get_camera_profiles(access_token, user_agent):
             password = device_item.get("dev_admin_pwd", "")
 
             camera_ip_raw = (
-                device_item.get("ip") or 
-                device_item.get("local_ip") or 
-                device_item.get("lan_ip") or 
-                profile.get("ip") or 
-                profile.get("local_ip") or 
-                profile.get("lan_ip") or 
-                profile_data.get("ip") or 
-                profile_data.get("local_ip") or 
+                device_item.get("ip") or
+                device_item.get("local_ip") or
+                device_item.get("lan_ip") or
+                profile.get("ip") or
+                profile.get("local_ip") or
+                profile.get("lan_ip") or
+                profile_data.get("ip") or
+                profile_data.get("local_ip") or
                 profile_data.get("lan_ip")
             )
 

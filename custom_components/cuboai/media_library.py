@@ -1,6 +1,7 @@
-import os
 import json
 import logging
+import os
+
 from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ class CuboMediaLibrary:
     def _load(self):
         if os.path.exists(self._path):
             try:
-                with open(self._path, "r", encoding="utf-8") as f:
+                with open(self._path, encoding="utf-8") as f:
                     self._data = json.load(f)
             except Exception as e:
                 _LOGGER.error(f"Failed to load CuboAI media library: {e}")
@@ -29,7 +30,7 @@ class CuboMediaLibrary:
 
     def update_custom_songs(self, songs):
         _LOGGER.warning(f'Updating custom songs. Old: {len(self._data.get("custom_songs", []))} New: {len(songs)}')
-        _LOGGER.warning(f'Calling async_dispatcher_send soon...')
+        _LOGGER.warning('Calling async_dispatcher_send soon...')
         self._data["custom_songs"] = songs
         self._save()
         self.hass.loop.call_soon_threadsafe(self._update_sensor)
@@ -43,8 +44,9 @@ class CuboMediaLibrary:
         return self._data
 
     def _update_sensor(self):
-        from homeassistant.helpers.dispatcher import async_dispatcher_send
         import time
+
+        from homeassistant.helpers.dispatcher import async_dispatcher_send
         self.hass.data['cuboai_media_library_update_time'] = time.time()
         async_dispatcher_send(self.hass, "cuboai_media_library_updated")
 
