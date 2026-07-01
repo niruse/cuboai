@@ -318,8 +318,7 @@ async def get_n_alerts_paged(
             iters += 1
 
             if len(all_alerts_for_device) >= n:
-                # Can break early once we have enough
-                pass
+                break
 
         # Sort newest first, take N, normalize
         result = sorted(all_alerts_for_device.values(), key=lambda a: a.get("ts", 0), reverse=True)[:n]

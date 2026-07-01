@@ -351,8 +351,14 @@ class CuboAICoordinator(DataUpdateCoordinator):
         # Concurrently fetch raw profiles for all cameras and subscription info
         try:
             profiles_raw, sub_info = await asyncio.gather(
-                get_camera_profiles_raw(self._access_token, self._user_agent, session),
-                get_subscription_info(self._access_token, self._user_agent, session),
+                asyncio.wait_for(
+                    get_camera_profiles_raw(self._access_token, self._user_agent, session),
+                    timeout=10.0
+                ),
+                asyncio.wait_for(
+                    get_subscription_info(self._access_token, self._user_agent, session),
+                    timeout=10.0
+                ),
                 return_exceptions=True,
             )
 
@@ -410,13 +416,22 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     return {}
 
                 alerts_data, state_data, local_data = await asyncio.gather(
-                    get_n_alerts_paged(
-                        device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
+                    asyncio.wait_for(
+                        get_n_alerts_paged(
+                            device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
+                        ),
+                        timeout=15.0
                     ),
-                    get_camera_state(device_id, self._access_token, self._user_agent, session),
-                    self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras)
-                    if uid
-                    else _dummy_async(),
+                    asyncio.wait_for(
+                        get_camera_state(device_id, self._access_token, self._user_agent, session),
+                        timeout=10.0
+                    ),
+                    asyncio.wait_for(
+                        self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras)
+                        if uid
+                        else _dummy_async(),
+                        timeout=20.0
+                    ),
                     return_exceptions=True,
                 )
             except Exception as e:
@@ -424,12 +439,12 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 alerts_data, state_data, local_data = [], None, {}
 
             # 2. Camera State
-            if isinstance(state_data, Exception):
+            if isinstance(state_data, BaseException):
                 log_to_file(f"[CuboAICoordinator] State fetch failed for {device_id}: {state_data}")
             elif state_data:
                 cam_data["camera_state"] = state_data
 
-            if isinstance(local_data, Exception):
+            if isinstance(local_data, BaseException):
                 log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
             elif local_data:
                 if local_data:
@@ -446,7 +461,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
 
             # 3. Alerts Processing
-            if isinstance(alerts_data, Exception):
+            if isinstance(alerts_data, BaseException):
                 log_to_file(f"[CuboAICoordinator] Alert fetch failed for {device_id}: {alerts_data}")
                 alerts_data = []
 

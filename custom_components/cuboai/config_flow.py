@@ -152,21 +152,18 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_config()
 
             except Exception as e:
-                _LOGGER.exception("CuboAI authentication failed: %s", e)
                 error_str = str(e)
                 if "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    _LOGGER.warning("CuboAI authentication failed: SMS Quota exceeded.")
                     errors["base"] = "sms_quota_exceeded"
-                elif "NotAuthorizedException" in error_str:
+                elif "NotAuthorizedException" in error_str or "InvalidPasswordException" in error_str or "UserNotFoundException" in error_str:
+                    _LOGGER.warning("CuboAI authentication failed: Incorrect username or password.")
                     errors["base"] = "auth_failed"
-                elif "UserNotFoundException" in error_str:
-                    errors["base"] = "auth_failed"
-                elif "InvalidPasswordException" in error_str:
-                    errors["base"] = "auth_failed"
-                elif "TooManyRequestsException" in error_str:
-                    errors["base"] = "too_many_requests"
-                elif "LimitExceededException" in error_str:
+                elif "TooManyRequestsException" in error_str or "LimitExceededException" in error_str:
+                    _LOGGER.warning("CuboAI authentication failed: Too many requests.")
                     errors["base"] = "too_many_requests"
                 else:
+                    _LOGGER.exception("CuboAI authentication failed: %s", e)
                     errors["base"] = "auth_failed"
 
         return self.async_show_form(step_id="user", data_schema=AUTH_SCHEMA, errors=errors)
@@ -236,17 +233,21 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_config()
 
             except Exception as e:
-                _LOGGER.exception("MFA verification failed: %s", e)
                 error_str = str(e)
                 if "CodeMismatchException" in error_str or "Invalid" in error_str:
+                    _LOGGER.warning("MFA verification failed: Invalid code.")
                     errors["base"] = "invalid_mfa_code"
                 elif "ExpiredCodeException" in error_str or "expired" in error_str.lower():
+                    _LOGGER.warning("MFA verification failed: Code expired.")
                     errors["base"] = "mfa_code_expired"
                 elif "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
+                    _LOGGER.warning("MFA verification failed: SMS Quota exceeded.")
                     errors["base"] = "sms_quota_exceeded"
                 elif "TooManyRequestsException" in error_str or "LimitExceededException" in error_str:
+                    _LOGGER.warning("MFA verification failed: Too many requests.")
                     errors["base"] = "too_many_requests"
                 else:
+                    _LOGGER.exception("MFA verification failed: %s", e)
                     errors["base"] = "mfa_failed"
 
         # Determine hint text based on MFA type
