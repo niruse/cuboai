@@ -62,11 +62,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception as e:
         _LOGGER.error(f"Failed to register CuboAI frontend card: {e}")
         try:
-            import datetime
             import traceback
-
-            with open("/config/cuboai_last_alert_debug.log", "a") as f:
-                f.write(f"{datetime.datetime.now()} - Frontend register error: {e}\n{traceback.format_exc()}\n")
+            from .utils import log_to_file
+            log_to_file(f"Frontend register error: {e}\n{traceback.format_exc()}")
         except Exception:
             pass
 

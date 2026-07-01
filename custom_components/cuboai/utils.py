@@ -1,8 +1,8 @@
 import os
 from datetime import datetime
 
-# Default to legacy path, but can be updated dynamically
-LOG_FILE_PATH = "/config/cuboai_last_alert_debug.log"
+# Default to current directory, but can be updated dynamically
+LOG_FILE_PATH = "cuboai_last_alert_debug.log"
 
 
 def set_log_path(config_path: str):
