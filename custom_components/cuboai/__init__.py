@@ -65,6 +65,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             import traceback
 
             from .utils import log_to_file
+
             log_to_file(f"Frontend register error: {e}\n{traceback.format_exc()}")
         except Exception:
             pass
