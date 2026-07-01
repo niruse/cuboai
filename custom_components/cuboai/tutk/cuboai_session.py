@@ -117,6 +117,12 @@ def get_session(uid: str,
     # override pure mode. Callers that want auto-detection leave it at the default (True).
     resolved = lib_path or (_find_library() if auto_discover_lib else None)
     
+    # TUTKSession cannot natively connect to a specific IP; it relies on a gcc-compiled 
+    # LD_PRELOAD shim. HA OS lacks gcc, so the shim fails and the IP is ignored.
+    # PureSession supports direct IP unicast natively in pure Python.
+    if camera_ip and not lib_path:
+        resolved = None
+    
     import sys
     import os
     tutk_dir = os.path.dirname(os.path.abspath(__file__))
