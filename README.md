@@ -226,6 +226,12 @@ Once the card is on your dashboard, you have full control over the camera direct
 
 ---
 
+## 💖 Credits & Special Thanks
+
+Massive thanks to [Fredrick (Fredde87)](https://github.com/Fredde87/cuboai-tutk) for his incredible reverse-engineering work and for providing the TUTK Kalay P2P protocol implementations that make the local streaming functionality of this integration possible!
+
+---
+
 ## 🤝 Contributing
 
 We welcome:
