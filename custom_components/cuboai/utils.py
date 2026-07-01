@@ -14,6 +14,7 @@ def set_log_path(config_path: str):
 # NOTE: REMEMBER TO DISABLE LOGGING (e.g. add `return` here) BEFORE PUSHING TO GIT
 # so that users' disks don't get filled up with debug logs!
 def log_to_file(msg):
+    return
     try:
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now()} - {msg}\n")
