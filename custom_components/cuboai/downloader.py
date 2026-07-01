@@ -149,6 +149,23 @@ async def async_ensure_dependencies(hass) -> bool:
         _LOGGER.error(f"Unsupported architecture for CuboAI TUTK local control: {machine}")
         return False
 
+    # Check for Alpine Linux and install gcompat unconditionally so native library loads
+    if os.path.exists("/sbin/apk"):
+        def _install_gcompat():
+            try:
+                _LOGGER.debug("Alpine Linux detected. Ensuring gcompat is installed...")
+                os.system("apk add --no-cache gcompat >/dev/null 2>&1")
+                import ctypes
+                # Pre-load it into global namespace so ctypes can find the symbols later
+                try:
+                    ctypes.CDLL("libgcompat.so.0", mode=ctypes.RTLD_GLOBAL)
+                except Exception:
+                    pass
+            except Exception as e:
+                _LOGGER.warning(f"Failed to install gcompat: {e}")
+        await hass.async_add_executor_job(_install_gcompat)
+
+
     base_dir = os.path.dirname(__file__)
     libs_dir = os.path.join(base_dir, "libs", arch)
     bin_dir = os.path.join(base_dir, "bin")
