@@ -1,7 +1,7 @@
 # Test dependencies for CuboAI
 pytest>=7.0.0
 pytest-cov>=4.0.0
-pytest-asyncio>=0.21.0
+pytest-asyncio>=1.4.0
 aioresponses>=0.7.0
 
 # Dependencies from the integration (needed for imports)
