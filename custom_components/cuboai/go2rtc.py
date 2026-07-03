@@ -115,6 +115,11 @@ class Go2RTCManager:
             debug_logs = self._options.get("enable_debug_logs", False)
             if debug_logs:
                 def _open_log():
+                    if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 2 * 1024 * 1024:
+                        backup_path = f"{log_file_path}.1"
+                        if os.path.exists(backup_path):
+                            os.remove(backup_path)
+                        os.rename(log_file_path, backup_path)
                     return open(log_file_path, "a")
                 log_file = await self.hass.async_add_executor_job(_open_log)
             else:

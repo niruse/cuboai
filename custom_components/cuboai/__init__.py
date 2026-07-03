@@ -20,6 +20,8 @@ from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
 from .utils import set_debug_logs_enabled, set_log_path
 
+import logging.handlers
+
 _LOGGER = logging.getLogger(__name__)
 
 _FILE_HANDLER = None
@@ -32,7 +34,8 @@ def _setup_component_logger(hass: HomeAssistant, enable: bool):
     if enable:
         if _FILE_HANDLER is None:
             log_path = hass.config.path("cuboai_debug.log")
-            _FILE_HANDLER = logging.FileHandler(log_path)
+            # 2 MB max size, keep 1 backup (4MB total max)
+            _FILE_HANDLER = logging.handlers.RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=1)
             _FILE_HANDLER.setLevel(logging.DEBUG)
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             _FILE_HANDLER.setFormatter(formatter)

@@ -22,6 +22,12 @@ def log_to_file(msg):
     if not DEBUG_LOGS_ENABLED:
         return
     try:
+        if os.path.exists(LOG_FILE_PATH) and os.path.getsize(LOG_FILE_PATH) > 2 * 1024 * 1024:
+            backup_path = f"{LOG_FILE_PATH}.1"
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            os.rename(LOG_FILE_PATH, backup_path)
+            
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now()} - {msg}\n")
     except Exception:
