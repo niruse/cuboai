@@ -112,11 +112,14 @@ class Go2RTCManager:
         log_file_path = os.path.join(os.path.dirname(self._config_path), "go2rtc.log")
         _LOGGER.info("Starting internal go2rtc streaming server (log: %s)...", log_file_path)
         try:
+            debug_logs = self._options.get("enable_debug_logs", False)
+            if debug_logs:
+                def _open_log():
+                    return open(log_file_path, "a")
+                log_file = await self.hass.async_add_executor_job(_open_log)
+            else:
+                log_file = asyncio.subprocess.DEVNULL
 
-            def _open_log():
-                return open(log_file_path, "a")
-
-            log_file = await self.hass.async_add_executor_job(_open_log)
             self.process = await asyncio.create_subprocess_exec(
                 self._binary_path, "-config", self._config_path, stdout=log_file, stderr=log_file
             )

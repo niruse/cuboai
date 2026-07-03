@@ -239,11 +239,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self._queue.append(media_id)
                 self._start_queue_loop()
         except Exception:
-            import traceback
-
-            log_path = self.hass.config.path("ffmpeg_error.log")
-            with open(log_path, "a") as f:
-                f.write(f"Exception in async_play_media:\n{traceback.format_exc()}\n")
+            _LOGGER.exception("Exception in async_play_media:")
 
     def _start_queue_loop(self):
         task = getattr(self, "_queue_task", None)
@@ -376,11 +372,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 try:
                     extracted_url = await self._extract_media_url(raw_media_id)
                 except Exception:
-                    import traceback
-
-                    log_path = self.hass.config.path("ffmpeg_error.log")
-                    with open(log_path, "a") as f:
-                        f.write(f"Exception in _extract_media_url:\n{traceback.format_exc()}\n")
+                    _LOGGER.exception("Exception in _extract_media_url:")
                     continue
 
                 script_path = os.path.join(os.path.dirname(__file__), "tutk", "cuboai_stream_backchannel.py")
@@ -393,14 +385,17 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 env["CUBOAI_PASSWORD"] = str(self._cam.get("password") or "")
                 env["CUBOAI_CAMERA_IP"] = str(camera_ip or "")
 
-                log_path = self.hass.config.path("ffmpeg_error.log")
+                if self._options.get("enable_debug_logs", False):
+                    stderr_dest = open(self.hass.config.path("cuboai_debug.log"), "a")
+                else:
+                    stderr_dest = asyncio.subprocess.DEVNULL
 
                 self._backchannel_proc = await asyncio.create_subprocess_exec(
                     "python3",
                     script_path,
                     extracted_url,
                     stdout=asyncio.subprocess.DEVNULL,
-                    stderr=open(log_path, "a"),
+                    stderr=stderr_dest,
                     env=env,
                 )
 
@@ -442,11 +437,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self.async_write_ha_state()
                 self._queue_task = None
         except Exception:
-            import traceback
-
-            log_path = self.hass.config.path("ffmpeg_error.log")
-            with open(log_path, "a") as f:
-                f.write(f"Exception in _queue_loop:\n{traceback.format_exc()}\n")
+            _LOGGER.exception("Exception in _queue_loop:")
             if self._queue_task == current_task:
                 self._attr_state = MediaPlayerState.IDLE
                 self.async_write_ha_state()

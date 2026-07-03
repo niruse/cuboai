@@ -15,19 +15,8 @@ _LOGGER_SETUP_DONE = False
 
 
 def setup_file_logger(hass):
-    global _LOGGER_SETUP_DONE
-    if _LOGGER_SETUP_DONE:
-        return
-    try:
-        log_path = hass.config.path("cuboai_auth.log")
-        file_handler = logging.FileHandler(log_path)
-        file_handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        file_handler.setFormatter(formatter)
-        _LOGGER.addHandler(file_handler)
-        _LOGGER_SETUP_DONE = True
-    except Exception as e:
-        _LOGGER.warning("Failed to setup dedicated file logger: %s", e)
+    """File logging for config flow is disabled. Use the enable_debug_logs option instead."""
+    pass
 
 
 AUTH_SCHEMA = vol.Schema(
