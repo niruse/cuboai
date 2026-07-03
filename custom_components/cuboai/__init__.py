@@ -18,9 +18,33 @@ from .api.cuboai_functions import (
 from .const import DOMAIN
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
-from .utils import set_log_path
+from .utils import set_debug_logs_enabled, set_log_path
 
 _LOGGER = logging.getLogger(__name__)
+
+_FILE_HANDLER = None
+
+
+def _setup_component_logger(hass: HomeAssistant, enable: bool):
+    global _FILE_HANDLER
+    component_logger = logging.getLogger("custom_components.cuboai")
+    
+    if enable:
+        if _FILE_HANDLER is None:
+            log_path = hass.config.path("cuboai_debug.log")
+            _FILE_HANDLER = logging.FileHandler(log_path)
+            _FILE_HANDLER.setLevel(logging.DEBUG)
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            _FILE_HANDLER.setFormatter(formatter)
+            component_logger.addHandler(_FILE_HANDLER)
+            component_logger.setLevel(logging.DEBUG)
+            _LOGGER.info("CuboAI debug file logging enabled at %s", log_path)
+    else:
+        if _FILE_HANDLER is not None:
+            _LOGGER.info("CuboAI debug file logging disabled")
+            component_logger.removeHandler(_FILE_HANDLER)
+            _FILE_HANDLER.close()
+            _FILE_HANDLER = None
 
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
@@ -84,6 +108,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Ensure token and log paths are set (in case async_setup wasn't called)
     set_token_paths(hass.config.path())
     set_log_path(hass.config.path())
+    
+    debug_enabled = entry.options.get("enable_debug_logs", False)
+    set_debug_logs_enabled(debug_enabled)
+    _setup_component_logger(hass, debug_enabled)
 
     # Ensure media library services are set up
     from .media_library import async_setup_services

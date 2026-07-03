@@ -3,6 +3,7 @@ from datetime import datetime
 
 # Default to current directory, but can be updated dynamically
 LOG_FILE_PATH = "cuboai_last_alert_debug.log"
+DEBUG_LOGS_ENABLED = False
 
 
 def set_log_path(config_path: str):
@@ -11,10 +12,15 @@ def set_log_path(config_path: str):
     LOG_FILE_PATH = os.path.join(config_path, "cuboai_last_alert_debug.log")
 
 
-# NOTE: REMEMBER TO DISABLE LOGGING (e.g. add `return` here) BEFORE PUSHING TO GIT
-# so that users' disks don't get filled up with debug logs!
+def set_debug_logs_enabled(enabled: bool):
+    """Enable or disable debug file logging dynamically."""
+    global DEBUG_LOGS_ENABLED
+    DEBUG_LOGS_ENABLED = enabled
+
+
 def log_to_file(msg):
-    return
+    if not DEBUG_LOGS_ENABLED:
+        return
     try:
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now()} - {msg}\n")

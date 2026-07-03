@@ -270,6 +270,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = {
             vol.Required("download_images", default=True): bool,
+            vol.Optional("enable_debug_logs", default=False): bool,
             vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required("max_saved_photos", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
@@ -311,6 +312,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 default=self.config_entry.options.get(
                     "download_images", self.config_entry.data.get("download_images", True)
                 ),
+            ): bool,
+            vol.Optional(
+                "enable_debug_logs",
+                default=self.config_entry.options.get("enable_debug_logs", False),
             ): bool,
             vol.Required(
                 "alerts_count",
