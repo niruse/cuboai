@@ -226,6 +226,24 @@ Once the card is on your dashboard, you have full control over the camera direct
 
 ---
 
+## 🛠️ Troubleshooting
+
+If you are experiencing issues (such as sensors showing as "Unknown" or the configuration flow hanging), you can easily capture diagnostic logs:
+1. Go to **Settings > Devices & Services > CuboAI > Configure**
+2. Check the **"Enable Debug Logging to File"** box.
+3. Wait 30-60 seconds for the integration to attempt a connection.
+4. Open your Home Assistant `config` folder and look for `cuboai_debug.log`. This file will contain all the necessary traces and error messages.
+
+*Note: Logs are capped at 2MB per file to prevent disk space issues.*
+
+---
+
+## 📝 Changelog
+
+See the [CHANGELOG.md](CHANGELOG.md) file for a detailed history of updates, bug fixes, and improvements.
+
+---
+
 ## 💖 Credits & Special Thanks
 
 Massive thanks to [Fredrick (Fredde87)](https://github.com/Fredde87/cuboai-tutk) for his incredible reverse-engineering work and for providing the TUTK Kalay P2P protocol implementations that make the local streaming functionality of this integration possible!
