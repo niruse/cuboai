@@ -16,6 +16,26 @@ DOCKER_AUTH = "https://auth.docker.io/token?service=registry.docker.io&scope=rep
 GO2RTC_REPO = "AlexxIT/go2rtc"
 
 
+def _elf_machine(path: str) -> int | None:
+    """Return the ELF e_machine value, or None for an invalid binary."""
+    try:
+        with open(path, "rb") as file:
+            header = file.read(20)
+    except OSError:
+        return None
+
+    if len(header) < 20 or header[:4] != b"\x7fELF":
+        return None
+    return int.from_bytes(header[18:20], "little")
+
+
+def _write_executable(path: str, content: bytes) -> None:
+    """Write content to path and mark it executable."""
+    with open(path, "wb") as file:
+        file.write(content)
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+
+
 async def _get_docker_token(session: aiohttp.ClientSession) -> str:
     """Get anonymous pull token for wyze-bridge from Docker Hub."""
     async with session.get(DOCKER_AUTH) as resp:
@@ -115,8 +135,18 @@ async def _download_go2rtc(arch: str, dest_dir: str):
     binary_path = os.path.join(dest_dir, "go2rtc")
 
     if os.path.exists(binary_path):
-        _LOGGER.debug("go2rtc binary already downloaded.")
-        return
+        expected_machine = 62 if arch == "x86_64" else 183  # EM_X86_64 / EM_AARCH64
+        actual_machine = await asyncio.to_thread(_elf_machine, binary_path)
+        if actual_machine == expected_machine:
+            _LOGGER.debug("Compatible go2rtc binary already downloaded.")
+            return
+
+        _LOGGER.warning(
+            "Removing incompatible go2rtc binary (ELF machine %s, expected %s)",
+            actual_machine,
+            expected_machine,
+        )
+        await asyncio.to_thread(os.remove, binary_path)
 
     go2rtc_arch = "amd64" if arch == "x86_64" else "arm64"
     url = f"https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_{go2rtc_arch}"
@@ -127,13 +157,7 @@ async def _download_go2rtc(arch: str, dest_dir: str):
         async with session.get(url) as resp:
             resp.raise_for_status()
             content = await resp.read()
-
-            with open(binary_path, "wb") as f:
-                f.write(content)
-
-            # Make executable
-            st = os.stat(binary_path)
-            os.chmod(binary_path, st.st_mode | stat.S_IEXEC)
+            await asyncio.to_thread(_write_executable, binary_path, content)
             _LOGGER.debug("go2rtc downloaded and marked as executable.")
 
 

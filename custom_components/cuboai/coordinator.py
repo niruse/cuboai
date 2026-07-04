@@ -16,6 +16,7 @@ from .api.async_api import (
 )
 from .api.cuboai_functions import save_access_token, save_refresh_token
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
+from .local_validation import is_valid_humidity, is_valid_temperature
 from .utils import log_to_file
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,10 +70,20 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                             log_to_file(f"Failed to get lightweight status for firmware: {e}")
                             data["firmware_version"] = hw.fw_version if hw.fw_version else "Unknown"
 
+                        # Some firmware writes a marker into the dedicated
+                        # temperature/humidity response. Seed the values from
+                        # GET_HW_CONTROL, then only accept plausible overrides.
+                        if is_valid_temperature(hw.temperature):
+                            data["temperature"] = hw.temperature
+                        if is_valid_humidity(hw.humidity):
+                            data["humidity"] = hw.humidity
+
                         try:
                             th = client.get_temp_humidity()
-                            data["temperature"] = th.temperature
-                            data["humidity"] = th.humidity
+                            if is_valid_temperature(th.temperature):
+                                data["temperature"] = th.temperature
+                            if is_valid_humidity(th.humidity):
+                                data["humidity"] = th.humidity
                         except Exception as e:
                             log_to_file(f"Failed to get temp_humidity: {e}")
 

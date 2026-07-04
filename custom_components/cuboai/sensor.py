@@ -4,7 +4,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, GO2RTC_API_PORT, GO2RTC_RTSP_PORT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -474,9 +474,11 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return {
-            "go2rtc_server": "http://127.0.0.1:1985",
-            "rtsp_url": f"rtsp://127.0.0.1:8555/cuboai_{self._device_id}",
-            "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
+            "go2rtc_server": f"http://127.0.0.1:{GO2RTC_API_PORT}",
+            "rtsp_url": f"rtsp://127.0.0.1:{GO2RTC_RTSP_PORT}/cuboai_{self._device_id}",
+            "web_player_url": (
+                f"http://127.0.0.1:{GO2RTC_API_PORT}/stream.html?src=cuboai_{self._device_id}"
+            ),
             "stream_id": f"cuboai_{self._device_id}",
         }
 

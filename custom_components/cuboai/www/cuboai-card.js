@@ -1,4 +1,6 @@
 // Global patch to prevent badly written third-party cards (like searchable-list-card) from crashing the entire HA dashboard
+const CUBOAI_GO2RTC_RTSP_PORT = 8557;
+
 if (!window._cuboai_registry_patched) {
   window._cuboai_registry_patched = true;
   const originalDefine = customElements.define;
@@ -218,7 +220,7 @@ class CuboAICameraCard extends HTMLElement {
       const webrtcConfig = {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
-        url: webrtcEntity ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${deviceId}`,
+        url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${CUBOAI_GO2RTC_RTSP_PORT}/cuboai_combined_${deviceId}`,
         mode: 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
@@ -1361,7 +1363,7 @@ class CuboAICameraCard extends HTMLElement {
            const webrtcConfig = {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
-             url: wEntity ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${config.device_id}`,
+             url: wEntity ? undefined : `rtsp://127.0.0.1:${CUBOAI_GO2RTC_RTSP_PORT}/cuboai_combined_${config.device_id}`,
              mode: 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
@@ -1394,7 +1396,7 @@ class CuboAICameraCard extends HTMLElement {
                const webrtcConfig = {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
-                 url: wEntity2 ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${deviceId}`,
+                 url: wEntity2 ? undefined : `rtsp://127.0.0.1:${CUBOAI_GO2RTC_RTSP_PORT}/cuboai_combined_${deviceId}`,
                  mode: 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,
@@ -1562,4 +1564,3 @@ if (!window.customCards.some(c => c.type === 'cuboai-camera-card')) {
     preview: true
   });
 }
-

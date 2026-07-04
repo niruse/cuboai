@@ -3,7 +3,7 @@ import logging
 from homeassistant.components.camera import Camera
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, GO2RTC_API_PORT, GO2RTC_RTSP_PORT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # 1. Try to get a LIVE snapshot from go2rtc API
         import aiohttp
 
-        url = f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_{self._device_id}"
+        url = f"http://127.0.0.1:{GO2RTC_API_PORT}/api/frame.jpeg?src=cuboai_{self._device_id}"
         try:
             async with aiohttp.ClientSession() as session:
                 # 5 second timeout so we don't hang HA if camera is offline
@@ -98,16 +98,16 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     async def stream_source(self) -> str | None:
         """Return the stream source."""
-        # This connects to our internal go2rtc instance via RTSP on port 8555
+        # This connects to our internal go2rtc instance via RTSP.
         # We use the combined stream to support two-way audio (microphone)
-        return f"rtsp://127.0.0.1:8555/cuboai_combined_{self._device_id}"
+        return f"rtsp://127.0.0.1:{GO2RTC_RTSP_PORT}/cuboai_combined_{self._device_id}"
 
     async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
         """Handle the WebRTC offer and return an answer."""
         import aiohttp
 
         # We use the combined stream to enable the WebRTC native two-way audio mic button
-        url = f"http://127.0.0.1:1985/api/webrtc?src=cuboai_combined_{self._device_id}"
+        url = f"http://127.0.0.1:{GO2RTC_API_PORT}/api/webrtc?src=cuboai_combined_{self._device_id}"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:

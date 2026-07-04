@@ -1,15 +1,15 @@
 api:
   listen: :1985
 rtsp:
-  listen: :8555
+  listen: :8557
 streams:
   cuboai_YOUR_CAMERA_ID:
   - exec:env CUBOAI_UID=YOUR_UID CUBOAI_ACCOUNT=admin@YOUR_CAMERA_ID
     CUBOAI_PASSWORD=YOUR_PASSWORD CUBOAI_MUX_AUDIO=1 python3 /config/custom_components/cuboai/tutk/cuboai_stream_video.py#{killsignal=SIGTERM}
   - ffmpeg:cuboai_YOUR_CAMERA_ID#video=copy#audio=opus
   cuboai_combined_YOUR_CAMERA_ID:
-  - rtsp://127.0.0.1:8555/cuboai_speaker_YOUR_CAMERA_ID
-  - rtsp://127.0.0.1:8555/cuboai_YOUR_CAMERA_ID
+  - rtsp://127.0.0.1:8557/cuboai_speaker_YOUR_CAMERA_ID
+  - rtsp://127.0.0.1:8557/cuboai_YOUR_CAMERA_ID
   cuboai_speaker_YOUR_CAMERA_ID:
   - exec:env CUBOAI_UID=YOUR_UID CUBOAI_ACCOUNT=admin@YOUR_CAMERA_ID
     CUBOAI_PASSWORD=YOUR_PASSWORD CUBOAI_MUX_AUDIO=1 python3 /config/custom_components/cuboai/tutk/cuboai_stream_backchannel.py#{killsignal=SIGTERM}#backchannel=1#audio=pcma

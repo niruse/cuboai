@@ -5,6 +5,8 @@ import os
 import yaml
 from homeassistant.core import HomeAssistant
 
+from .const import GO2RTC_API_PORT, GO2RTC_RTSP_PORT, GO2RTC_WEBRTC_PORT
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -68,13 +70,13 @@ class Go2RTCManager:
         """Generate the go2rtc.yaml file."""
         config = {
             "api": {
-                "listen": ":1985",  # Use alternate port to avoid conflict with HA add-on
+                "listen": f":{GO2RTC_API_PORT}",  # Use alternate port to avoid conflict with HA add-on
             },
             "rtsp": {
-                "listen": ":8555",
+                "listen": f":{GO2RTC_RTSP_PORT}",
             },
             "webrtc": {
-                "listen": ":8556",
+                "listen": f":{GO2RTC_WEBRTC_PORT}",
             },
         }
         if "streams" not in config:
