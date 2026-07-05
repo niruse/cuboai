@@ -71,8 +71,10 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
 
                         try:
                             th = client.get_temp_humidity()
-                            data["temperature"] = th.temperature
-                            data["humidity"] = th.humidity
+                            if th.temperature is not None and -20 <= th.temperature <= 60:
+                                data["temperature"] = th.temperature
+                            if th.humidity is not None and 0 <= th.humidity <= 100:
+                                data["humidity"] = th.humidity
                         except Exception as e:
                             log_to_file(f"Failed to get temp_humidity: {e}")
 
