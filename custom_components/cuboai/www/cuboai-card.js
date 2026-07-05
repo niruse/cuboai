@@ -1239,27 +1239,61 @@ class CuboAICameraCard extends HTMLElement {
                 // PiP Patch: Canvas stream overlay technique
                 const originalPip = video.requestPictureInPicture;
                 if (originalPip) {
-                   // Ensure video can play cross-origin if needed
                    video.crossOrigin = "anonymous";
                    const self = this;
-                   video.requestPictureInPicture = async () => {
+                   
+                   // Initialize the PiP canvas and video immediately
+                   const setupPip = () => {
+                       if (video._pipVideo) return;
+                       
+                       const cvs = document.createElement('canvas');
+                       cvs.width = video.videoWidth || 1920;
+                       cvs.height = video.videoHeight || 1080;
+                       const ctx = cvs.getContext('2d');
+                       
+                       const pipVideo = document.createElement('video');
+                       pipVideo.muted = true;
+                       pipVideo.autoplay = true;
+                       
+                       const stream = cvs.captureStream(30);
+                       
+                       // Attempt to attach the audio track so PiP has a volume button
+                       if (audio && audio.srcObject) {
+                           const audioTracks = audio.srcObject.getAudioTracks();
+                           if (audioTracks.length > 0) {
+                               stream.addTrack(audioTracks[0]);
+                           }
+                       }
+                       
+                       pipVideo.srcObject = stream;
+                       
+                       // Sync volume from PiP window back to the main audio element
+                       pipVideo.addEventListener('volumechange', () => {
+                           if (audio) {
+                               audio.muted = pipVideo.muted;
+                               self.isMuted = audio.muted;
+                               if (volumeIcon) {
+                                   volumeIcon.icon = self.isMuted ? 'mdi:volume-mute' : 'mdi:volume-high';
+                               }
+                           }
+                       });
+                       
+                       video._pipVideo = pipVideo;
+                       video._pipCanvas = cvs;
+                       video._pipCtx = ctx;
+                       
+                       pipVideo.addEventListener('leavepictureinpicture', () => {
+                          video._pipActive = false;
+                       });
+                       
+                       pipVideo.play().catch(e => console.error("PiP background play failed", e));
+                   };
+                   
+                   video.addEventListener('playing', setupPip);
+                   
+                   video.requestPictureInPicture = function() {
                       if (!video._pipVideo) {
-                          const cvs = document.createElement('canvas');
-                          cvs.width = video.videoWidth || 1920;
-                          cvs.height = video.videoHeight || 1080;
-                          const ctx = cvs.getContext('2d');
-                          
-                          const pipVideo = document.createElement('video');
-                          pipVideo.muted = true;
-                          pipVideo.srcObject = cvs.captureStream(30);
-                          
-                          video._pipVideo = pipVideo;
-                          video._pipCanvas = cvs;
-                          video._pipCtx = ctx;
-                          
-                          pipVideo.addEventListener('leavepictureinpicture', () => {
-                             video._pipActive = false;
-                          });
+                          setupPip();
                       }
                       
                       video._pipActive = true;
@@ -1308,15 +1342,14 @@ class CuboAICameraCard extends HTMLElement {
                           requestAnimationFrame(drawFrame);
                       };
                       
-                      try {
-                          await video._pipVideo.play();
-                          drawFrame();
-                          await video._pipVideo.requestPictureInPicture();
-                      } catch (e) {
+                      drawFrame();
+                      
+                      // Synchronously request PiP to preserve user gesture
+                      return video._pipVideo.requestPictureInPicture().catch(e => {
                           video._pipActive = false;
-                          console.error("Custom PiP with overlays failed, falling back to standard PiP:", e);
+                          console.error("Custom PiP failed, falling back to standard PiP:", e);
                           return originalPip.call(video);
-                      }
+                      });
                    };
                 }
               }
