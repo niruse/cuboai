@@ -236,7 +236,7 @@ class CuboAICameraCard extends HTMLElement {
       // Add the microphone overlay button
       if (!this.micButton) {
         this.micButton = document.createElement('ha-icon-button');
-        this.micButton.style.cssText = 'position: absolute !important; top: 16px !important; left: 16px !important; z-index: 9999 !important; border-radius: 50% !important; color: white !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; transition: all 0.2s !important; display: none !important;';
+        this.micButton.style.cssText = 'position: absolute !important; top: 16px !important; left: 16px !important; z-index: 2147483647 !important; border-radius: 50% !important; color: white !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; transition: all 0.2s !important; display: none !important;';
         
         const updateIcon = () => {
           this.micButton.innerHTML = `<ha-icon icon="${this.micEnabled ? 'mdi:microphone' : 'mdi:microphone-off'}"></ha-icon>`;
@@ -285,13 +285,13 @@ class CuboAICameraCard extends HTMLElement {
       
       if (!this.bpmOverlay) {
         this.bpmOverlay = document.createElement('div');
-        this.bpmOverlay.style.cssText = 'position: absolute !important; top: 16px !important; left: 50% !important; transform: translateX(-50%) !important; z-index: 9999 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; align-items: center; justify-content: center;';
+        this.bpmOverlay.style.cssText = 'position: absolute !important; top: 16px !important; left: 50% !important; transform: translateX(-50%) !important; z-index: 2147483647 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; align-items: center; justify-content: center;';
         this.appendChild(this.bpmOverlay);
       }
       
       if (!this.envOverlay) {
         this.envOverlay = document.createElement('div');
-        this.envOverlay.style.cssText = 'position: absolute !important; bottom: 60px !important; left: 16px !important; z-index: 9999 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; display: flex !important; gap: 10px !important; align-items: center;';
+        this.envOverlay.style.cssText = 'position: absolute !important; bottom: 60px !important; left: 16px !important; z-index: 2147483647 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; display: flex !important; gap: 10px !important; align-items: center;';
         this.appendChild(this.envOverlay);
       }
 
@@ -1224,6 +1224,101 @@ class CuboAICameraCard extends HTMLElement {
               if (video && !video.dataset.cuboInit) {
                 video.dataset.cuboInit = "true";
                 video.muted = this.isMuted;
+
+                // Fullscreen Patch: redirect video fullscreen to the player container
+                const originalFs = video.requestFullscreen || video.webkitRequestFullscreen;
+                if (originalFs) {
+                   video.requestFullscreen = function(options) {
+                      if (player && player.requestFullscreen) return player.requestFullscreen(options);
+                      if (player && player.webkitRequestFullscreen) return player.webkitRequestFullscreen(options);
+                      return originalFs.call(video, options);
+                   };
+                   if (video.webkitRequestFullscreen) video.webkitRequestFullscreen = video.requestFullscreen;
+                }
+
+                // PiP Patch: Canvas stream overlay technique
+                const originalPip = video.requestPictureInPicture;
+                if (originalPip) {
+                   // Ensure video can play cross-origin if needed
+                   video.crossOrigin = "anonymous";
+                   const self = this;
+                   video.requestPictureInPicture = async () => {
+                      if (!video._pipVideo) {
+                          const cvs = document.createElement('canvas');
+                          cvs.width = video.videoWidth || 1920;
+                          cvs.height = video.videoHeight || 1080;
+                          const ctx = cvs.getContext('2d');
+                          
+                          const pipVideo = document.createElement('video');
+                          pipVideo.muted = true;
+                          pipVideo.srcObject = cvs.captureStream(30);
+                          
+                          video._pipVideo = pipVideo;
+                          video._pipCanvas = cvs;
+                          video._pipCtx = ctx;
+                          
+                          pipVideo.addEventListener('leavepictureinpicture', () => {
+                             video._pipActive = false;
+                          });
+                      }
+                      
+                      video._pipActive = true;
+                      
+                      const drawFrame = () => {
+                          if (!video._pipActive) return;
+                          const cvs = video._pipCanvas;
+                          const ctx = video._pipCtx;
+                          if (video.videoWidth > 0 && video.videoHeight > 0) {
+                              if (cvs.width !== video.videoWidth || cvs.height !== video.videoHeight) {
+                                  cvs.width = video.videoWidth;
+                                  cvs.height = video.videoHeight;
+                              }
+                              ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
+                              
+                              // Draw Overlays
+                              ctx.font = "bold 48px Arial";
+                              ctx.fillStyle = "white";
+                              ctx.strokeStyle = "rgba(0,0,0,0.8)";
+                              ctx.lineWidth = 6;
+                              ctx.textAlign = "center";
+                              ctx.textBaseline = "middle";
+                              
+                              const bpm = self._currentBpmText;
+                              if (bpm) {
+                                  const bx = cvs.width / 2;
+                                  const by = 80;
+                                  const txt = "❤ " + bpm;
+                                  ctx.strokeText(txt, bx, by);
+                                  ctx.fillText(txt, bx, by);
+                              }
+                              
+                              const temp = self._currentTempText;
+                              const humi = self._currentHumiText;
+                              if (temp || humi) {
+                                  ctx.textAlign = "left";
+                                  ctx.textBaseline = "bottom";
+                                  const envTxt = (temp ? temp : "") + (temp && humi ? "   " : "") + (humi ? humi : "");
+                                  const ex = 40;
+                                  const ey = cvs.height - 40;
+                                  ctx.strokeText(envTxt, ex, ey);
+                                  ctx.fillText(envTxt, ex, ey);
+                              }
+                          }
+                          
+                          requestAnimationFrame(drawFrame);
+                      };
+                      
+                      try {
+                          await video._pipVideo.play();
+                          drawFrame();
+                          await video._pipVideo.requestPictureInPicture();
+                      } catch (e) {
+                          video._pipActive = false;
+                          console.error("Custom PiP with overlays failed, falling back to standard PiP:", e);
+                          return originalPip.call(video);
+                      }
+                   };
+                }
               }
               if (audio && !audio.dataset.cuboInit) {
                 audio.dataset.cuboInit = "true";
@@ -1282,6 +1377,7 @@ class CuboAICameraCard extends HTMLElement {
         }
         this.bpmOverlay.innerHTML = `<ha-icon icon="mdi:heart-pulse" style="margin-right: 4px; color: #ff4a4a; --mdc-icon-size: 18px;"></ha-icon>${bpmText} BPM`;
         this.bpmOverlay.style.display = 'flex';
+        this._currentBpmText = bpmText !== "??" ? bpmText + " BPM" : "";
       }
 
       if (this.envOverlay) {
@@ -1296,6 +1392,7 @@ class CuboAICameraCard extends HTMLElement {
             }
         }
         envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:thermometer" style="margin-right: 2px; color: #ff9800; --mdc-icon-size: 18px;"></ha-icon>${tempText}${tempUnit}</span>`;
+        this._currentTempText = tempText !== "??" ? tempText + tempUnit : "";
 
         let humiText = "??";
         let humiUnit = "%";
@@ -1307,6 +1404,7 @@ class CuboAICameraCard extends HTMLElement {
             }
         }
         envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:water-percent" style="margin-right: 2px; color: #03a9f4; --mdc-icon-size: 18px;"></ha-icon>${humiText}${humiUnit}</span>`;
+        this._currentHumiText = humiText !== "??" ? humiText + humiUnit : "";
 
         this.envOverlay.innerHTML = envHtml;
         this.envOverlay.style.display = 'flex';
