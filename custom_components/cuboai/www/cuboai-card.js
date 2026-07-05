@@ -1223,7 +1223,6 @@ class CuboAICameraCard extends HTMLElement {
               // Ensure the media matches our memory when it first loads
               if (video && !video.dataset.cuboInit) {
                 video.dataset.cuboInit = "true";
-                video.muted = this.isMuted;
 
                 // Fullscreen Patch: redirect video fullscreen to the player container
                 const originalFs = video.requestFullscreen || video.webkitRequestFullscreen;
@@ -1355,7 +1354,6 @@ class CuboAICameraCard extends HTMLElement {
               }
               if (audio && !audio.dataset.cuboInit) {
                 audio.dataset.cuboInit = "true";
-                audio.muted = this.isMuted;
               }
               if (!volumeIcon.dataset.cuboInit) {
                 volumeIcon.dataset.cuboInit = "true";
