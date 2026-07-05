@@ -227,7 +227,7 @@ class CuboAICameraCard extends HTMLElement {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
         url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: 'webrtc,mse',
+        mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
         media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
@@ -1224,24 +1224,31 @@ class CuboAICameraCard extends HTMLElement {
               if (video && !video.dataset.cuboInit) {
                 video.dataset.cuboInit = "true";
 
+                // Apple devices (iOS/Safari) use strict native media players and break if patched.
+                // We reliably detect Apple engines by checking the vendor string.
+                const isAppleWebKit = navigator.vendor && navigator.vendor.includes('Apple');
+
                 // Fullscreen Patch: redirect video fullscreen to the player container
-                const originalFs = video.requestFullscreen || video.webkitRequestFullscreen;
-                if (originalFs) {
-                   video.requestFullscreen = function(options) {
-                      if (player && player.requestFullscreen) return player.requestFullscreen(options);
-                      if (player && player.webkitRequestFullscreen) return player.webkitRequestFullscreen(options);
-                      return originalFs.call(video, options);
-                   };
-                   if (video.webkitRequestFullscreen) video.webkitRequestFullscreen = video.requestFullscreen;
+                if (!isAppleWebKit) {
+                    const originalFs = video.requestFullscreen || video.webkitRequestFullscreen;
+                    if (originalFs) {
+                       video.requestFullscreen = function(options) {
+                          if (player && player.requestFullscreen) return player.requestFullscreen(options);
+                          if (player && player.webkitRequestFullscreen) return player.webkitRequestFullscreen(options);
+                          return originalFs.call(video, options);
+                       };
+                       if (video.webkitRequestFullscreen) video.webkitRequestFullscreen = video.requestFullscreen;
+                    }
                 }
 
+
                 // PiP Patch: Canvas stream overlay technique
-                const originalPip = video.requestPictureInPicture;
-                if (originalPip) {
-                   video.crossOrigin = "anonymous";
+                if (!isAppleWebKit) {
+                    const originalPip = video.requestPictureInPicture;
+                    if (originalPip) {
+                       video.crossOrigin = "anonymous";
                    const self = this;
                    
-                   // Initialize the PiP canvas and video immediately
                    const setupPip = () => {
                        if (video._pipVideo) return;
                        
@@ -1255,18 +1262,14 @@ class CuboAICameraCard extends HTMLElement {
                        pipVideo.autoplay = true;
                        
                        const stream = cvs.captureStream(30);
-                       
-                       // Attempt to attach the audio track so PiP has a volume button
-                       if (audio && audio.srcObject) {
-                           const audioTracks = audio.srcObject.getAudioTracks();
-                           if (audioTracks.length > 0) {
-                               stream.addTrack(audioTracks[0]);
-                           }
-                       }
-                       
                        pipVideo.srcObject = stream;
+                       pipVideo.style.position = 'absolute';
+                       pipVideo.style.width = '1px';
+                       pipVideo.style.height = '1px';
+                       pipVideo.style.opacity = '0.01';
+                       pipVideo.style.pointerEvents = 'none';
+                       self.appendChild(pipVideo);
                        
-                       // Sync volume from PiP window back to the main audio element
                        pipVideo.addEventListener('volumechange', () => {
                            if (audio) {
                                audio.muted = pipVideo.muted;
@@ -1281,6 +1284,19 @@ class CuboAICameraCard extends HTMLElement {
                        video._pipCanvas = cvs;
                        video._pipCtx = ctx;
                        
+                       // Keep the canvas stream alive in the background at 1fps
+                       // This ensures pipVideo successfully loads its metadata
+                       // so requestPictureInPicture doesn't reject synchronously.
+                       setInterval(() => {
+                           if (!video._pipActive && video.videoWidth > 0) {
+                               if (cvs.width !== video.videoWidth || cvs.height !== video.videoHeight) {
+                                   cvs.width = video.videoWidth;
+                                   cvs.height = video.videoHeight;
+                               }
+                               ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
+                           }
+                       }, 1000);
+                       
                        pipVideo.addEventListener('leavepictureinpicture', () => {
                           video._pipActive = false;
                        });
@@ -1290,10 +1306,20 @@ class CuboAICameraCard extends HTMLElement {
                    
                    setupPip();
                    video.addEventListener('playing', setupPip);
+                   if (audio) audio.addEventListener('playing', setupPip);
                    
                    video.requestPictureInPicture = function() {
                       if (!video._pipVideo) {
                           setupPip();
+                      }
+                      
+                      // Ensure audio track is attached dynamically
+                      if (audio && audio.srcObject && video._pipVideo.srcObject) {
+                          const audioTracks = audio.srcObject.getAudioTracks();
+                          const existingTracks = video._pipVideo.srcObject.getAudioTracks();
+                          if (audioTracks.length > 0 && existingTracks.length === 0) {
+                              video._pipVideo.srcObject.addTrack(audioTracks[0]);
+                          }
                       }
                       
                       video._pipActive = true;
@@ -1310,32 +1336,69 @@ class CuboAICameraCard extends HTMLElement {
                               ctx.drawImage(video, 0, 0, cvs.width, cvs.height);
                               
                               // Draw Overlays
-                              ctx.font = "bold 48px Arial";
-                              ctx.fillStyle = "white";
-                              ctx.strokeStyle = "rgba(0,0,0,0.8)";
-                              ctx.lineWidth = 6;
-                              ctx.textAlign = "center";
-                              ctx.textBaseline = "middle";
+                              const drawIcon = (pathData, color, x, y, size) => {
+                                  ctx.save();
+                                  ctx.translate(x, y);
+                                  const scale = size / 24;
+                                  ctx.scale(scale, scale);
+                                  ctx.fillStyle = color;
+                                  ctx.fill(new Path2D(pathData));
+                                  ctx.restore();
+                              };
+
+                              const drawPill = (text, iconPath, iconColor, x, y, size) => {
+                                  ctx.font = `bold ${size}px Arial`;
+                                  const textWidth = ctx.measureText(text).width;
+                                  const padding = size * 0.5;
+                                  const iconSize = size * 1.2;
+                                  const gap = size * 0.3;
+                                  const width = padding + iconSize + gap + textWidth + padding;
+                                  const height = size * 1.8;
+                                  const radius = height / 2;
+                                  
+                                  // Draw background
+                                  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+                                  ctx.beginPath();
+                                  ctx.roundRect(x, y - height/2, width, height, radius);
+                                  ctx.fill();
+                                  
+                                  // Draw icon
+                                  drawIcon(iconPath, iconColor, x + padding, y - iconSize/2, iconSize);
+                                  
+                                  // Draw text
+                                  ctx.fillStyle = "white";
+                                  ctx.textAlign = "left";
+                                  ctx.textBaseline = "middle";
+                                  ctx.fillText(text, x + padding + iconSize + gap, y);
+                                  
+                                  return width;
+                              };
+                              
+                              const pathHeartPulse = "M7.5,4A5.5,5.5 0 0,0 2,9.5C2,10 2.09,10.5 2.22,11H6.3L7.57,7.63C7.87,6.83 9.05,6.75 9.43,7.63L11.5,13L12.09,11.58C12.22,11.25 12.57,11 13,11H21.78C21.91,10.5 22,10 22,9.5A5.5,5.5 0 0,0 16.5,4C14.64,4 13,4.93 12,6.34C11,4.93 9.36,4 7.5,4V4M3,12.5A1,1 0 0,0 2,13.5A1,1 0 0,0 3,14.5H5.44L11,20C12,20.9 12,20.9 13,20L18.56,14.5H21A1,1 0 0,0 22,13.5A1,1 0 0,0 21,12.5H13.4L12.47,14.8C12.07,15.81 10.92,15.67 10.55,14.83L8.5,9.5L7.54,11.83C7.39,12.21 7.05,12.5 6.6,12.5H3Z";
+                              const pathThermometer = "M15 13V5A3 3 0 0 0 9 5V13A5 5 0 1 0 15 13M12 4A1 1 0 0 1 13 5V8H11V5A1 1 0 0 1 12 4Z";
+                              const pathWaterPercent = "M12,3.25C12,3.25 6,10 6,14C6,17.32 8.69,20 12,20A6,6 0 0,0 18,14C18,10 12,3.25 12,3.25M14.47,9.97L15.53,11.03L9.53,17.03L8.47,15.97M9.75,10A1.25,1.25 0 0,1 11,11.25A1.25,1.25 0 0,1 9.75,12.5A1.25,1.25 0 0,1 8.5,11.25A1.25,1.25 0 0,1 9.75,10M14.25,14.5A1.25,1.25 0 0,1 15.5,15.75A1.25,1.25 0 0,1 14.25,17A1.25,1.25 0 0,1 13,15.75A1.25,1.25 0 0,1 14.25,14.5Z";
                               
                               const bpm = self._currentBpmText;
                               if (bpm) {
-                                  const bx = cvs.width / 2;
-                                  const by = 80;
-                                  const txt = "❤ " + bpm;
-                                  ctx.strokeText(txt, bx, by);
-                                  ctx.fillText(txt, bx, by);
+                                  const textWidth = ctx.measureText(bpm).width;
+                                  const size = 48;
+                                  const totalWidth = size * 0.5 + size * 1.2 + size * 0.3 + textWidth + size * 0.5;
+                                  drawPill(bpm, pathHeartPulse, "#f44336", cvs.width / 2 - totalWidth / 2, 80, size);
                               }
                               
                               const temp = self._currentTempText;
                               const humi = self._currentHumiText;
                               if (temp || humi) {
-                                  ctx.textAlign = "left";
-                                  ctx.textBaseline = "bottom";
-                                  const envTxt = (temp ? temp : "") + (temp && humi ? "   " : "") + (humi ? humi : "");
-                                  const ex = 40;
-                                  const ey = cvs.height - 40;
-                                  ctx.strokeText(envTxt, ex, ey);
-                                  ctx.fillText(envTxt, ex, ey);
+                                  let currentX = 40;
+                                  const ey = cvs.height - 60;
+                                  const gap = 20;
+                                  
+                                  if (temp) {
+                                      currentX += drawPill(temp, pathThermometer, "#ff9800", currentX, ey, 48) + gap;
+                                  }
+                                  if (humi) {
+                                      drawPill(humi, pathWaterPercent, "#03a9f4", currentX, ey, 48);
+                                  }
                               }
                           }
                           
@@ -1352,9 +1415,12 @@ class CuboAICameraCard extends HTMLElement {
                       });
                    };
                 }
+
               }
-              if (audio && !audio.dataset.cuboInit) {
-                audio.dataset.cuboInit = "true";
+            } // ADDED MISSING BRACKET FOR if (video && !video.dataset.cuboInit)
+            
+            if (audio && !audio.dataset.cuboInit) {
+              audio.dataset.cuboInit = "true";
               }
               if (!volumeIcon.dataset.cuboInit) {
                 volumeIcon.dataset.cuboInit = "true";
@@ -1504,7 +1570,7 @@ class CuboAICameraCard extends HTMLElement {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
              url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: 'webrtc,mse',
+             mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
              media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
@@ -1541,7 +1607,7 @@ class CuboAICameraCard extends HTMLElement {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
                  url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: 'webrtc,mse',
+                 mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,
                  media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
