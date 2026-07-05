@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import logging.handlers
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -20,8 +21,6 @@ from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
 from .utils import set_debug_logs_enabled, set_log_path
 
-import logging.handlers
-
 _LOGGER = logging.getLogger(__name__)
 
 _FILE_HANDLER = None
@@ -30,7 +29,7 @@ _FILE_HANDLER = None
 def _setup_component_logger(hass: HomeAssistant, enable: bool):
     global _FILE_HANDLER
     component_logger = logging.getLogger("custom_components.cuboai")
-    
+
     if enable:
         if _FILE_HANDLER is None:
             log_path = hass.config.path("cuboai_debug.log")
@@ -109,11 +108,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up CuboAI from a config entry."""
     _LOGGER.debug("Starting CuboAI async_setup_entry...")
-    
+
     # Ensure token and log paths are set (in case async_setup wasn't called)
     set_token_paths(hass.config.path())
     set_log_path(hass.config.path())
-    
+
     debug_enabled = entry.options.get("enable_debug_logs", False)
     set_debug_logs_enabled(debug_enabled)
     _setup_component_logger(hass, debug_enabled)
@@ -185,7 +184,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .coordinator import CuboAICoordinator
 
     coordinator = CuboAICoordinator(hass, entry, latest_access, latest_refresh, user_agent)
-    
+
     _LOGGER.debug("Triggering coordinator first refresh...")
     await coordinator.async_config_entry_first_refresh()
     _LOGGER.debug("Coordinator first refresh complete.")
