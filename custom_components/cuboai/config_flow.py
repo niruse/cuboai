@@ -304,6 +304,12 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
 
         cameras = self.config_entry.data.get("cameras", [])
 
+        from .utils import find_available_port
+
+        default_port = self.config_entry.options.get("rtsp_port", self.config_entry.data.get("rtsp_port"))
+        if not default_port:
+            default_port = find_available_port()
+
         schema = {
             vol.Required(
                 "download_images",
@@ -317,7 +323,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             ): bool,
             vol.Required(
                 "rtsp_port",
-                default=self.config_entry.options.get("rtsp_port", self.config_entry.data.get("rtsp_port", 8555)),
+                default=default_port,
             ): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
             vol.Required(
                 "alerts_count",

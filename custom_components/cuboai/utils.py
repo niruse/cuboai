@@ -37,8 +37,16 @@ def log_to_file(msg):
 
 def find_available_port(start_port=8555, max_port=8600):
     """Find an available port for go2rtc RTSP."""
+    # Ignore standard Home Assistant ports
+    IGNORE_PORTS = {8123, 4357, 8554, 1984, 8443, 5683, 5353}
     for port in range(start_port, max_port):
+        if port in IGNORE_PORTS:
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", port)) != 0:
+            try:
+                # Actually try to bind to verify if the port is free
+                s.bind(("0.0.0.0", port))
                 return port
+            except OSError:
+                pass
     return start_port
