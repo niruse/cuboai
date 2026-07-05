@@ -227,7 +227,7 @@ class CuboAICameraCard extends HTMLElement {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
         url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
+        mode: 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
         media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
@@ -1570,7 +1570,7 @@ class CuboAICameraCard extends HTMLElement {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
              url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
+             mode: 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
              media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
@@ -1607,7 +1607,7 @@ class CuboAICameraCard extends HTMLElement {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
                  url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: (navigator.vendor && navigator.vendor.includes('Apple')) ? 'mp4,hls,mse' : 'webrtc,mse',
+                 mode: 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,
                  media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
