@@ -48,6 +48,7 @@ def _setup_component_logger(hass: HomeAssistant, enable: bool):
             _FILE_HANDLER.close()
             _FILE_HANDLER = None
 
+
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.CAMERA,
@@ -119,6 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Ensure media library services are set up
     from .media_library import async_setup_services
+
     async_setup_services(hass)
 
     _LOGGER.debug("Ensuring native dependencies...")

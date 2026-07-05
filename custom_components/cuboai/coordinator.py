@@ -351,14 +351,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
         # Concurrently fetch raw profiles for all cameras and subscription info
         try:
             profiles_raw, sub_info = await asyncio.gather(
-                asyncio.wait_for(
-                    get_camera_profiles_raw(self._access_token, self._user_agent, session),
-                    timeout=10.0
-                ),
-                asyncio.wait_for(
-                    get_subscription_info(self._access_token, self._user_agent, session),
-                    timeout=10.0
-                ),
+                asyncio.wait_for(get_camera_profiles_raw(self._access_token, self._user_agent, session), timeout=10.0),
+                asyncio.wait_for(get_subscription_info(self._access_token, self._user_agent, session), timeout=10.0),
                 return_exceptions=True,
             )
 
@@ -420,17 +414,18 @@ class CuboAICoordinator(DataUpdateCoordinator):
                         get_n_alerts_paged(
                             device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
                         ),
-                        timeout=15.0
+                        timeout=15.0,
                     ),
                     asyncio.wait_for(
-                        get_camera_state(device_id, self._access_token, self._user_agent, session),
-                        timeout=10.0
+                        get_camera_state(device_id, self._access_token, self._user_agent, session), timeout=10.0
                     ),
                     asyncio.wait_for(
-                        self.hass.async_add_executor_job(_fetch_local_data, uid, account, password, camera_ip, fetch_extras)
+                        self.hass.async_add_executor_job(
+                            _fetch_local_data, uid, account, password, camera_ip, fetch_extras
+                        )
                         if uid
                         else _dummy_async(),
-                        timeout=20.0
+                        timeout=20.0,
                     ),
                     return_exceptions=True,
                 )

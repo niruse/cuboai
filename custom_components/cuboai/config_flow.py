@@ -145,7 +145,11 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if "SMS QUOTA" in error_str.upper() or "UserLambdaValidationException" in error_str:
                     _LOGGER.warning("CuboAI authentication failed: SMS Quota exceeded.")
                     errors["base"] = "sms_quota_exceeded"
-                elif "NotAuthorizedException" in error_str or "InvalidPasswordException" in error_str or "UserNotFoundException" in error_str:
+                elif (
+                    "NotAuthorizedException" in error_str
+                    or "InvalidPasswordException" in error_str
+                    or "UserNotFoundException" in error_str
+                ):
                     _LOGGER.warning("CuboAI authentication failed: Incorrect username or password.")
                     errors["base"] = "auth_failed"
                 elif "TooManyRequestsException" in error_str or "LimitExceededException" in error_str:
@@ -262,7 +266,9 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = {
             vol.Required("download_images", default=True): bool,
             vol.Optional("enable_debug_logs", default=False): bool,
-            vol.Required("rtsp_port", default=find_available_port()): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
+            vol.Required("rtsp_port", default=find_available_port()): vol.All(
+                vol.Coerce(int), vol.Range(min=1024, max=65535)
+            ),
             vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required("max_saved_photos", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),

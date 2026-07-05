@@ -39,6 +39,6 @@ def find_available_port(start_port=8555, max_port=8600):
     """Find an available port for go2rtc RTSP."""
     for port in range(start_port, max_port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('127.0.0.1', port)) != 0:
+            if s.connect_ex(("127.0.0.1", port)) != 0:
                 return port
     return start_port

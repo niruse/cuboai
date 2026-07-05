@@ -259,6 +259,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             or "spotify.com" in media_id
             or media_id.startswith("ytsearch")
         ):
+
             def _extract_yt_url():
                 nonlocal media_id
                 if "spotify.com" in media_id:
