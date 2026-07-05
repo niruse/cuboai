@@ -249,14 +249,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
     async def _extract_media_url(self, media_id: str) -> str:
         """Extract YouTube or Spotify URL in the background."""
-        try:
-            await self.hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {"title": "CuboAI Debug", "message": f"_extract_media_url called for {media_id}"},
-            )
-        except Exception:
-            pass
+
         import logging
 
         _LOGGER = logging.getLogger(__name__)
@@ -266,33 +259,34 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             or "spotify.com" in media_id
             or media_id.startswith("ytsearch")
         ):
-            if "spotify.com" in media_id:
-                try:
-                    import re
-                    import urllib.request
-
-                    req = urllib.request.Request(media_id, headers={"User-Agent": "Mozilla/5.0"})
-                    html = urllib.request.urlopen(req, timeout=5).read().decode("utf-8")
-                    title_match = re.search(r"<title>(.*?)</title>", html)
-                    if title_match:
-                        raw_title = title_match.group(1)
-                        clean_title = raw_title.split("|")[0].replace("- song and lyrics by", "").strip()
-                        media_id = f"ytsearch1:{clean_title}"
-                except Exception:
-                    pass
-
-            try:
-                import yt_dlp
-            except ImportError:
-                import subprocess
-                import sys
-
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
-                import yt_dlp
-
-            import os
-
             def _extract_yt_url():
+                nonlocal media_id
+                if "spotify.com" in media_id:
+                    try:
+                        import re
+                        import urllib.request
+
+                        req = urllib.request.Request(media_id, headers={"User-Agent": "Mozilla/5.0"})
+                        html = urllib.request.urlopen(req, timeout=5).read().decode("utf-8")
+                        title_match = re.search(r"<title>(.*?)</title>", html)
+                        if title_match:
+                            raw_title = title_match.group(1)
+                            clean_title = raw_title.split("|")[0].replace("- song and lyrics by", "").strip()
+                            media_id = f"ytsearch1:{clean_title}"
+                    except Exception:
+                        pass
+
+                try:
+                    import yt_dlp
+                except ImportError:
+                    import subprocess
+                    import sys
+
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
+                    import yt_dlp
+
+                import os
+
                 ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
                 cookie_path = self.hass.config.path("cuboai_cookies.txt")
                 if os.path.exists(cookie_path):

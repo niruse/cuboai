@@ -70,21 +70,23 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Register frontend card
     try:
-        import os
-        import shutil
-
         from homeassistant.components.frontend import add_extra_js_url
 
-        # Copy the card JS into the user's /config/www directory so HA serves it natively at /local/
-        www_dir = hass.config.path("www")
-        os.makedirs(www_dir, exist_ok=True)
-        src = hass.config.path("custom_components", "cuboai", "www", "cuboai-card.js")
-        dst = os.path.join(www_dir, "cuboai-card.js")
-        shutil.copy2(src, dst)
+        def _copy_frontend_card():
+            import os
+            import shutil
 
-        # Add the script to the frontend using the reliable /local/ path
-        # Use file mtime as cache-buster so browsers always pick up changes after a restart
-        mtime = int(os.path.getmtime(dst))
+            # Copy the card JS into the user's /config/www directory so HA serves it natively at /local/
+            www_dir = hass.config.path("www")
+            os.makedirs(www_dir, exist_ok=True)
+            src = hass.config.path("custom_components", "cuboai", "www", "cuboai-card.js")
+            dst = os.path.join(www_dir, "cuboai-card.js")
+            shutil.copy2(src, dst)
+
+            # Use file mtime as cache-buster so browsers always pick up changes after a restart
+            return int(os.path.getmtime(dst))
+
+        mtime = await hass.async_add_executor_job(_copy_frontend_card)
         add_extra_js_url(hass, f"/local/cuboai-card.js?v={mtime}")
     except Exception as e:
         _LOGGER.error(f"Failed to register CuboAI frontend card: {e}")
@@ -106,7 +108,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up CuboAI from a config entry."""
-    _LOGGER.warning("Starting CuboAI async_setup_entry...")
+    _LOGGER.debug("Starting CuboAI async_setup_entry...")
     
     # Ensure token and log paths are set (in case async_setup wasn't called)
     set_token_paths(hass.config.path())
@@ -120,13 +122,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .media_library import async_setup_services
     async_setup_services(hass)
 
-    _LOGGER.warning("Ensuring native dependencies...")
+    _LOGGER.debug("Ensuring native dependencies...")
     # Ensure dependencies
     deps_ok = await async_ensure_dependencies(hass)
     if not deps_ok:
         _LOGGER.warning("Failed to download CuboAI native dependencies. Local features may be disabled.")
 
-    _LOGGER.warning("Dependencies ok. Fetching cameras...")
+    _LOGGER.debug("Dependencies ok. Fetching cameras...")
     # Dynamically refresh/sync the cameras list from the API on startup
     access_token = entry.data.get("access_token")
     refresh_token = entry.data.get("refresh_token")
@@ -164,7 +166,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(
                     old_cameras, key=lambda c: c["device_id"]
                 ):
-                    _LOGGER.warning("Dynamic camera list update detected: %s", new_cameras)
+                    _LOGGER.info("Dynamic camera list update detected: %s", new_cameras)
                     new_data = dict(entry.data)
                     new_data["cameras"] = new_cameras
                     new_data["access_token"] = latest_access
@@ -179,34 +181,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:
         _LOGGER.warning("Failed to dynamically refresh CuboAI camera profiles: %s", e)
 
-    _LOGGER.warning("Cameras fetched. Setting up coordinator...")
+    _LOGGER.debug("Cameras fetched. Setting up coordinator...")
     from .coordinator import CuboAICoordinator
 
     coordinator = CuboAICoordinator(hass, entry, latest_access, latest_refresh, user_agent)
     
-    _LOGGER.warning("Triggering coordinator first refresh...")
+    _LOGGER.debug("Triggering coordinator first refresh...")
     await coordinator.async_config_entry_first_refresh()
-    _LOGGER.warning("Coordinator first refresh complete.")
+    _LOGGER.debug("Coordinator first refresh complete.")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
     }
 
-    _LOGGER.warning("Starting go2rtc manager...")
+    _LOGGER.debug("Starting go2rtc manager...")
     # Setup go2rtc manager
     go2rtc_manager = Go2RTCManager(hass)
     go2rtc_manager.update_streams(entry.data.get("cameras", []), dict(entry.options))
     await go2rtc_manager.start()
-    _LOGGER.warning("go2rtc manager started.")
+    _LOGGER.debug("go2rtc manager started.")
 
     hass.data[DOMAIN][entry.entry_id]["go2rtc"] = go2rtc_manager
 
     # Register update listener to reload when options change
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    _LOGGER.warning("Forwarding entry setups...")
+    _LOGGER.debug("Forwarding entry setups...")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _LOGGER.warning("CuboAI async_setup_entry finished successfully.")
+    _LOGGER.debug("CuboAI async_setup_entry finished successfully.")
     return True
 
 

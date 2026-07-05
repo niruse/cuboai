@@ -4,7 +4,11 @@ if (!window._cuboai_registry_patched) {
   const originalDefine = customElements.define;
   customElements.define = function(name, constructor, options) {
     if (!customElements.get(name)) {
-      originalDefine.call(this, name, constructor, options);
+      try {
+        originalDefine.call(this, name, constructor, options);
+      } catch (e) {
+        console.warn(`[CuboAI Patch] Suppressed error registering custom element ${name}:`, e);
+      }
     } else {
       console.warn(`[CuboAI Patch] Prevented duplicate registration of custom element: ${name}`);
     }
@@ -207,10 +211,14 @@ class CuboAICameraCard extends HTMLElement {
       }
       
       let webrtcEntity = null;
+      let rtspPort = 8555;
       for (const entity_id in hass.states) {
           if (entity_id.startsWith('camera.cuboai_') && entity_id.endsWith('_local_camera')) {
               if (babyName && !entity_id.includes(babyName)) continue;
               webrtcEntity = entity_id;
+              if (hass.states[entity_id].attributes && hass.states[entity_id].attributes.rtsp_port) {
+                  rtspPort = hass.states[entity_id].attributes.rtsp_port;
+              }
               break;
           }
       }
@@ -218,7 +226,7 @@ class CuboAICameraCard extends HTMLElement {
       const webrtcConfig = {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
-        url: webrtcEntity ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${deviceId}`,
+        url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
         mode: 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
@@ -1350,10 +1358,14 @@ class CuboAICameraCard extends HTMLElement {
          // Config changed via editor, update child
          if (this.content && config.device_id) {
            let wEntity = null;
+           let wRtspPort = 8555;
            if (this._hass && this._hass.states) {
                for (const e in this._hass.states) {
                    if (e.startsWith('camera.cuboai_') && e.endsWith('_local_camera')) {
                        wEntity = e;
+                       if (this._hass.states[e].attributes && this._hass.states[e].attributes.rtsp_port) {
+                           wRtspPort = this._hass.states[e].attributes.rtsp_port;
+                       }
                        break;
                    }
                }
@@ -1361,7 +1373,7 @@ class CuboAICameraCard extends HTMLElement {
            const webrtcConfig = {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
-             url: wEntity ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${config.device_id}`,
+             url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
              mode: 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
@@ -1383,10 +1395,14 @@ class CuboAICameraCard extends HTMLElement {
              }
              if (deviceId) {
                let wEntity2 = null;
+               let wRtspPort2 = 8555;
                if (this._hass && this._hass.states) {
                    for (const e in this._hass.states) {
                        if (e.startsWith('camera.cuboai_') && e.endsWith('_local_camera')) {
                            wEntity2 = e;
+                           if (this._hass.states[e].attributes && this._hass.states[e].attributes.rtsp_port) {
+                               wRtspPort2 = this._hass.states[e].attributes.rtsp_port;
+                           }
                            break;
                        }
                    }
@@ -1394,7 +1410,7 @@ class CuboAICameraCard extends HTMLElement {
                const webrtcConfig = {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
-                 url: wEntity2 ? undefined : `rtsp://127.0.0.1:8555/cuboai_combined_${deviceId}`,
+                 url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
                  mode: 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,

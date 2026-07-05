@@ -37,7 +37,8 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     @property
     def extra_state_attributes(self):
-        return {"device_id": self._device_id, "uid": self._device_id}
+        rtsp_port = self.coordinator.config_entry.options.get("rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555))
+        return {"device_id": self._device_id, "uid": self._device_id, "rtsp_port": rtsp_port}
 
     @property
     def supported_features(self) -> int:
@@ -98,9 +99,10 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     async def stream_source(self) -> str | None:
         """Return the stream source."""
-        # This connects to our internal go2rtc instance via RTSP on port 8555
+        # This connects to our internal go2rtc instance via RTSP
         # We use the combined stream to support two-way audio (microphone)
-        return f"rtsp://127.0.0.1:8555/cuboai_combined_{self._device_id}"
+        rtsp_port = self.coordinator.config_entry.options.get("rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555))
+        return f"rtsp://127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
     async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
         """Handle the WebRTC offer and return an answer."""

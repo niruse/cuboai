@@ -66,12 +66,13 @@ class Go2RTCManager:
 
     async def _generate_config(self):
         """Generate the go2rtc.yaml file."""
+        rtsp_port = self._options.get("rtsp_port", 8555)
         config = {
             "api": {
                 "listen": ":1985",  # Use alternate port to avoid conflict with HA add-on
             },
             "rtsp": {
-                "listen": ":8555",
+                "listen": f":{rtsp_port}",
             },
             "webrtc": {
                 "listen": ":8556",

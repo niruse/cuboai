@@ -257,9 +257,12 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 options=user_input,
             )
 
+        from .utils import find_available_port
+
         schema = {
             vol.Required("download_images", default=True): bool,
             vol.Optional("enable_debug_logs", default=False): bool,
+            vol.Required("rtsp_port", default=find_available_port()): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
             vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required("max_saved_photos", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
@@ -306,6 +309,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 "enable_debug_logs",
                 default=self.config_entry.options.get("enable_debug_logs", False),
             ): bool,
+            vol.Required(
+                "rtsp_port",
+                default=self.config_entry.options.get("rtsp_port", self.config_entry.data.get("rtsp_port", 8555)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
             vol.Required(
                 "alerts_count",
                 default=self.config_entry.options.get("alerts_count", self.config_entry.data.get("alerts_count", 5)),

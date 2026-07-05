@@ -473,9 +473,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
+        rtsp_port = self.coordinator.config_entry.options.get("rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555))
         return {
             "go2rtc_server": "http://127.0.0.1:1985",
-            "rtsp_url": f"rtsp://127.0.0.1:8555/cuboai_{self._device_id}",
+            "rtsp_url": f"rtsp://127.0.0.1:{rtsp_port}/cuboai_{self._device_id}",
             "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
             "stream_id": f"cuboai_{self._device_id}",
         }

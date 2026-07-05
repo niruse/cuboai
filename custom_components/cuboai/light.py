@@ -37,7 +37,7 @@ def _set_night_light(uid, account, password, camera_ip, on: bool, brightness: in
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=False,
             defer_video_start_late=False,
-            auto_discover_lib=True,
+            auto_discover_lib=False,
         ) as sess:
             client = CuboAIClient(sess)
             if brightness is not None:

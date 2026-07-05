@@ -41,7 +41,7 @@ def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=False,
             defer_video_start_late=False,
-            auto_discover_lib=True,
+            auto_discover_lib=False,
         ) as sess:
             if hasattr(sess, "ioctl"):
                 sess.ioctl(*build_set_sleep_mode(on))
@@ -112,7 +112,7 @@ def _set_status_led(uid, account, password, camera_ip, on: bool):
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=False,
             defer_video_start_late=False,
-            auto_discover_lib=True,
+            auto_discover_lib=False,
         ) as sess:
             payload = struct.pack("<III", 0, 1 if on else 0, 0)
             if hasattr(sess, "ioctl"):
@@ -182,7 +182,7 @@ def _set_flip_screen(uid, account, password, camera_ip, on: bool):
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=False,
             defer_video_start_late=False,
-            auto_discover_lib=True,
+            auto_discover_lib=False,
         ) as sess:
             if hasattr(sess, "ioctl"):
                 resp_type, raw = sess.ioctl(*build_get_hw_control())
@@ -253,7 +253,7 @@ def _set_baby_presence(uid, account, password, camera_ip, on: bool):
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=False,
             defer_video_start_late=False,
-            auto_discover_lib=True,
+            auto_discover_lib=False,
         ) as sess:
             if hasattr(sess, "ioctl"):
                 resp_type, raw = sess.ioctl(*build_get_sleep_safety_setting())
