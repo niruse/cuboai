@@ -1288,6 +1288,7 @@ class CuboAICameraCard extends HTMLElement {
                        pipVideo.play().catch(e => console.error("PiP background play failed", e));
                    };
                    
+                   setupPip();
                    video.addEventListener('playing', setupPip);
                    
                    video.requestPictureInPicture = function() {
