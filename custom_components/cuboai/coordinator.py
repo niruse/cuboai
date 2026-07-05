@@ -68,13 +68,18 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                         except Exception as e:
                             log_to_file(f"Failed to get lightweight status for firmware: {e}")
                             data["firmware_version"] = hw.fw_version if hw.fw_version else "Unknown"
+                            lw = {}
 
                         try:
                             th = client.get_temp_humidity()
-                            if th.temperature is not None and -20 <= th.temperature <= 60:
-                                data["temperature"] = th.temperature
-                            if th.humidity is not None and 0 <= th.humidity <= 100:
-                                data["humidity"] = th.humidity
+                            
+                            temp = lw.get("temp_c") if lw.get("temp_c") is not None else th.temperature
+                            humid = lw.get("humidity_pct") if lw.get("humidity_pct") is not None else th.humidity
+
+                            if temp is not None and -20 <= temp <= 60:
+                                data["temperature"] = temp
+                            if humid is not None and 0 <= humid <= 100:
+                                data["humidity"] = humid
                         except Exception as e:
                             log_to_file(f"Failed to get temp_humidity: {e}")
 
