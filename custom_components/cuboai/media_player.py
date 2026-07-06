@@ -10,6 +10,7 @@ from homeassistant.components.media_player import (
     MediaType,
     RepeatMode,
 )
+from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -464,8 +465,10 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                         )
                         # Lullabies loop forever natively. We clear the queue because a playlist stops at a lullaby.
                         self._queue.clear()
-                        # Wait an hour or until stopped
-                        await asyncio.sleep(3600)
+                        # Wait for the lullaby's own timer (or an hour if infinite) so the
+                        # Speaker doesn't show "playing" long after the lullaby stopped.
+                        lullaby_min = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
+                        await asyncio.sleep(lullaby_min * 60 + 10 if lullaby_min > 0 else 3600)
                     else:
                         _LOGGER.error("Lullaby entity not found")
                     continue
@@ -629,6 +632,52 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
             "model": "Baby Monitor",
         }
 
+    # ── HA-enforced lullaby stop timer ────────────────────────────────────
+    # The camera firmware only supports a few fixed lullaby durations, so the
+    # camera always plays in repeat-forever mode and Home Assistant sends the
+    # stop command when the Lullaby Timer expires — any duration works.
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, f"cuboai_lullaby_timer_changed_{self._device_id}", self._on_timer_changed
+            )
+        )
+
+    async def async_will_remove_from_hass(self):
+        self._cancel_scheduled_stop()
+
+    @callback
+    def _on_timer_changed(self, minutes):
+        """Timer number changed: reschedule the stop if a lullaby is playing."""
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {}) if self.coordinator.data else {}
+        if cam.get("local", {}).get("lullaby_playing") or getattr(self, "_stop_timer_task", None):
+            _LOGGER.info("Lullaby timer changed to %s min while playing — rescheduling stop", minutes)
+            self._schedule_stop(minutes)
+
+    def _cancel_scheduled_stop(self):
+        import asyncio
+
+        task = getattr(self, "_stop_timer_task", None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+        self._stop_timer_task = None
+
+    def _schedule_stop(self, minutes):
+        self._cancel_scheduled_stop()
+        if minutes and minutes > 0:
+            self._stop_timer_task = self.hass.async_create_task(self._stop_after(minutes))
+
+    async def _stop_after(self, minutes):
+        import asyncio
+
+        await asyncio.sleep(minutes * 60)
+        self._stop_timer_task = None
+        _LOGGER.info("Lullaby timer expired (%s min) — sending stop to camera", minutes)
+        await self.async_media_stop()
+
     async def async_media_play(self):
         timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
 
@@ -639,15 +688,18 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 cam["local"]["lullaby_playing"] = True
         self.async_write_ha_state()
 
+        # Camera plays in repeat-forever mode; HA enforces the timer.
         await self.hass.async_add_executor_job(
-            _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", None, None, timer
+            _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", None, None, None
         )
+        self._schedule_stop(timer)
         try:
             await self.coordinator.async_request_refresh()
         except Exception:
             pass
 
     async def async_media_stop(self):
+        self._cancel_scheduled_stop()
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         current_uuid = cam.get("local", {}).get("lullaby_song")
 
@@ -679,6 +731,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                     cam["local"]["lullaby_playing"] = True
             self.async_write_ha_state()
 
+            # Camera plays in repeat-forever mode; HA enforces the timer.
             await self.hass.async_add_executor_job(
                 _execute_lullaby_cmd,
                 self._uid,
@@ -688,8 +741,9 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 "play",
                 uuid,
                 None,
-                timer,
+                None,
             )
+            self._schedule_stop(timer)
             try:
                 await self.coordinator.async_request_refresh()
             except Exception:
@@ -699,6 +753,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         if media_type == MediaType.MUSIC:
             uuid = next((k for k, v in self._catalog.items() if v[1] == media_id), media_id)
             timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
+            # Camera plays in repeat-forever mode; HA enforces the timer.
             await self.hass.async_add_executor_job(
                 _execute_lullaby_cmd,
                 self._uid,
@@ -708,17 +763,18 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 "play",
                 uuid,
                 None,
-                timer,
+                None,
             )
+            self._schedule_stop(timer)
             try:
                 await self.coordinator.async_request_refresh()
             except Exception:
                 pass
 
     async def async_set_volume_level(self, volume: float):
-        # HA volume is 0.0 to 1.0, API is 0 to 100
+        # HA volume is 0.0 to 1.0, API is 0 to 100. Timer stays HA-enforced —
+        # keep the camera in repeat-forever mode (timer=None).
         vol_int = int(volume * 100)
-        timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
         await self.hass.async_add_executor_job(
             _execute_lullaby_cmd,
             self._uid,
@@ -728,5 +784,5 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
             "volume",
             None,
             vol_int,
-            timer,
+            None,
         )

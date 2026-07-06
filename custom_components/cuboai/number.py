@@ -67,28 +67,12 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._timer_value = int(value)
         self.async_write_ha_state()
 
-        # Only contact the camera when a lullaby is currently playing (to adjust
-        # its remaining time). Otherwise the timer is applied by the next play
-        # command anyway — no reason to open a camera session per change.
-        cam_data = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        if not cam_data.get("local", {}).get("lullaby_playing"):
-            return
-        vol = cam_data.get("local", {}).get("lullaby_volume", 50)
+        # The stop is enforced by Home Assistant (the camera firmware only
+        # supports a few fixed durations): notify the lullaby player so it
+        # reschedules its stop timer if a lullaby is currently playing.
+        from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-        from .media_player import _execute_lullaby_cmd
-
-        await self.hass.async_add_executor_job(
-            _execute_lullaby_cmd,
-            self._uid,
-            self._account,
-            self._password,
-            self._camera_ip,
-            "volume",
-            None,
-            vol,
-            self._timer_value,
-        )
-        await self.coordinator.async_request_refresh()
+        async_dispatcher_send(self.hass, f"cuboai_lullaby_timer_changed_{self._device_id}", self._timer_value)
 
 
 class CuboSpeakerTimerNumber(CoordinatorEntity, NumberEntity):
