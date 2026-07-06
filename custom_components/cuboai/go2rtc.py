@@ -76,11 +76,10 @@ class Go2RTCManager:
         rtsp_port = self._options.get("rtsp_port", 8555)
         config = {
             "api": {
-                # Localhost only: the API exposes the stream config (which embeds
-                # camera admin credentials in the exec lines) and unauthenticated
-                # snapshots — only HA itself needs it. Alternate port avoids
-                # conflict with the HA go2rtc add-on.
-                "listen": "127.0.0.1:1985",
+                # All interfaces: the frontend card / webrtc integration reach this
+                # API via the HA host's LAN IP, so it cannot be localhost-only.
+                # Alternate port avoids conflict with the HA go2rtc add-on.
+                "listen": ":1985",
             },
             "rtsp": {
                 "listen": f":{rtsp_port}",
