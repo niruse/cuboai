@@ -70,6 +70,7 @@ PLATFORMS: list[Platform] = [
     Platform.MEDIA_PLAYER,
     Platform.NUMBER,
     Platform.SELECT,
+    Platform.BUTTON,
 ]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -341,4 +342,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not others_loaded:
             hass.data.pop("cuboai_media_library_added", None)
             hass.data.get(DOMAIN, {}).pop("_youtube_cache_switch_added", None)
+            hass.data.get(DOMAIN, {}).pop("_clear_cache_button_added", None)
     return unload_ok

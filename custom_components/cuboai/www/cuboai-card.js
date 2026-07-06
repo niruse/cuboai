@@ -498,6 +498,9 @@ class CuboAICameraCard extends HTMLElement {
                 <button id="toggleCacheBtn" class="cubo-btn cubo-btn-sec" style="padding: 2px 6px; font-size: 11px; display: none; align-items: center; gap: 4px;" title="Save YouTube/Spotify songs to local cache">
                   <ha-icon icon="mdi:download" style="--mdc-icon-size: 14px;"></ha-icon> <span>Cache: OFF</span>
                 </button>
+                <button id="clearCacheBtn" class="cubo-btn cubo-btn-sec" style="padding: 2px 6px; font-size: 11px; display: none; align-items: center; gap: 4px;" title="Delete all locally cached songs">
+                  <ha-icon icon="mdi:delete-sweep" style="--mdc-icon-size: 14px;"></ha-icon>
+                </button>
                 <select id="playTimeSelect" class="cubo-select" style="padding: 2px; font-size: 11px; min-height: unset; height: auto; max-width: 130px;" title="Speaker Play Time">
                   <option value="0">Play Time: Infinite</option>
                   <option value="10">10 mins</option>
@@ -597,6 +600,7 @@ class CuboAICameraCard extends HTMLElement {
           const toggleShuffleBtn = this.musicBar.querySelector('#toggleShuffleBtn');
           const toggleRepeatBtn = this.musicBar.querySelector('#toggleRepeatBtn');
           const toggleCacheBtn = this.musicBar.querySelector('#toggleCacheBtn');
+          const clearCacheBtn = this.musicBar.querySelector('#clearCacheBtn');
           const playTimeSelect = this.musicBar.querySelector('#playTimeSelect');
 
           // The global "Cache YouTube/Spotify Songs" switch entity (entity_id
@@ -693,6 +697,7 @@ class CuboAICameraCard extends HTMLElement {
                 const cacheOn = cacheEnt && this._hass.states[cacheEnt].state === 'on';
                 toggleCacheBtn.style.display = cacheEnt ? 'flex' : 'none';
                 toggleCacheBtn.innerHTML = `<ha-icon icon="mdi:download" style="--mdc-icon-size: 14px; color: ${cacheOn ? '#4caf50' : 'inherit'};"></ha-icon> <span>Cache: ${cacheOn ? 'ON' : 'OFF'}</span>`;
+                if (clearCacheBtn) clearCacheBtn.style.display = cacheEnt ? 'flex' : 'none';
               }
               
               if (existingPlaylistSelect) {
@@ -1203,6 +1208,14 @@ class CuboAICameraCard extends HTMLElement {
                 this._hass.callService('switch', cacheOn ? 'turn_off' : 'turn_on', { entity_id: cacheEnt });
                 // Give HA a moment to process, then refresh the label
                 setTimeout(() => { try { renderSongs(); } catch (e) {} }, 600);
+              }
+            });
+          }
+
+          if (clearCacheBtn) {
+            clearCacheBtn.addEventListener('click', () => {
+              if (this._hass && window.confirm('Delete all locally cached YouTube/Spotify songs?')) {
+                this._hass.callService('cuboai', 'clear_youtube_cache', {});
               }
             });
           }
