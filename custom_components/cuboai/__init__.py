@@ -194,9 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if selected_ids is None:
                     # Entries created before camera selection existed: treat the
                     # currently configured cameras as the selection.
-                    selected_ids = [c["device_id"] for c in old_cameras] or [
-                        c["device_id"] for c in all_cameras
-                    ]
+                    selected_ids = [c["device_id"] for c in old_cameras] or [c["device_id"] for c in all_cameras]
 
                 new_cameras = [c for c in all_cameras if c["device_id"] in selected_ids]
                 unselected = [c["device_id"] for c in all_cameras if c["device_id"] not in selected_ids]
@@ -305,13 +303,9 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if data is not None:
         snapshot = data.get("options_snapshot", {})
         new_options = dict(entry.options)
-        changed_keys = {
-            k for k in set(snapshot) | set(new_options) if snapshot.get(k) != new_options.get(k)
-        }
+        changed_keys = {k for k in set(snapshot) | set(new_options) if snapshot.get(k) != new_options.get(k)}
         data["options_snapshot"] = new_options
-        if changed_keys and all(
-            k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys
-        ):
+        if changed_keys and all(k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys):
             # Auto-discovered camera IP written by the coordinator (it only ever
             # fills in previously-empty IPs): picked up on the next poll, no
             # reason to tear the whole integration down mid-refresh. A user

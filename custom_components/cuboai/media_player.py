@@ -230,9 +230,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             lullaby_entity_id = self.entity_id.replace("_speaker", "_lullaby")
             if self.hass.states.get(lullaby_entity_id):
                 try:
-                    await self.hass.services.async_call(
-                        "media_player", "media_stop", {"entity_id": lullaby_entity_id}
-                    )
+                    await self.hass.services.async_call("media_player", "media_stop", {"entity_id": lullaby_entity_id})
                 except Exception:
                     _LOGGER.exception("Failed to stop delegated lullaby")
 
@@ -377,13 +375,17 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                         return info.get("url", media_id)
                 except Exception as e:
                     import logging
+
                     _LOGGER = logging.getLogger(__name__)
                     _LOGGER.warning("yt-dlp extraction failed (%s), attempting automatic upgrade...", e)
                     import subprocess
                     import sys
+
                     try:
                         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"])
-                        _LOGGER.warning("yt-dlp was successfully upgraded! You must RESTART Home Assistant to apply the new version.")
+                        _LOGGER.warning(
+                            "yt-dlp was successfully upgraded! You must RESTART Home Assistant to apply the new version."
+                        )
                     except Exception as upgrade_err:
                         _LOGGER.error("Failed to upgrade yt-dlp: %s", upgrade_err)
                     # We cannot hot-reload yt-dlp, so we just raise the original error for now
@@ -464,9 +466,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     # open() blocks — do it in the executor, and close our copy
                     # right after spawning (the child duplicates the fd).
                     log_path = self.hass.config.path("cuboai_debug.log")
-                    stderr_dest = await self.hass.async_add_executor_job(
-                        functools.partial(open, log_path, "a")
-                    )
+                    stderr_dest = await self.hass.async_add_executor_job(functools.partial(open, log_path, "a"))
                 else:
                     stderr_dest = asyncio.subprocess.DEVNULL
 

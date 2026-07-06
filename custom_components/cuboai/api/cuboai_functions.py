@@ -46,6 +46,7 @@ def _extract_lan_ip(candidate, haystack_json: str):
             return found
     return None
 
+
 # New portable paths (set by __init__.py using hass.config.path())
 ACCESS_TOKEN_FILE = None
 REFRESH_TOKEN_FILE = None

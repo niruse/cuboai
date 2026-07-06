@@ -277,9 +277,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._auth_data["cameras"] = [c for c in all_cameras if c["device_id"] in selected]
                 return await self.async_step_config()
 
-        schema = vol.Schema(
-            {vol.Required("cameras", default=list(options_map)): cv.multi_select(options_map)}
-        )
+        schema = vol.Schema({vol.Required("cameras", default=list(options_map)): cv.multi_select(options_map)})
         return self.async_show_form(step_id="select_cameras", data_schema=schema, errors=errors)
 
     async def async_step_config(self, user_input=None):
@@ -300,9 +298,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = {
             vol.Required("download_images", default=True): bool,
             vol.Optional("enable_debug_logs", default=False): bool,
-            vol.Required("rtsp_port", default=default_port): vol.All(
-                vol.Coerce(int), vol.Range(min=1024, max=65535)
-            ),
+            vol.Required("rtsp_port", default=default_port): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
             vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
             vol.Required("max_saved_photos", default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
             vol.Required("hours_back", default=12): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
@@ -362,9 +358,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
         # configured ones pre-checked. Unchecking removes a camera; checking a
         # new one adds it (nothing is added automatically at runtime).
         all_cameras = self.config_entry.data.get("all_cameras") or cameras
-        camera_options = {
-            c["device_id"]: f"{c.get('baby_name', 'Camera')} ({c['device_id']})" for c in all_cameras
-        }
+        camera_options = {c["device_id"]: f"{c.get('baby_name', 'Camera')} ({c['device_id']})" for c in all_cameras}
         currently_selected = [c["device_id"] for c in cameras if c["device_id"] in camera_options]
 
         schema = {
