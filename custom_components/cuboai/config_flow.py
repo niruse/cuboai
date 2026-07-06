@@ -138,7 +138,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "user_agent": user_agent,
                     "cameras": cameras,
                 }
-                return await self.async_step_config()
+                return await self.async_step_select_cameras()
 
             except Exception as e:
                 error_str = str(e)
@@ -223,7 +223,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "user_agent": self._user_agent,
                     "cameras": cameras,
                 }
-                return await self.async_step_config()
+                return await self.async_step_select_cameras()
 
             except Exception as e:
                 error_str = str(e)
@@ -250,6 +250,37 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="mfa", data_schema=MFA_SCHEMA, errors=errors, description_placeholders=description_placeholders
         )
+
+    async def async_step_select_cameras(self, user_input=None):
+        """Let the user choose which of the account's cameras to add.
+
+        Nothing is added automatically: all discovered cameras are listed
+        (pre-checked) and only the ones the user confirms are set up. The
+        full list is kept in the entry so unselected cameras can be added
+        later from the Options flow.
+        """
+        import homeassistant.helpers.config_validation as cv
+
+        all_cameras = self._auth_data.get("all_cameras") or self._auth_data.get("cameras", [])
+        options_map = {
+            cam["device_id"]: f"{cam.get('baby_name', 'Camera')} ({cam['device_id']})" for cam in all_cameras
+        }
+        errors = {}
+
+        if user_input is not None:
+            selected = user_input.get("cameras", [])
+            if not selected:
+                errors["base"] = "no_cameras_selected"
+            else:
+                self._auth_data["all_cameras"] = all_cameras
+                self._auth_data["selected_camera_ids"] = selected
+                self._auth_data["cameras"] = [c for c in all_cameras if c["device_id"] in selected]
+                return await self.async_step_config()
+
+        schema = vol.Schema(
+            {vol.Required("cameras", default=list(options_map)): cv.multi_select(options_map)}
+        )
+        return self.async_show_form(step_id="select_cameras", data_schema=schema, errors=errors)
 
     async def async_step_config(self, user_input=None):
         """Handle configuration options step."""
@@ -303,6 +334,15 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         setup_file_logger(self.hass)
         if user_input is not None:
+            # Camera selection is stored in entry DATA (it defines which devices
+            # exist), the rest are regular options.
+            selected = user_input.pop("cameras", None)
+            if selected is not None:
+                all_cams = self.config_entry.data.get("all_cameras") or self.config_entry.data.get("cameras", [])
+                new_data = dict(self.config_entry.data)
+                new_data["selected_camera_ids"] = selected
+                new_data["cameras"] = [c for c in all_cams if c["device_id"] in selected]
+                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             return self.async_create_entry(title="", data=user_input)
 
         cameras = self.config_entry.data.get("cameras", [])
@@ -314,7 +354,19 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             # Binds sockets to probe ports — keep it off the event loop.
             default_port = await self.hass.async_add_executor_job(find_available_port)
 
+        import homeassistant.helpers.config_validation as cv
+
+        # Camera picker: every camera on the account, with the currently
+        # configured ones pre-checked. Unchecking removes a camera; checking a
+        # new one adds it (nothing is added automatically at runtime).
+        all_cameras = self.config_entry.data.get("all_cameras") or cameras
+        camera_options = {
+            c["device_id"]: f"{c.get('baby_name', 'Camera')} ({c['device_id']})" for c in all_cameras
+        }
+        currently_selected = [c["device_id"] for c in cameras if c["device_id"] in camera_options]
+
         schema = {
+            vol.Required("cameras", default=currently_selected): cv.multi_select(camera_options),
             vol.Required(
                 "download_images",
                 default=self.config_entry.options.get(

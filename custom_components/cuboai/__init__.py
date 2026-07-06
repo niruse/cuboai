@@ -183,9 +183,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise
 
             if device_map:
-                new_cameras = list(device_map)
-
+                all_cameras = list(device_map)
                 old_cameras = entry.data.get("cameras", [])
+
+                # Cameras are NEVER added automatically: only the ones the user
+                # selected (config/options flow) are managed. New cameras on the
+                # account are stored in all_cameras so the Options flow can offer
+                # them, but they are not set up until the user checks them.
+                selected_ids = entry.data.get("selected_camera_ids")
+                if selected_ids is None:
+                    # Entries created before camera selection existed: treat the
+                    # currently configured cameras as the selection.
+                    selected_ids = [c["device_id"] for c in old_cameras] or [
+                        c["device_id"] for c in all_cameras
+                    ]
+
+                new_cameras = [c for c in all_cameras if c["device_id"] in selected_ids]
+                unselected = [c["device_id"] for c in all_cameras if c["device_id"] not in selected_ids]
+                if unselected:
+                    _LOGGER.info(
+                        "Cameras on the account NOT added (select them in the integration Options to add): %s",
+                        unselected,
+                    )
+
                 # Never shrink the camera list from a single startup fetch: a camera
                 # that is transiently offline (or whose state query failed) would be
                 # dropped from the entry, deleting its entities and credentials.
@@ -198,7 +218,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         )
                         new_cameras.append(old)
 
-                if sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(
+                account_ids_changed = sorted(c["device_id"] for c in all_cameras) != sorted(
+                    c["device_id"] for c in entry.data.get("all_cameras", [])
+                )
+                if account_ids_changed or sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(
                     old_cameras, key=lambda c: c["device_id"]
                 ):
                     # Log device ids only — the full dicts contain admin passwords.
@@ -208,6 +231,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                     new_data = dict(entry.data)
                     new_data["cameras"] = new_cameras
+                    new_data["all_cameras"] = all_cameras
+                    new_data["selected_camera_ids"] = selected_ids
                     new_data["access_token"] = latest_access
                     new_data["refresh_token"] = latest_refresh
                     hass.config_entries.async_update_entry(entry, data=new_data)

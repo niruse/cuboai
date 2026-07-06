@@ -16,6 +16,13 @@
           "mfa_code": "Verification Code"
         }
       },
+      "select_cameras": {
+        "title": "Select Cameras",
+        "description": "Choose which cameras from your CuboAI account to add. Nothing is added automatically — you can change this later in the integration Options.",
+        "data": {
+          "cameras": "Cameras to add"
+        }
+      },
       "config": {
         "title": "Configure CuboAI Integration",
         "description": "Configure the alert and download behavior for your CuboAI cameras.",
@@ -28,6 +35,7 @@
       }
     },
     "error": {
+      "no_cameras_selected": "Select at least one camera to add.",
       "auth_failed": "Authentication failed. Please check your credentials.",
       "invalid_mfa_code": "Invalid verification code. Please try again.",
       "mfa_code_expired": "Verification code expired. Please restart setup.",
@@ -45,6 +53,7 @@
       "init": {
         "title": "CuboAI Options",
         "data": {
+          "cameras": "Cameras to add (uncheck to remove)",
           "download_images": "Download alert images locally",
           "alerts_count": "Number of alerts to retain in state attributes",
           "hours_back": "Time window to check for alerts (hours)",
