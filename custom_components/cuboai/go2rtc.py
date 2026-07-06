@@ -1,12 +1,24 @@
 import asyncio
 import logging
 import os
+import socket
 import sys
 
 import yaml
 from homeassistant.core import HomeAssistant
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
+
+
+def _port_bindable(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            return False
 
 
 class Go2RTCManager:
@@ -71,9 +83,59 @@ class Go2RTCManager:
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
+    async def _resolve_ports(self):
+        """Resolve the ports go2rtc will ACTUALLY be able to bind.
+
+        On Home Assistant OS the built-in go2rtc already occupies TCP 8555
+        (its WebRTC listener), so our RTSP listener silently failed to bind
+        while the API kept answering — every RTSP consumer then got
+        'connection reset by peer' (issue #80). Verify the configured ports
+        are free BEFORE starting and self-heal to nearby free ones, then
+        publish the effective RTSP port so the camera/sensor attributes (and
+        therefore the card) all point at the right place.
+        """
+        from .utils import find_available_port
+
+        desired_rtsp = int(self._options.get("rtsp_port", 8555))
+        desired_webrtc = 8556
+
+        def _resolve():
+            rtsp = desired_rtsp
+            if not _port_bindable(rtsp):
+                rtsp = find_available_port(start_port=desired_rtsp + 1)
+            webrtc = desired_webrtc
+            if webrtc == rtsp or not _port_bindable(webrtc):
+                webrtc = find_available_port(start_port=desired_webrtc + 2)
+            api_ok = _port_bindable(1985)
+            return rtsp, webrtc, api_ok
+
+        rtsp_port, webrtc_port, api_ok = await self.hass.async_add_executor_job(_resolve)
+
+        if rtsp_port != desired_rtsp:
+            _LOGGER.warning(
+                "RTSP port %s is already in use (typically Home Assistant's built-in "
+                "go2rtc WebRTC listener) — using port %s instead. The camera and card "
+                "follow automatically via the rtsp_port attribute.",
+                desired_rtsp,
+                rtsp_port,
+            )
+        if not api_ok:
+            _LOGGER.error(
+                "go2rtc API port 1985 is already in use by another process — "
+                "CuboAI streaming will not work until it is freed."
+            )
+
+        self._rtsp_port = rtsp_port
+        self._webrtc_port = webrtc_port
+        # Single source of truth for every rtsp_port consumer (camera
+        # stream_source, entity attributes, and through them the card).
+        self.hass.data.setdefault(DOMAIN, {})["rtsp_port_effective"] = rtsp_port
+        return rtsp_port, webrtc_port
+
     async def _generate_config(self):
         """Generate the go2rtc.yaml file."""
-        rtsp_port = self._options.get("rtsp_port", 8555)
+        rtsp_port = getattr(self, "_rtsp_port", None) or self._options.get("rtsp_port", 8555)
+        webrtc_port = getattr(self, "_webrtc_port", 8556)
         config = {
             "api": {
                 # All interfaces: the frontend card / webrtc integration reach this
@@ -85,7 +147,7 @@ class Go2RTCManager:
                 "listen": f":{rtsp_port}",
             },
             "webrtc": {
-                "listen": ":8556",
+                "listen": f":{webrtc_port}",
             },
         }
         if "streams" not in config:
@@ -119,11 +181,14 @@ class Go2RTCManager:
             _LOGGER.error("go2rtc binary not found at %s. Stream cannot start.", self._binary_path)
             return
 
-        await self._resolve_codecs()
-        await self._generate_config()
-
+        # Stop any previous instance FIRST so the port probe below doesn't
+        # mistake our own listeners for a conflict and hop ports on reload.
         if self.process:
             await self.stop()
+
+        await self._resolve_ports()
+        await self._resolve_codecs()
+        await self._generate_config()
 
         log_file_path = os.path.join(os.path.dirname(self._config_path), "go2rtc.log")
         _LOGGER.info("Starting internal go2rtc streaming server (log: %s)...", log_file_path)

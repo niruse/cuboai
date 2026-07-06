@@ -99,8 +99,9 @@ def find_available_port(start_port=8555, max_port=8600):
 
     Binds sockets, so call from an executor when on the event loop.
     """
-    # Ignore standard Home Assistant ports
-    IGNORE_PORTS = {8123, 4357, 8554, 1984, 8443, 5683, 5353}
+    # Ignore standard Home Assistant ports, HA's built-in go2rtc (1984/8554/8555
+    # is probed dynamically), and CuboAI's own API/WebRTC listeners (1985/8556)
+    IGNORE_PORTS = {8123, 4357, 8554, 1984, 1985, 8443, 5683, 5353, 8556}
     for port in range(start_port, max_port):
         if port in IGNORE_PORTS:
             continue

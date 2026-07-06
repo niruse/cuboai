@@ -36,12 +36,16 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         self._attr_unique_id = f"cuboai_local_camera_{self._device_id}"
         self._attr_is_streaming = True
 
-    @property
-    def extra_state_attributes(self):
-        rtsp_port = self.coordinator.config_entry.options.get(
+    def _effective_rtsp_port(self) -> int:
+        """The port go2rtc actually bound (it self-heals on conflicts, e.g.
+        HA's built-in go2rtc holding 8555), falling back to the configured one."""
+        return self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective") or self.coordinator.config_entry.options.get(
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
-        return {"device_id": self._device_id, "uid": self._device_id, "rtsp_port": rtsp_port}
+
+    @property
+    def extra_state_attributes(self):
+        return {"device_id": self._device_id, "uid": self._device_id, "rtsp_port": self._effective_rtsp_port()}
 
     @property
     def supported_features(self) -> int:
@@ -105,9 +109,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         """Return the stream source."""
         # This connects to our internal go2rtc instance via RTSP
         # We use the combined stream to support two-way audio (microphone)
-        rtsp_port = self.coordinator.config_entry.options.get(
-            "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
-        )
+        rtsp_port = self._effective_rtsp_port()
 
         # Pre-warm the go2rtc producer: on a cold start the pure-python engine
         # needs several seconds to connect to the camera and deliver the first

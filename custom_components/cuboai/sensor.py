@@ -485,7 +485,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        rtsp_port = self.coordinator.config_entry.options.get(
+        # Prefer the port go2rtc actually bound (self-healed on conflicts)
+        rtsp_port = self.hass.data.get(DOMAIN, {}).get(
+            "rtsp_port_effective"
+        ) or self.coordinator.config_entry.options.get(
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
         return {
