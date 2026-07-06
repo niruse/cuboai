@@ -108,6 +108,26 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         rtsp_port = self.coordinator.config_entry.options.get(
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
+
+        # Pre-warm the go2rtc producer: on a cold start the pure-python engine
+        # needs several seconds to connect to the camera and deliver the first
+        # HEVC keyframe — longer than the HLS stream worker's demux timeout,
+        # which then logs "Error demuxing stream (Operation timed out)" and
+        # retries. Requesting a frame first blocks until the producer is live,
+        # so the RTSP consumer gets packets immediately. Best-effort only.
+        try:
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_combined_{self._device_id}",
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                await resp.read()
+        except Exception as e:
+            _LOGGER.debug("Stream pre-warm failed (continuing anyway): %s", e)
+
         return f"rtsp://127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
     async def _go2rtc_webrtc_offer(self, offer_sdp: str) -> str | None:
