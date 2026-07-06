@@ -284,11 +284,27 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 cookie_path = self.hass.config.path("cuboai_cookies.txt")
                 if os.path.exists(cookie_path):
                     ydl_opts["cookiefile"] = cookie_path
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(media_id, download=False)
-                    if "entries" in info and len(info["entries"]) > 0:
-                        info = info["entries"][0]
-                    return info.get("url", media_id)
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(media_id, download=False)
+                        if "entries" in info and len(info["entries"]) > 0:
+                            info = info["entries"][0]
+                        return info.get("url", media_id)
+                except Exception as e:
+                    import logging
+                    _LOGGER = logging.getLogger(__name__)
+                    _LOGGER.warning("yt-dlp extraction failed (%s), attempting automatic self-healing upgrade...", e)
+                    import subprocess
+                    import sys
+                    import importlib
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"])
+                    yt_dlp = importlib.reload(yt_dlp)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(media_id, download=False)
+                        if "entries" in info and len(info["entries"]) > 0:
+                            info = info["entries"][0]
+                        return info.get("url", media_id)
 
             media_id = await self.hass.async_add_executor_job(_extract_yt_url)
 
