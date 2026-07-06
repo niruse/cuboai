@@ -461,6 +461,9 @@ class CuboAICameraCard extends HTMLElement {
                 <button id="toggleRepeatBtn" class="cubo-btn cubo-btn-sec" style="padding: 2px 6px; font-size: 11px; display: flex; align-items: center; gap: 4px;">
                   <ha-icon icon="mdi:repeat" style="--mdc-icon-size: 14px;"></ha-icon> <span>Repeat: OFF</span>
                 </button>
+                <button id="toggleCacheBtn" class="cubo-btn cubo-btn-sec" style="padding: 2px 6px; font-size: 11px; display: none; align-items: center; gap: 4px;" title="Save YouTube/Spotify songs to local cache">
+                  <ha-icon icon="mdi:download" style="--mdc-icon-size: 14px;"></ha-icon> <span>Cache: OFF</span>
+                </button>
                 <select id="playTimeSelect" class="cubo-select" style="padding: 2px; font-size: 11px; min-height: unset; height: auto; max-width: 130px;" title="Speaker Play Time">
                   <option value="0">Play Time: Infinite</option>
                   <option value="10">10 mins</option>
@@ -559,7 +562,17 @@ class CuboAICameraCard extends HTMLElement {
           const cancelSavePlaylistBtn = this.musicBar.querySelector('#cancelSavePlaylistBtn');
           const toggleShuffleBtn = this.musicBar.querySelector('#toggleShuffleBtn');
           const toggleRepeatBtn = this.musicBar.querySelector('#toggleRepeatBtn');
+          const toggleCacheBtn = this.musicBar.querySelector('#toggleCacheBtn');
           const playTimeSelect = this.musicBar.querySelector('#playTimeSelect');
+
+          // The global "Cache YouTube Songs" switch entity (entity_id differs
+          // between old installs and new ones with the Media Library device).
+          const findCacheSwitch = () => {
+            if (!this._hass) return null;
+            return Object.keys(this._hass.states).find(
+              id => id.startsWith('switch.') && id.includes('cache_youtube_songs')
+            ) || null;
+          };
           
           const newSongName = this.musicBar.querySelector('#newSongName');
           const newSongUrl = this.musicBar.querySelector('#newSongUrl');
@@ -639,6 +652,12 @@ class CuboAICameraCard extends HTMLElement {
                 let rColor = this._repeatMode === 'off' ? 'inherit' : '#4caf50';
                 let rIcon = this._repeatMode === 'one' ? 'mdi:repeat-once' : 'mdi:repeat';
                 toggleRepeatBtn.innerHTML = `<ha-icon icon="${rIcon}" style="--mdc-icon-size: 14px; color: ${rColor};"></ha-icon> <span>Repeat: ${this._repeatMode.toUpperCase()}</span>`;
+              }
+              if (toggleCacheBtn) {
+                const cacheEnt = findCacheSwitch();
+                const cacheOn = cacheEnt && this._hass.states[cacheEnt].state === 'on';
+                toggleCacheBtn.style.display = cacheEnt ? 'flex' : 'none';
+                toggleCacheBtn.innerHTML = `<ha-icon icon="mdi:download" style="--mdc-icon-size: 14px; color: ${cacheOn ? '#4caf50' : 'inherit'};"></ha-icon> <span>Cache: ${cacheOn ? 'ON' : 'OFF'}</span>`;
               }
               
               if (existingPlaylistSelect) {
@@ -1137,6 +1156,18 @@ class CuboAICameraCard extends HTMLElement {
               this._shuffleMode = !this._shuffleMode;
               localStorage.setItem(`cuboai_shuffle_${deviceId}`, this._shuffleMode);
               renderSongs();
+            });
+          }
+
+          if (toggleCacheBtn) {
+            toggleCacheBtn.addEventListener('click', () => {
+              const cacheEnt = findCacheSwitch();
+              if (cacheEnt && this._hass) {
+                const cacheOn = this._hass.states[cacheEnt].state === 'on';
+                this._hass.callService('switch', cacheOn ? 'turn_off' : 'turn_on', { entity_id: cacheEnt });
+                // Give HA a moment to process, then refresh the label
+                setTimeout(() => { try { renderSongs(); } catch (e) {} }, 600);
+              }
             });
           }
           

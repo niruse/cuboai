@@ -339,6 +339,27 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 new_data["selected_camera_ids"] = selected
                 new_data["cameras"] = [c for c in all_cams if c["device_id"] in selected]
                 self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+
+            # The YouTube/Spotify cache is owned by the Cache YouTube Songs
+            # switch entity (single source of truth, restored across restarts);
+            # this checkbox is just a second way to flip it.
+            cache_flag = user_input.pop("cache_youtube_songs", None)
+            if cache_flag is not None:
+                current = self.hass.data.get(DOMAIN, {}).get("youtube_cache_enabled", False)
+                if cache_flag != current:
+                    from homeassistant.helpers import entity_registry as er
+
+                    ent_id = er.async_get(self.hass).async_get_entity_id("switch", DOMAIN, "cuboai_youtube_cache")
+                    if ent_id:
+                        await self.hass.services.async_call(
+                            "switch",
+                            "turn_on" if cache_flag else "turn_off",
+                            {"entity_id": ent_id},
+                            blocking=True,
+                        )
+                    else:
+                        self.hass.data.setdefault(DOMAIN, {})["youtube_cache_enabled"] = cache_flag
+
             return self.async_create_entry(title="", data=user_input)
 
         cameras = self.config_entry.data.get("cameras", [])
@@ -368,6 +389,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 default=self.config_entry.options.get(
                     "download_images", self.config_entry.data.get("download_images", True)
                 ),
+            ): bool,
+            vol.Optional(
+                "cache_youtube_songs",
+                default=bool(self.hass.data.get(DOMAIN, {}).get("youtube_cache_enabled", False)),
             ): bool,
             vol.Optional(
                 "enable_debug_logs",
