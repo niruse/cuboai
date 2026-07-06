@@ -2,6 +2,7 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -26,6 +27,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     if switches:
         async_add_entities(switches)
+        
+    # We only need one global cache switch, we can just add it once per integration setup
+    async_add_entities([CuboYouTubeCacheSwitch()])
 
 
 def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
@@ -121,6 +125,41 @@ def _set_status_led(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ, payload)
     except Exception as e:
         _LOGGER.error(f"Failed to set status led: {e}")
+
+
+class CuboYouTubeCacheSwitch(RestoreEntity, SwitchEntity):
+    """Switch to toggle local caching of YouTube songs."""
+
+    def __init__(self):
+        self._attr_has_entity_name = True
+        self._attr_name = "Cache YouTube Songs"
+        self._attr_unique_id = "cuboai_youtube_cache"
+        self._attr_icon = "mdi:youtube"
+        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_is_on = False
+
+    async def async_added_to_hass(self):
+        """Restore state on startup."""
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state:
+            self._attr_is_on = state.state == "on"
+            self.hass.data.setdefault(DOMAIN, {})
+            self.hass.data[DOMAIN]["youtube_cache_enabled"] = self._attr_is_on
+
+    async def async_turn_on(self, **kwargs):
+        """Turn caching on."""
+        self._attr_is_on = True
+        self.hass.data.setdefault(DOMAIN, {})
+        self.hass.data[DOMAIN]["youtube_cache_enabled"] = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs):
+        """Turn caching off."""
+        self._attr_is_on = False
+        self.hass.data.setdefault(DOMAIN, {})
+        self.hass.data[DOMAIN]["youtube_cache_enabled"] = False
+        self.async_write_ha_state()
 
 
 class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):

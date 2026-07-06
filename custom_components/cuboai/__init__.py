@@ -209,6 +209,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.debug("Forwarding entry setups...")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
+    async def handle_clear_youtube_cache(call):
+        import shutil
+        import os
+        cache_dir = hass.config.path("www", "cuboai_cache")
+        if os.path.exists(cache_dir):
+            await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
+    
+    hass.services.async_register(DOMAIN, "clear_youtube_cache", handle_clear_youtube_cache)
+    
     _LOGGER.debug("CuboAI async_setup_entry finished successfully.")
     return True
 

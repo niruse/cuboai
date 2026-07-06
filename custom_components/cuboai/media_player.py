@@ -279,15 +279,43 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     import yt_dlp
 
                 import os
+                import hashlib
+                import glob
+
+                is_caching_enabled = self.hass.data.get("cuboai", {}).get("youtube_cache_enabled", False)
+                cache_dir = self.hass.config.path("www", "cuboai_cache")
+                
+                if is_caching_enabled and not os.path.exists(cache_dir):
+                    try:
+                        os.makedirs(cache_dir, exist_ok=True)
+                    except Exception:
+                        pass
+                        
+                cache_hash = hashlib.md5(media_id.encode()).hexdigest()
+                
+                if is_caching_enabled:
+                    existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
+                    if existing:
+                        ext = existing[0].split(".")[-1]
+                        return f"http://127.0.0.1:8123/local/cuboai_cache/{cache_hash}.{ext}"
 
                 ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
+                if is_caching_enabled:
+                    ydl_opts["outtmpl"] = os.path.join(cache_dir, f"{cache_hash}.%(ext)s")
+
                 cookie_path = self.hass.config.path("cuboai_cookies.txt")
                 if os.path.exists(cookie_path):
                     ydl_opts["cookiefile"] = cookie_path
                 
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(media_id, download=False)
+                        info = ydl.extract_info(media_id, download=is_caching_enabled)
+                        if is_caching_enabled:
+                            existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
+                            if existing:
+                                ext = existing[0].split(".")[-1]
+                                return f"http://127.0.0.1:8123/local/cuboai_cache/{cache_hash}.{ext}"
+                        
                         if "entries" in info and len(info["entries"]) > 0:
                             info = info["entries"][0]
                         return info.get("url", media_id)
