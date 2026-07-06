@@ -633,9 +633,13 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         }
 
     # ── HA-enforced lullaby stop timer ────────────────────────────────────
-    # The camera firmware only supports a few fixed lullaby durations, so the
-    # camera always plays in repeat-forever mode and Home Assistant sends the
-    # stop command when the Lullaby Timer expires — any duration works.
+    # The camera firmware only supports a few fixed lullaby durations, so
+    # lullabies STARTED FROM HOME ASSISTANT play in the camera's
+    # repeat-forever mode and Home Assistant sends the stop command when the
+    # Lullaby Timer expires — any duration works. Lullabies started from the
+    # CuboAI app (or the camera's own schedule) keep the app's timer and are
+    # never touched by this mechanism: the scheduled stop only exists for
+    # HA-initiated playback and double-checks the playing song before firing.
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -651,11 +655,14 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @callback
     def _on_timer_changed(self, minutes):
-        """Timer number changed: reschedule the stop if a lullaby is playing."""
-        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {}) if self.coordinator.data else {}
-        if cam.get("local", {}).get("lullaby_playing") or getattr(self, "_stop_timer_task", None):
+        """Timer number changed: reschedule only an HA-owned scheduled stop.
+
+        A lullaby started from the CuboAI app is governed by the app's own
+        timer — changing the HA timer must not schedule a stop for it.
+        """
+        if getattr(self, "_stop_timer_task", None):
             _LOGGER.info("Lullaby timer changed to %s min while playing — rescheduling stop", minutes)
-            self._schedule_stop(minutes)
+            self._schedule_stop(minutes, getattr(self, "_ha_started_uuid", None))
 
     def _cancel_scheduled_stop(self):
         import asyncio
@@ -664,17 +671,35 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         if task and task is not asyncio.current_task():
             task.cancel()
         self._stop_timer_task = None
+        self._ha_started_uuid = None
 
-    def _schedule_stop(self, minutes):
+    def _schedule_stop(self, minutes, started_uuid):
         self._cancel_scheduled_stop()
         if minutes and minutes > 0:
+            self._ha_started_uuid = started_uuid
             self._stop_timer_task = self.hass.async_create_task(self._stop_after(minutes))
 
     async def _stop_after(self, minutes):
         import asyncio
 
         await asyncio.sleep(minutes * 60)
+        started_uuid = getattr(self, "_ha_started_uuid", None)
         self._stop_timer_task = None
+
+        # Only stop what WE started: if the app/schedule switched to another
+        # song meanwhile (or playback already ended), leave it alone.
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {}) if self.coordinator.data else {}
+        local = cam.get("local", {})
+        if local.get("lullaby_playing") is False:
+            _LOGGER.info("Lullaby timer expired (%s min) — playback already stopped", minutes)
+            return
+        current = (local.get("lullaby_song") or "").upper()
+        if started_uuid and current and current != started_uuid.upper():
+            _LOGGER.info(
+                "Lullaby timer expired (%s min) but a different song is playing (started elsewhere) — not stopping",
+                minutes,
+            )
+            return
         _LOGGER.info("Lullaby timer expired (%s min) — sending stop to camera", minutes)
         await self.async_media_stop()
 
@@ -692,7 +717,8 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         await self.hass.async_add_executor_job(
             _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", None, None, None
         )
-        self._schedule_stop(timer)
+        # No explicit song: the camera falls back to the first catalog entry
+        self._schedule_stop(timer, list(LULLABY_CATALOG.keys())[0])
         try:
             await self.coordinator.async_request_refresh()
         except Exception:
@@ -743,7 +769,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 None,
                 None,
             )
-            self._schedule_stop(timer)
+            self._schedule_stop(timer, uuid)
             try:
                 await self.coordinator.async_request_refresh()
             except Exception:
@@ -765,7 +791,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 None,
                 None,
             )
-            self._schedule_stop(timer)
+            self._schedule_stop(timer, uuid)
             try:
                 await self.coordinator.async_request_refresh()
             except Exception:
