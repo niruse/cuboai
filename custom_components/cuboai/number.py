@@ -41,9 +41,11 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._attr_unique_id = f"cuboai_lullaby_timer_{self._device_id}"
         self._attr_icon = "mdi:timer-music"
 
+        # Same range as the Speaker Play Time so the card's single Play Time
+        # dropdown can drive both timers (0 = repeat forever).
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 60
-        self._attr_native_step = 30
+        self._attr_native_max_value = 120
+        self._attr_native_step = 10
         self._attr_native_unit_of_measurement = "min"
 
         self._timer_value = 30
@@ -65,7 +67,12 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._timer_value = int(value)
         self.async_write_ha_state()
 
+        # Only contact the camera when a lullaby is currently playing (to adjust
+        # its remaining time). Otherwise the timer is applied by the next play
+        # command anyway — no reason to open a camera session per change.
         cam_data = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        if not cam_data.get("local", {}).get("lullaby_playing"):
+            return
         vol = cam_data.get("local", {}).get("lullaby_volume", 50)
 
         from .media_player import _execute_lullaby_cmd
