@@ -77,8 +77,23 @@ class CuboAICameraCardEditor extends HTMLElement {
           <option value="me">My Playlists</option>
         </select>
 
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
+          <label style="display: block; font-weight: 500; margin-bottom: 8px;">Song Cache:</label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;">
+            <input type="checkbox" id="cache-toggle">
+            <span>Save YouTube/Spotify songs to local cache</span>
+          </label>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="clear-cache-btn" style="padding: 8px 14px; border-radius: 4px; border: none; background: var(--error-color, #f44336); color: white; font-weight: 500; cursor: pointer;">Clear Song Cache</button>
+            <span id="clear-cache-status" style="font-size: 12px; color: var(--secondary-text-color);"></span>
+          </div>
+          <p style="color: var(--secondary-text-color); font-size: 12px; margin-top: 8px;">
+            These are global settings — they apply to all cameras and all CuboAI cards.
+          </p>
+        </div>
+
         <p style="color: var(--secondary-text-color); font-size: 12px; margin-top: 12px;">
-          Note: By default, the card will automatically find and display the first camera on your account. 
+          Note: By default, the card will automatically find and display the first camera on your account.
           Use the dropdown above if you have multiple cameras and want to pin this card to a specific one.
         </p>
       </div>
@@ -106,6 +121,42 @@ class CuboAICameraCardEditor extends HTMLElement {
     if (plFilter) {
       plFilter.value = this._config ? (this._config.default_playlist_filter || 'all') : 'all';
       plFilter.addEventListener('change', (e) => this._valueChanged(e));
+    }
+
+    // Global song-cache controls (drive the shared switch entity / service,
+    // not the per-card config)
+    const findCacheSwitch = () => {
+      if (!this._hass) return null;
+      return Object.keys(this._hass.states).find(
+        id => id.startsWith('switch.') && id.includes('cache_youtube')
+      ) || null;
+    };
+
+    const cacheToggle = this.querySelector('#cache-toggle');
+    if (cacheToggle) {
+      const cacheEnt = findCacheSwitch();
+      if (cacheEnt) {
+        cacheToggle.checked = this._hass.states[cacheEnt].state === 'on';
+        cacheToggle.addEventListener('change', () => {
+          this._hass.callService('switch', cacheToggle.checked ? 'turn_on' : 'turn_off', { entity_id: cacheEnt });
+        });
+      } else {
+        cacheToggle.disabled = true;
+      }
+    }
+
+    const clearCacheBtn = this.querySelector('#clear-cache-btn');
+    const clearCacheStatus = this.querySelector('#clear-cache-status');
+    if (clearCacheBtn) {
+      clearCacheBtn.addEventListener('click', () => {
+        if (this._hass && window.confirm('Delete all locally cached YouTube/Spotify songs?')) {
+          this._hass.callService('cuboai', 'clear_youtube_cache', {});
+          if (clearCacheStatus) {
+            clearCacheStatus.textContent = 'Cache cleared ✓';
+            setTimeout(() => { clearCacheStatus.textContent = ''; }, 4000);
+          }
+        }
+      });
     }
   }
 
