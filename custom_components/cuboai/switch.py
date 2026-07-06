@@ -147,6 +147,17 @@ class CuboYouTubeCacheSwitch(RestoreEntity, SwitchEntity):
         self._attr_entity_category = EntityCategory.CONFIG
         self._attr_is_on = False
 
+    @property
+    def device_info(self):
+        # Group the global (non-camera) entities under a visible device so
+        # users can actually find this switch in the UI.
+        return {
+            "identifiers": {(DOMAIN, "cuboai_media_library")},
+            "name": "CuboAI Media Library",
+            "manufacturer": "CuboAI",
+            "model": "Media Library",
+        }
+
     async def async_added_to_hass(self):
         """Restore state on startup."""
         await super().async_added_to_hass()

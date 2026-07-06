@@ -120,6 +120,17 @@ class CuboMediaLibrarySensor(SensorEntity):
         self._attr_icon = "mdi:music-box-multiple"
         self._attr_native_value = "active"
 
+    @property
+    def device_info(self):
+        # Same virtual device as the Cache YouTube Songs switch so the global
+        # (non-camera) entities are discoverable in the UI.
+        return {
+            "identifiers": {(DOMAIN, "cuboai_media_library")},
+            "name": "CuboAI Media Library",
+            "manufacturer": "CuboAI",
+            "model": "Media Library",
+        }
+
     async def async_added_to_hass(self):
         """Run when entity about to be added to hass."""
         self.hass.data["cuboai_media_library_entity_id"] = self.entity_id
