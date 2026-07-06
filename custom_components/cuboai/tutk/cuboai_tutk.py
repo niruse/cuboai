@@ -71,6 +71,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import threading
 import time
 from ctypes import (
     POINTER, Structure, byref, cast,
@@ -186,6 +187,14 @@ def _load_redirect_shim(camera_ip: str) -> None:
             return
 
         import sys
+        # SAFETY: os.execve REPLACES the whole current process. That is only
+        # acceptable for the standalone stream/CLI scripts — never inside a
+        # host application (e.g. Home Assistant imports this module and runs
+        # sessions in executor threads; re-exec'ing would kill the host).
+        # Standalone scripts opt in by setting CUBOAI_ALLOW_REEXEC=1.
+        if os.environ.get('CUBOAI_ALLOW_REEXEC') != '1':
+            return
+
         env = os.environ.copy()
         existing = env.get('LD_PRELOAD', '')
         env['LD_PRELOAD'] = (SHIM_PATH + ':' + existing).strip(':')
@@ -271,6 +280,14 @@ class TUTKSession:
             jpeg = sess.snapshot()                      # HEVC → JPEG
     """
 
+    # The TUTK native library is a process-wide singleton with global state:
+    # IOTC_Initialize2/IOTC_DeInitialize are NOT thread-safe against concurrent
+    # sessions. Two threads each running their own TUTKSession (e.g. a
+    # coordinator poll and a lullaby command) segfault the whole process when
+    # one deinitializes while the other is inside connect()/ioctl(). Serialize
+    # the full session lifetime across all threads.
+    _GLOBAL_LOCK = threading.RLock()
+
     def __init__(self, uid: str, account: str, password: str,
                  lib_path: Optional[str] = None,
                  camera_ip: Optional[str] = None):
@@ -281,9 +298,20 @@ class TUTKSession:
         self._lib      = ctypes.CDLL(_find_library(lib_path))
         self._sid      = -1
         self._av_id    = -1
+        self._lock_held = False
 
     def connect(self, timeout_sec: int = 20) -> None:
         """Connect and open AV channel. Blocks ~2–5 s on LAN."""
+        if not self._lock_held:
+            TUTKSession._GLOBAL_LOCK.acquire()
+            self._lock_held = True
+        try:
+            self._connect_locked(timeout_sec)
+        except Exception:
+            self.disconnect()
+            raise
+
+    def _connect_locked(self, timeout_sec: int = 20) -> None:
         # Use camera_ip from constructor or environment (set after relaunch)
         cam_ip = self.camera_ip or os.environ.get('CUBOAI_CAMERA_IP')
         if cam_ip:
@@ -326,14 +354,19 @@ class TUTKSession:
             raise RuntimeError(f"avClientStartEx: {self._av_id}")
 
     def disconnect(self) -> None:
-        lib = self._lib
-        if self._av_id >= 0:
-            lib.avClientStop(self._av_id)
-            self._av_id = -1
-        if self._sid >= 0:
-            lib.IOTC_Session_Close(self._sid)
-            self._sid = -1
-        lib.IOTC_DeInitialize()
+        try:
+            lib = self._lib
+            if self._av_id >= 0:
+                lib.avClientStop(self._av_id)
+                self._av_id = -1
+            if self._sid >= 0:
+                lib.IOTC_Session_Close(self._sid)
+                self._sid = -1
+            lib.IOTC_DeInitialize()
+        finally:
+            if self._lock_held:
+                self._lock_held = False
+                TUTKSession._GLOBAL_LOCK.release()
 
     @property
     def connected(self) -> bool:
@@ -648,63 +681,17 @@ class TUTKSession:
         finally:
             stop.set()
 
-    def send_audio_file(self, path: str) -> None:
-        """Send an audio file to the camera speaker (talk-to-baby / two-way audio).
+    def send_audio_file(self, path: str, *args, **kwargs) -> None:
+        """NOT SUPPORTED on the native backend — two-way talk is a PURE-PYTHON-ONLY feature.
 
-        Transcodes the file to G.711 µ-law 8 kHz mono (the TUTK uplink format) and
-        sends it via avSendAudioData in real-time-paced chunks. Any format PyAV can
-        decode is accepted (WAV, MP3, M4A, OGG, ...).
-
-        Requires PyAV (`pip install av`). The transcode uses PyAV end-to-end; the
-        stdlib `audioop` µ-law encoder was removed in Python 3.13, so PyAV is the
-        forward-compatible path (and is already a project dependency).
-
-        Args:
-            path: Path to the audio file.
+        The camera's talk path needs the 4.3.x av-server grant (the e0fefe01 capability word)
+        that this lib (WYZE TUTK 4.2.1.1) omits, so the native avServStartEx times out
+        (-20011). The pure backend writes the grant itself; use it (omit lib_path /
+        CUBOAI_LIB) for talk. See cuboai_pure.TUTKDirectSession.send_audio_file.
         """
-        import struct as _s
-        from cuboai_pure import _file_to_ulaw_8k_mono
-
-        if not path.startswith("http"):
-            path = os.path.expanduser(path)
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Audio file not found: {path}")
-
-        # Transcode to raw G.711 µ-law, 8 kHz mono (shared with the pure backend).
-        ulaw_data = _file_to_ulaw_8k_mono(path)
-
-        # Send in 320-byte chunks (40ms at 8kHz)
-        CHUNK_SIZE = 320
-        lib = self._lib
-
-        # Build audio frame info struct (codec=1 for G711 ulaw, sample_rate=8000)
-        frame_info = (c_char * 256)()
-        # AudioFrameInfoStruct: codec_id(2) + channel(1) + date_type(1) + ...
-        _s.pack_into('<HBBi', frame_info, 0,
-                     1,     # codec_id=1 (MEDIA_CODEC_AUDIO_G711U)
-                     1,     # channel=1 (mono)
-                     0,     # data_type
-                     8000)  # sample_rate
-
-        lib.avSendAudioData.restype  = c_int
-        lib.avSendAudioData.argtypes = [
-            c_int, POINTER(c_char), c_int,
-            POINTER(c_char), c_int,
-        ]
-
-        import time as _t
-        for i in range(0, len(ulaw_data), CHUNK_SIZE):
-            chunk = ulaw_data[i:i + CHUNK_SIZE]
-            chunk_buf = (c_char * len(chunk))(*chunk)
-            r = lib.avSendAudioData(
-                self._av_id,
-                chunk_buf, len(chunk),
-                frame_info, 256,
-            )
-            if r < 0:
-                raise RuntimeError(f"avSendAudioData failed: {r}")
-            # Pace sending at 40ms per chunk (real-time)
-            _t.sleep(0.04)
+        raise NotImplementedError(
+            "two-way talk (send_audio_file) is pure-Python only — omit lib_path / CUBOAI_LIB "
+            "to use it (the native TUTK 4.2.1.1 lib can't perform the camera's talk handshake).")
 
     def video_frames(self, max_frames: Optional[int] = None):
         """Generator yielding raw HEVC frame bytes for live streaming."""

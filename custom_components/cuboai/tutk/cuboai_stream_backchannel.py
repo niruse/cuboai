@@ -36,7 +36,7 @@ def _handle_file_or_url(media_id, uid, account, password, camera_ip):
     audio_format = None
     audio_options = None
 
-    if "http" in media_id:
+    if media_id.startswith(("http://", "https://")):
         if "googlevideo.com" in media_id:
             # YouTube streams: pass directly to PyAV for live streaming with a valid User-Agent
             print("DEBUG: YouTube stream detected. Streaming directly via PyAV...", file=sys.stderr)
@@ -66,7 +66,8 @@ def _handle_file_or_url(media_id, uid, account, password, camera_ip):
 
         _send_file(sess, audio_path, audio_format, audio_options)
 
-    if media_id.startswith("http") and os.path.exists(audio_path):
+    # Only remove files we downloaded ourselves (never a caller-supplied local path)
+    if audio_path != media_id and os.path.exists(audio_path):
         os.remove(audio_path)
 
 

@@ -157,10 +157,12 @@ class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         bright_pct = int(value)
 
-        from .tutk.cuboai_messages import CuboAIClient
-        from .tutk.cuboai_session import get_session
-
         def _set_brightness():
+            # Imported here so the (potentially heavy) tutk modules load in the
+            # executor thread, not the event loop.
+            from .tutk.cuboai_messages import CuboAIClient
+            from .tutk.cuboai_session import get_session
+
             with get_session(
                 self._uid,
                 self._account,

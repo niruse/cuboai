@@ -395,4 +395,8 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    # Standalone process: allow the broadcast-redirect shim to re-exec us with
+    # LD_PRELOAD (blocked when this module is imported by a host application).
+    import os as _os
+    _os.environ.setdefault('CUBOAI_ALLOW_REEXEC', '1')
     main()

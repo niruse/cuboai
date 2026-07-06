@@ -27,9 +27,13 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     if switches:
         async_add_entities(switches)
-        
-    # We only need one global cache switch, we can just add it once per integration setup
-    async_add_entities([CuboYouTubeCacheSwitch()])
+
+    # We only need one global cache switch across all config entries — adding a
+    # second one would collide on its fixed unique_id.
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if not domain_data.get("_youtube_cache_switch_added"):
+        domain_data["_youtube_cache_switch_added"] = True
+        async_add_entities([CuboYouTubeCacheSwitch()])
 
 
 def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
@@ -53,6 +57,7 @@ def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
                 sess._cubo_set(build_set_sleep_mode(on)[1])
     except Exception as e:
         _LOGGER.error(f"Failed to set sleep mode: {e}")
+        raise
 
 
 class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
@@ -125,6 +130,7 @@ def _set_status_led(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(IOTYPE_USER_SET_STATUS_LIGHT_ON_OFF_REQ, payload)
     except Exception as e:
         _LOGGER.error(f"Failed to set status led: {e}")
+        raise
 
 
 class CuboYouTubeCacheSwitch(RestoreEntity, SwitchEntity):
@@ -231,6 +237,7 @@ def _set_flip_screen(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(*build_set_hw_control(raw, video_v_flip=on))
     except Exception as e:
         _LOGGER.error(f"Failed to set flip screen: {e}")
+        raise
 
 
 class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
@@ -302,6 +309,7 @@ def _set_baby_presence(uid, account, password, camera_ip, on: bool):
                 sess._send_ioc(*build_set_sleep_safety_setting(raw, baby_presence_alert=on))
     except Exception as e:
         _LOGGER.error(f"Failed to set baby presence: {e}")
+        raise
 
 
 class CuboBabyPresenceSwitch(CoordinatorEntity, SwitchEntity):

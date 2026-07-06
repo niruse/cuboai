@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 
 import yaml
 from homeassistant.core import HomeAssistant
@@ -17,6 +18,8 @@ class Go2RTCManager:
         self._config_path = os.path.join(os.path.dirname(__file__), "bin", "go2rtc.yaml")
         self._binary_path = os.path.join(os.path.dirname(__file__), "bin", "go2rtc")
         self._streams = {}
+        self._cameras = []
+        self._options = {}
 
     def update_streams(self, cameras: list[dict], options: dict = None):
         """Update the streams list based on configured cameras. The actual resolution happens in start()."""
@@ -43,25 +46,29 @@ class Go2RTCManager:
 
             backchannel_script = os.path.join(script_dir, "cuboai_stream_backchannel.py")
 
+            # Use the exact interpreter HA runs under: a bare "python3" resolves to the
+            # system interpreter on venv installs, which lacks av/yt-dlp and fails imports.
+            py = sys.executable or "python3"
+
             # The 1st stream runs the pure-python engine which outputs native A/V MPEG-TS.
             # The 2nd stream uses ffmpeg to seamlessly transcode the AAC audio to Opus for WebRTC compatibility.
             self._streams[f"cuboai_{dev_id}"] = [
-                f"exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}",
+                f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
                 f"ffmpeg:cuboai_{dev_id}#video=copy#audio=opus",
             ]
 
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
             self._streams[f"cuboai_speaker_{dev_id}"] = [
-                f"exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma"
+                f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma"
             ]
 
             # The combined stream: video from the main camera stream + backchannel for two-way audio.
             # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
             # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
             self._streams[f"cuboai_combined_{dev_id}"] = [
-                f"exec:{env_vars}python3 {video_script}#{{killsignal=SIGTERM}}",
+                f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
                 f"ffmpeg:cuboai_combined_{dev_id}#video=copy#audio=opus",
-                f"exec:{env_vars}python3 {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
+                f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
     async def _generate_config(self):
@@ -69,7 +76,11 @@ class Go2RTCManager:
         rtsp_port = self._options.get("rtsp_port", 8555)
         config = {
             "api": {
-                "listen": ":1985",  # Use alternate port to avoid conflict with HA add-on
+                # Localhost only: the API exposes the stream config (which embeds
+                # camera admin credentials in the exec lines) and unauthenticated
+                # snapshots — only HA itself needs it. Alternate port avoids
+                # conflict with the HA go2rtc add-on.
+                "listen": "127.0.0.1:1985",
             },
             "rtsp": {
                 "listen": f":{rtsp_port}",
@@ -94,7 +105,18 @@ class Go2RTCManager:
 
     async def start(self):
         """Start the go2rtc subprocess."""
-        if not os.path.exists(self._binary_path):
+
+        def _binary_ready() -> bool:
+            if not os.path.exists(self._binary_path):
+                return False
+            # Ensure binary is executable
+            try:
+                os.chmod(self._binary_path, 0o755)
+            except Exception:
+                pass
+            return True
+
+        if not await self.hass.async_add_executor_job(_binary_ready):
             _LOGGER.error("go2rtc binary not found at %s. Stream cannot start.", self._binary_path)
             return
 
@@ -103,12 +125,6 @@ class Go2RTCManager:
 
         if self.process:
             await self.stop()
-
-        # Ensure binary is executable
-        try:
-            os.chmod(self._binary_path, 0o755)
-        except Exception:
-            pass
 
         log_file_path = os.path.join(os.path.dirname(self._config_path), "go2rtc.log")
         _LOGGER.info("Starting internal go2rtc streaming server (log: %s)...", log_file_path)
@@ -131,6 +147,10 @@ class Go2RTCManager:
             self.process = await asyncio.create_subprocess_exec(
                 self._binary_path, "-config", self._config_path, stdout=log_file, stderr=log_file
             )
+            # The child holds its own duplicated fd; close the parent's copy so
+            # reloads don't leak one file handle per restart.
+            if debug_logs and hasattr(log_file, "close"):
+                log_file.close()
             _LOGGER.info(f"go2rtc started with PID {self.process.pid}")
 
             # Health check — wait a moment then verify process is still alive

@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
@@ -8,11 +9,43 @@ from homeassistant.components.media_player import (
     MediaType,
     RepeatMode,
 )
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .tutk.cuboai_messages import LULLABY_CATALOG
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _get_timer_minutes(hass, unique_id: str) -> int:
+    """Read a CuboAI number-entity timer value (minutes) by its unique_id.
+
+    Entity ids are derived from the entity NAME (e.g. "number.mia_lullaby_timer"),
+    not the unique_id, so resolve through the entity registry — a hardcoded
+    "number.cuboai_..." guess silently never matches.
+    """
+    try:
+        registry = er.async_get(hass)
+        entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)
+        if not entity_id:
+            return 0
+        state = hass.states.get(entity_id)
+        if state and state.state not in ("unknown", "unavailable"):
+            return int(float(state.state))
+    except Exception:
+        pass
+    return 0
+
+
+def _internal_base_url(hass) -> str:
+    """Base URL this HA instance is reachable at from localhost subprocesses."""
+    try:
+        from homeassistant.helpers.network import get_url
+
+        return get_url(hass, allow_external=False, allow_ip=True).rstrip("/")
+    except Exception:
+        return "http://127.0.0.1:8123"
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -105,6 +138,10 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                     resp = sess._cubo_set(build_set_lullaby_vol_duration(vol, timer_val)[1])
     except Exception as e:
         log_to_file(f"[Lullaby] ERROR: {e}")
+        # Surface the failure to the service caller instead of silently showing
+        # an optimistic "playing" state; the coordinator refresh corrects state.
+        _LOGGER.error("Lullaby command '%s' failed: %s", cmd_type, e)
+        raise
 
 
 class CuboAIMediaPlayer(MediaPlayerEntity):
@@ -170,11 +207,10 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             self.hass, media_content_id, content_filter=lambda item: item.media_content_type.startswith("audio/")
         )
 
-    async def async_media_stop(self) -> None:
-        """Stop playing media."""
+    async def _shutdown_playback(self) -> None:
+        """Stop the queue task, the backchannel subprocess, and any delegated lullaby."""
         self._queue.clear()
 
-        # Stop background task properly
         task = getattr(self, "_queue_task", None)
         if task:
             task.cancel()
@@ -186,8 +222,29 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 pass
             self._backchannel_proc = None
 
+        # If the queue delegated playback to the Lullaby entity, stop it too —
+        # otherwise the camera keeps playing after the Speaker shows "idle".
+        if getattr(self, "_delegated_lullaby", False):
+            self._delegated_lullaby = False
+            lullaby_entity_id = self.entity_id.replace("_speaker", "_lullaby")
+            if self.hass.states.get(lullaby_entity_id):
+                try:
+                    await self.hass.services.async_call(
+                        "media_player", "media_stop", {"entity_id": lullaby_entity_id}
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to stop delegated lullaby")
+
+    async def async_media_stop(self) -> None:
+        """Stop playing media."""
+        await self._shutdown_playback()
         self._attr_state = MediaPlayerState.IDLE
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Kill playback (task, subprocess, delegated lullaby) on removal/reload."""
+        await self._shutdown_playback()
+        self._queue_task = None
 
     async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
         """Send an audio file or TTS to the go2rtc speaker stream."""
@@ -242,9 +299,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     async def _extract_media_url(self, media_id: str) -> str:
         """Extract YouTube or Spotify URL in the background."""
 
-        import logging
-
-        _LOGGER = logging.getLogger(__name__)
+        base_url = _internal_base_url(self.hass)
         if (
             "youtube.com" in media_id
             or "youtu.be" in media_id
@@ -297,7 +352,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
                     if existing:
                         ext = existing[0].split(".")[-1]
-                        return f"http://127.0.0.1:8123/local/cuboai_cache/{cache_hash}.{ext}"
+                        return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
 
                 ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
                 if is_caching_enabled:
@@ -314,7 +369,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                             existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
                             if existing:
                                 ext = existing[0].split(".")[-1]
-                                return f"http://127.0.0.1:8123/local/cuboai_cache/{cache_hash}.{ext}"
+                                return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
                         
                         if "entries" in info and len(info["entries"]) > 0:
                             info = info["entries"][0]
@@ -334,12 +389,14 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     return None
 
             media_id = await self.hass.async_add_executor_job(_extract_yt_url)
+            if not media_id:
+                raise ValueError("Media URL extraction failed (yt-dlp returned nothing)")
 
         import urllib.parse
 
         parsed = urllib.parse.urlparse(media_id)
         if parsed.path.startswith("/api/") or parsed.path.startswith("/media/") or media_id.startswith("/"):
-            media_id = f"http://127.0.0.1:8123{parsed.path}"
+            media_id = f"{base_url}{parsed.path}"
             if parsed.query:
                 media_id += f"?{parsed.query}"
 
@@ -347,19 +404,11 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
     async def _queue_loop(self):
         import asyncio
-        import logging
 
-        _LOGGER = logging.getLogger(__name__)
         current_task = asyncio.current_task()
         try:
             while self._queue:
-                timer_state = self.hass.states.get(f"number.cuboai_speaker_timer_{self._device_id}")
-                timer_min = (
-                    int(float(timer_state.state))
-                    if timer_state and timer_state.state not in ("unknown", "unavailable")
-                    else 0
-                )
-                _ = asyncio.get_event_loop().time()
+                timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
 
                 raw_media_id = self._queue.pop(0)
 
@@ -381,6 +430,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     _LOGGER.info(f"Playing lullaby via backend queue: {raw_media_id}")
                     lullaby_entity_id = self.entity_id.replace("_speaker", "_lullaby")
                     if self.hass.states.get(lullaby_entity_id):
+                        self._delegated_lullaby = True
                         await self.hass.services.async_call(
                             "media_player", "select_source", {"entity_id": lullaby_entity_id, "source": raw_media_id}
                         )
@@ -410,18 +460,25 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 env["CUBOAI_CAMERA_IP"] = str(camera_ip or "")
 
                 if self._options.get("enable_debug_logs", False):
-                    stderr_dest = open(self.hass.config.path("cuboai_debug.log"), "a")
+                    # open() blocks — do it in the executor, and close our copy
+                    # right after spawning (the child duplicates the fd).
+                    log_path = self.hass.config.path("cuboai_debug.log")
+                    stderr_dest = await self.hass.async_add_executor_job(lambda: open(log_path, "a"))
                 else:
                     stderr_dest = asyncio.subprocess.DEVNULL
 
-                self._backchannel_proc = await asyncio.create_subprocess_exec(
-                    "python3",
-                    script_path,
-                    extracted_url,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=stderr_dest,
-                    env=env,
-                )
+                try:
+                    self._backchannel_proc = await asyncio.create_subprocess_exec(
+                        sys.executable or "python3",
+                        script_path,
+                        extracted_url,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=stderr_dest,
+                        env=env,
+                    )
+                finally:
+                    if hasattr(stderr_dest, "close"):
+                        stderr_dest.close()
 
                 if timer_min > 0:
                     try:
@@ -460,6 +517,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 self._attr_state = MediaPlayerState.IDLE
                 self.async_write_ha_state()
                 self._queue_task = None
+            raise
         except Exception:
             _LOGGER.exception("Exception in _queue_loop:")
             if self._queue_task == current_task:
@@ -504,8 +562,6 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.SELECT_SOURCE
         )
 
-        from .tutk.cuboai_messages import LULLABY_CATALOG
-
         self._catalog = LULLABY_CATALOG
         self._attr_source_list = sorted([v[1] for v in LULLABY_CATALOG.values()])
 
@@ -545,10 +601,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         }
 
     async def async_media_play(self):
-        timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-        timer = (
-            int(float(timer_state.state)) if timer_state and timer_state.state not in ("unknown", "unavailable") else 0
-        )
+        timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
 
         # Optimistic update
         if self.coordinator.data and "cameras" in self.coordinator.data:
@@ -587,12 +640,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_select_source(self, source: str):
         uuid = next((k for k, v in self._catalog.items() if v[1] == source), None)
         if uuid:
-            timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-            timer = (
-                int(float(timer_state.state))
-                if timer_state and timer_state.state not in ("unknown", "unavailable")
-                else 0
-            )
+            timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
 
             # Optimistic update
             if self.coordinator.data and "cameras" in self.coordinator.data:
@@ -621,12 +669,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_play_media(self, media_type: str, media_id: str, **kwargs):
         if media_type == MediaType.MUSIC:
             uuid = next((k for k, v in self._catalog.items() if v[1] == media_id), media_id)
-            timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-            timer = (
-                int(float(timer_state.state))
-                if timer_state and timer_state.state not in ("unknown", "unavailable")
-                else 0
-            )
+            timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
             await self.hass.async_add_executor_job(
                 _execute_lullaby_cmd,
                 self._uid,
@@ -646,10 +689,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_set_volume_level(self, volume: float):
         # HA volume is 0.0 to 1.0, API is 0 to 100
         vol_int = int(volume * 100)
-        timer_state = self.hass.states.get(f"number.cuboai_lullaby_timer_{self._device_id}")
-        timer = (
-            int(float(timer_state.state)) if timer_state and timer_state.state not in ("unknown", "unavailable") else 0
-        )
+        timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
         await self.hass.async_add_executor_job(
             _execute_lullaby_cmd,
             self._uid,

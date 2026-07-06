@@ -155,28 +155,21 @@ async def get_camera_profiles(
                     or profile_data.get("lan_ip")
                 )
 
-                import re
+                from .cuboai_functions import _extract_lan_ip
 
-                camera_ip = None
+                camera_ip = _extract_lan_ip(camera_ip_raw, json.dumps(profile))
 
-                if camera_ip_raw and re.match(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", str(camera_ip_raw)):
-                    camera_ip = str(camera_ip_raw)
-                else:
-                    # Search entire profile JSON for a valid IPv4 address as a fallback
-                    match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", json.dumps(profile))
-                    if match:
-                        camera_ip = match.group(0)
-
-                # Verify state and exclude offline/disconnected devices
+                # Note the state but DO NOT exclude the camera: transiently
+                # offline devices (or a failed state query) must not vanish
+                # from the config entry — that deletes their entities.
+                state = "unknown"
                 try:
                     state_data = await get_camera_state(device_id, access_token, user_agent, session)
                     state = state_data.get("state", "unknown") if isinstance(state_data, dict) else "unknown"
                     if state in ["disconnect", "offline", "disconnected"]:
-                        log_to_file(f"Excluding offline/disconnected camera {baby_name} ({device_id}) - state: {state}")
-                        continue
+                        log_to_file(f"Camera {baby_name} ({device_id}) currently {state} — keeping it configured")
                 except Exception as e:
-                    log_to_file(f"Excluding camera {baby_name} ({device_id}) due to state query error: {e}")
-                    continue
+                    log_to_file(f"State query failed for camera {baby_name} ({device_id}): {e}")
 
                 cameras.append(
                     {

@@ -55,16 +55,16 @@ class CuboMediaLibrary:
         self._update_sensor()
 
 
-def async_setup_services(hass: HomeAssistant):
+async def async_setup_services(hass: HomeAssistant):
     if "cuboai_media_library_instance" in hass.data:
         return
 
     library = CuboMediaLibrary(hass)
-    
-    # Run the blocking I/O _load in an executor
-    import asyncio
-    asyncio.create_task(hass.async_add_executor_job(library._load))
-    
+
+    # Run the blocking I/O _load in an executor and wait for it so the
+    # library is populated before the sensor first reads it.
+    await hass.async_add_executor_job(library._load)
+
     hass.data["cuboai_media_library_instance"] = library
     library.init_sensor()
 

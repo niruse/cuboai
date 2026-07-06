@@ -123,20 +123,27 @@ def get_session(uid: str,
     if camera_ip and not lib_path:
         resolved = None
     
-    import sys
-    import os
     tutk_dir = os.path.dirname(os.path.abspath(__file__))
     if tutk_dir not in sys.path:
         sys.path.insert(0, tutk_dir)
-        
+
     if resolved:
-        from cuboai_tutk import TUTKSession
-        print(f"Using native library: {resolved}", file=sys.stderr, flush=True)
-        return TUTKSession(uid, account, password,
-                           lib_path=resolved, camera_ip=camera_ip)
+        # A lib that exists but cannot load (wrong architecture, musl host
+        # without gcompat, truncated download, incompatible vendor build) must
+        # not be a hard failure — the pure backend works on every architecture
+        # with no native code, so fall back to it instead of raising.
+        try:
+            from cuboai_tutk import TUTKSession
+            session = TUTKSession(uid, account, password,
+                                  lib_path=resolved, camera_ip=camera_ip)
+            print(f"Using native library: {resolved}", file=sys.stderr, flush=True)
+            return session
+        except (OSError, ImportError, FileNotFoundError) as e:
+            print(f"Native library unusable ({e}); falling back to pure Python transport",
+                  file=sys.stderr, flush=True)
 
     from cuboai_transport_py import PureSession
-    print("Using pure Python transport (library not found)", file=sys.stderr, flush=True)
+    print("Using pure Python transport", file=sys.stderr, flush=True)
     return PureSession(uid=uid, account=account, password=password, camera_ip=camera_ip,
                        channels=channels, verbose=verbose,
                        full_fidelity=full_fidelity,

@@ -16,6 +16,36 @@ from custom_components.cuboai.utils import log_to_file
 LEGACY_ACCESS_TOKEN_FILE = "/config/cuboai_access_token.json"
 LEGACY_REFRESH_TOKEN_FILE = "/config/cuboai_refresh_token.json"
 
+
+def _extract_lan_ip(candidate, haystack_json: str):
+    """Return a plausible LAN IP for the camera, or None.
+
+    Validates octets (the old regex accepted 999.999.999.999) and, for the
+    loose fallback scan over the whole profile JSON, only accepts private-range
+    addresses — otherwise firmware/app version strings like "2.1.0.5" get
+    picked up as the camera IP and break LAN streaming.
+    """
+    import ipaddress
+    import re
+
+    def _as_private_ip(text):
+        try:
+            ip = ipaddress.ip_address(str(text))
+            return str(ip) if ip.version == 4 and ip.is_private and not ip.is_loopback else None
+        except ValueError:
+            return None
+
+    if candidate:
+        direct = _as_private_ip(candidate)
+        if direct:
+            return direct
+
+    for match in re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", haystack_json or ""):
+        found = _as_private_ip(match)
+        if found:
+            return found
+    return None
+
 # New portable paths (set by __init__.py using hass.config.path())
 ACCESS_TOKEN_FILE = None
 REFRESH_TOKEN_FILE = None
@@ -232,10 +262,11 @@ def refresh_cubo_token(refresh_token, user_agent):
 
 
 def refresh_access_token_only(refresh_token, user_agent):
-    log_to_file(f"Refreshing CuboAI token with refresh_token: {refresh_token[:12]}...")
+    log_to_file("Refreshing CuboAI token...")
     disk_token = load_refresh_token() or refresh_token
     resp = refresh_cubo_token(disk_token, user_agent)
-    log_to_file(f"Token refresh response: {json.dumps(resp, indent=2)}")
+    # Never write the token values themselves to the debug log.
+    log_to_file(f"Token refresh response keys: {sorted(resp.keys()) if isinstance(resp, dict) else type(resp)}")
     access_token = resp.get("access_token")
     new_refresh_token = resp.get("refresh_token", disk_token)
     save_access_token(access_token)
@@ -281,26 +312,19 @@ def get_camera_profiles(access_token, user_agent):
                 or profile_data.get("lan_ip")
             )
 
-            import re
+            camera_ip = _extract_lan_ip(camera_ip_raw, json.dumps(profile))
 
-            camera_ip = None
-            if camera_ip_raw and re.match(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$", str(camera_ip_raw)):
-                camera_ip = str(camera_ip_raw)
-            else:
-                match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", json.dumps(profile))
-                if match:
-                    camera_ip = match.group(0)
-
-            # Verify state and exclude offline/disconnected devices
+            # Note the state but DO NOT exclude the camera: a transiently
+            # offline device (or a failed state query) during a config or
+            # reconfigure flow must not silently drop the camera and its
+            # entities/credentials from the entry.
             try:
                 state_data = get_camera_state(device_id, access_token, user_agent)
                 state = state_data.get("state", "unknown") if isinstance(state_data, dict) else "unknown"
                 if state in ["disconnect", "offline", "disconnected"]:
-                    log_to_file(f"Excluding offline/disconnected camera {baby_name} ({device_id}) - state: {state}")
-                    continue
+                    log_to_file(f"Camera {baby_name} ({device_id}) currently {state} — keeping it configured")
             except Exception as e:
-                log_to_file(f"Excluding camera {baby_name} ({device_id}) due to state query error: {e}")
-                continue
+                log_to_file(f"State query failed for camera {baby_name} ({device_id}): {e}")
 
             cameras.append(
                 {

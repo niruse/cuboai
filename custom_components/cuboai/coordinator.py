@@ -37,7 +37,10 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
     try:
         import time
 
-        for attempt in range(4):
+        # Keep total worst-case time under the coordinator's asyncio timeout so a
+        # cancelled poll doesn't leave this thread running for minutes (leaking one
+        # executor thread per poll cycle when the camera is unreachable).
+        for attempt in range(2):
             try:
                 with get_session(
                     uid,
@@ -188,7 +191,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                     return data
             except Exception as conn_e:
                 log_to_file(f"Connection attempt {attempt + 1} failed: {conn_e}")
-                if attempt < 3:
+                if attempt < 1:
                     time.sleep(2)
                 else:
                     raise conn_e
@@ -343,6 +346,18 @@ class CuboAICoordinator(DataUpdateCoordinator):
             log_to_file(f"[CuboAICoordinator] Unexpected error: {e}\n{traceback.format_exc()}")
             raise UpdateFailed(f"Unexpected error: {e}")
 
+    @staticmethod
+    def _raise_if_unauthorized(*results):
+        """Re-raise a 401 from gathered results so the token-refresh path runs.
+
+        All API calls below use return_exceptions=True, which would otherwise
+        swallow the 401 and leave the integration polling with a dead token
+        until the next HA restart.
+        """
+        for res in results:
+            if isinstance(res, aiohttp.ClientResponseError) and res.status == 401:
+                raise res
+
     async def _fetch_all(self, session) -> dict:
         """Single coordinated fetch of all data."""
         import json as _json
@@ -363,6 +378,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 return_exceptions=True,
             )
 
+            self._raise_if_unauthorized(profiles_raw, sub_info)
+
             if isinstance(sub_info, Exception):
                 log_to_file(f"[CuboAICoordinator] Failed to fetch subscription: {sub_info}")
                 result["subscription"] = None
@@ -372,6 +389,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
             if isinstance(profiles_raw, Exception):
                 log_to_file(f"[CuboAICoordinator] Failed to fetch profiles: {profiles_raw}")
                 profiles_raw = []
+        except aiohttp.ClientResponseError:
+            raise
         except Exception as e:
             log_to_file(f"[CuboAICoordinator] Error fetching common data: {e}")
             profiles_raw = []
@@ -407,8 +426,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     break
 
             # Concurrently fetch alerts and state for this camera
+            old_local = {}
             try:
-                old_local = {}
                 if hasattr(self, "data") and self.data and "cameras" in self.data and device_id in self.data["cameras"]:
                     old_local = self.data["cameras"][device_id].get("local", {})
                 fetch_extras = not bool(old_local.get("wifi_ip"))
@@ -440,6 +459,9 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 log_to_file(f"[CuboAICoordinator] Error gathering alerts/state/local for {device_id}: {e}")
                 alerts_data, state_data, local_data = [], None, {}
 
+            # An expired token must bubble up so _async_update_data refreshes it
+            self._raise_if_unauthorized(alerts_data, state_data)
+
             # 2. Camera State
             if isinstance(state_data, BaseException):
                 log_to_file(f"[CuboAICoordinator] State fetch failed for {device_id}: {state_data}")
@@ -450,7 +472,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
             elif local_data:
                 if local_data:
-                    old_local_merged = old_local.copy() if "old_local" in locals() else {}
+                    old_local_merged = old_local.copy()
                     old_local_merged.update(local_data)
                     cam_data["local"] = old_local_merged
 

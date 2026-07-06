@@ -5,3 +5,7 @@ save_custom_songs:
 save_playlists:
   name: Save playlists
   description: Save current playlists to file
+
+clear_youtube_cache:
+  name: Clear YouTube cache
+  description: Delete all locally cached YouTube audio files (www/cuboai_cache)

@@ -263,10 +263,13 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         from .utils import find_available_port
 
+        # Binds sockets to probe ports — keep it off the event loop.
+        default_port = await self.hass.async_add_executor_job(find_available_port)
+
         schema = {
             vol.Required("download_images", default=True): bool,
             vol.Optional("enable_debug_logs", default=False): bool,
-            vol.Required("rtsp_port", default=find_available_port()): vol.All(
+            vol.Required("rtsp_port", default=default_port): vol.All(
                 vol.Coerce(int), vol.Range(min=1024, max=65535)
             ),
             vol.Required("alerts_count", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
@@ -308,7 +311,8 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
 
         default_port = self.config_entry.options.get("rtsp_port", self.config_entry.data.get("rtsp_port"))
         if not default_port:
-            default_port = find_available_port()
+            # Binds sockets to probe ports — keep it off the event loop.
+            default_port = await self.hass.async_add_executor_job(find_available_port)
 
         schema = {
             vol.Required(

@@ -1,6 +1,7 @@
 import logging
 
 from homeassistant.components.camera import Camera
+from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -64,16 +65,17 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         """Return a still image response from the camera."""
         # 1. Try to get a LIVE snapshot from go2rtc API
         import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
         url = f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_{self._device_id}"
         try:
-            async with aiohttp.ClientSession() as session:
-                # 5 second timeout so we don't hang HA if camera is offline
-                async with session.get(url, timeout=5.0) as resp:
-                    if resp.status == 200:
-                        image_bytes = await resp.read()
-                        if len(image_bytes) > 1000:  # Ensure it's a real image, not an empty file
-                            return image_bytes
+            session = async_get_clientsession(self.hass)
+            # 5 second timeout so we don't hang HA if camera is offline
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    image_bytes = await resp.read()
+                    if len(image_bytes) > 1000:  # Ensure it's a real image, not an empty file
+                        return image_bytes
         except Exception as e:
             _LOGGER.debug(f"Failed to get live snapshot from go2rtc: {e}")
 
@@ -108,22 +110,46 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         )
         return f"rtsp://127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
-    async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
-        """Handle the WebRTC offer and return an answer."""
-        import aiohttp
+    async def _go2rtc_webrtc_offer(self, offer_sdp: str) -> str | None:
+        """POST the WebRTC offer to the internal go2rtc and return the answer SDP."""
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
         # We use the combined stream to enable the WebRTC native two-way audio mic button
         url = f"http://127.0.0.1:1985/api/webrtc?src=cuboai_combined_{self._device_id}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:
-                    if resp.status == 200:
-                        return await resp.text()
-                    else:
-                        _LOGGER.error(f"go2rtc returned status {resp.status} for WebRTC offer")
+            session = async_get_clientsession(self.hass)
+            async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                _LOGGER.error(f"go2rtc returned status {resp.status} for WebRTC offer")
         except Exception as e:
             _LOGGER.error(f"Failed to handle WebRTC offer: {e}")
         return None
+
+    async def async_handle_web_rtc_offer(self, offer_sdp: str) -> str | None:
+        """Handle the WebRTC offer (legacy API, HA < 2024.11)."""
+        return await self._go2rtc_webrtc_offer(offer_sdp)
+
+    async def async_handle_async_webrtc_offer(self, offer_sdp: str, session_id: str, send_message) -> None:
+        """Handle the WebRTC offer (async API, HA 2024.11+; the legacy path was removed in 2025.x)."""
+        try:
+            from homeassistant.components.camera.webrtc import WebRTCAnswer, WebRTCError
+        except ImportError:
+            # Very old HA without the async WebRTC API — legacy handler covers it.
+            return
+
+        answer = await self._go2rtc_webrtc_offer(offer_sdp)
+        if answer:
+            send_message(WebRTCAnswer(answer))
+        else:
+            send_message(WebRTCError("go2rtc_error", "go2rtc did not return a WebRTC answer"))
+
+    async def async_on_webrtc_candidate(self, session_id: str, candidate) -> None:
+        """go2rtc's sync /api/webrtc exchange is non-trickle; remote candidates are not needed."""
+
+    @callback
+    def close_webrtc_session(self, session_id: str) -> None:
+        """Nothing to clean up: the exchange is stateless on our side."""
 
     @property
     def device_info(self):

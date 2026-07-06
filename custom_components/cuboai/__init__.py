@@ -24,20 +24,30 @@ from .utils import set_debug_logs_enabled, set_log_path
 _LOGGER = logging.getLogger(__name__)
 
 _FILE_HANDLER = None
+_FILE_LISTENER = None
 
 
 def _setup_component_logger(hass: HomeAssistant, enable: bool):
-    global _FILE_HANDLER
+    global _FILE_HANDLER, _FILE_LISTENER
     component_logger = logging.getLogger("custom_components.cuboai")
 
     if enable:
         if _FILE_HANDLER is None:
+            import queue
+
             log_path = hass.config.path("cuboai_debug.log")
             # 2 MB max size, keep 1 backup (4MB total max)
-            _FILE_HANDLER = logging.handlers.RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=1)
-            _FILE_HANDLER.setLevel(logging.DEBUG)
+            file_handler = logging.handlers.RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=1)
+            file_handler.setLevel(logging.DEBUG)
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            _FILE_HANDLER.setFormatter(formatter)
+            file_handler.setFormatter(formatter)
+            # Log records are enqueued (safe from the event loop); a
+            # QueueListener thread performs the actual file writes/rotation.
+            log_queue = queue.SimpleQueue()
+            _FILE_HANDLER = logging.handlers.QueueHandler(log_queue)
+            _FILE_HANDLER.setLevel(logging.DEBUG)
+            _FILE_LISTENER = logging.handlers.QueueListener(log_queue, file_handler)
+            _FILE_LISTENER.start()
             component_logger.addHandler(_FILE_HANDLER)
             component_logger.setLevel(logging.DEBUG)
             _LOGGER.info("CuboAI debug file logging enabled at %s", log_path)
@@ -45,6 +55,9 @@ def _setup_component_logger(hass: HomeAssistant, enable: bool):
         if _FILE_HANDLER is not None:
             _LOGGER.info("CuboAI debug file logging disabled")
             component_logger.removeHandler(_FILE_HANDLER)
+            if _FILE_LISTENER is not None:
+                _FILE_LISTENER.stop()
+                _FILE_LISTENER = None
             _FILE_HANDLER.close()
             _FILE_HANDLER = None
 
@@ -101,7 +114,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     from .media_library import async_setup_services
 
-    async_setup_services(hass)
+    await async_setup_services(hass)
+
+    async def handle_clear_youtube_cache(call):
+        import shutil
+
+        cache_dir = hass.config.path("www", "cuboai_cache")
+        await hass.async_add_executor_job(lambda: shutil.rmtree(cache_dir, True))
+
+    hass.services.async_register(DOMAIN, "clear_youtube_cache", handle_clear_youtube_cache)
 
     return True
 
@@ -115,13 +136,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     set_log_path(hass.config.path())
 
     debug_enabled = entry.options.get("enable_debug_logs", False)
-    set_debug_logs_enabled(debug_enabled)
-    _setup_component_logger(hass, debug_enabled)
+    # Both attach file handlers (open a file) — keep that off the event loop.
+    await hass.async_add_executor_job(set_debug_logs_enabled, debug_enabled)
+    await hass.async_add_executor_job(_setup_component_logger, hass, debug_enabled)
 
     # Ensure media library services are set up
     from .media_library import async_setup_services
 
-    async_setup_services(hass)
+    await async_setup_services(hass)
 
     _LOGGER.debug("Ensuring native dependencies...")
     # Ensure dependencies
@@ -161,13 +183,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise
 
             if device_map:
-                new_cameras = device_map
+                new_cameras = list(device_map)
 
                 old_cameras = entry.data.get("cameras", [])
+                # Never shrink the camera list from a single startup fetch: a camera
+                # that is transiently offline (or whose state query failed) would be
+                # dropped from the entry, deleting its entities and credentials.
+                new_ids = {c["device_id"] for c in new_cameras}
+                for old in old_cameras:
+                    if old["device_id"] not in new_ids:
+                        _LOGGER.warning(
+                            "Camera %s missing from API response — keeping existing config",
+                            old["device_id"],
+                        )
+                        new_cameras.append(old)
+
                 if sorted(new_cameras, key=lambda c: c["device_id"]) != sorted(
                     old_cameras, key=lambda c: c["device_id"]
                 ):
-                    _LOGGER.info("Dynamic camera list update detected: %s", new_cameras)
+                    # Log device ids only — the full dicts contain admin passwords.
+                    _LOGGER.info(
+                        "Dynamic camera list update detected: %s",
+                        [c.get("device_id") for c in new_cameras],
+                    )
                     new_data = dict(entry.data)
                     new_data["cameras"] = new_cameras
                     new_data["access_token"] = latest_access
@@ -193,6 +231,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
+        # Snapshot of the options this entry was set up with, used by
+        # async_update_options to skip a full reload when the only change is a
+        # coordinator-written camera_ip_* discovery (reloading mid-refresh tears
+        # down the coordinator while it is still iterating cameras).
+        "options_snapshot": dict(entry.options),
     }
 
     _LOGGER.debug("Starting go2rtc manager...")
@@ -209,22 +252,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.debug("Forwarding entry setups...")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
-    async def handle_clear_youtube_cache(call):
-        import shutil
-        import os
-        cache_dir = hass.config.path("www", "cuboai_cache")
-        if os.path.exists(cache_dir):
-            await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
-    
-    hass.services.async_register(DOMAIN, "clear_youtube_cache", handle_clear_youtube_cache)
-    
+
     _LOGGER.debug("CuboAI async_setup_entry finished successfully.")
     return True
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update options."""
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if data is not None:
+        snapshot = data.get("options_snapshot", {})
+        new_options = dict(entry.options)
+        changed_keys = {
+            k for k in set(snapshot) | set(new_options) if snapshot.get(k) != new_options.get(k)
+        }
+        data["options_snapshot"] = new_options
+        if changed_keys and all(
+            k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys
+        ):
+            # Auto-discovered camera IP written by the coordinator (it only ever
+            # fills in previously-empty IPs): picked up on the next poll, no
+            # reason to tear the whole integration down mid-refresh. A user
+            # *changing* an existing IP still reloads normally.
+            _LOGGER.debug("Skipping reload for camera IP discovery: %s", changed_keys)
+            return
     await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -240,4 +291,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         go2rtc = data.get("go2rtc")
         if go2rtc:
             await go2rtc.stop()
+
+        # Allow the global sensor/switch singletons to be recreated on re-setup,
+        # but only once the LAST entry unloads — with multiple entries the
+        # other entry's global entities still exist and re-adding would
+        # collide on their fixed unique_ids.
+        from homeassistant.config_entries import ConfigEntryState
+
+        others_loaded = any(
+            e.entry_id != entry.entry_id and e.state is ConfigEntryState.LOADED
+            for e in hass.config_entries.async_entries(DOMAIN)
+        )
+        if not others_loaded:
+            hass.data.pop("cuboai_media_library_added", None)
+            hass.data.get(DOMAIN, {}).pop("_youtube_cache_switch_added", None)
     return unload_ok
