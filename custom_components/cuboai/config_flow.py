@@ -369,9 +369,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             # Do NOT probe for a free port here: our own go2rtc is already
             # running and holding the current RTSP port, so probing would
             # "suggest" a NEW port on every options save and silently move the
-            # stream (breaking open streams). The integration has always
-            # defaulted to 8555 — keep whatever is effectively in use.
-            default_port = 8555
+            # stream (breaking open streams). Show the port go2rtc ACTUALLY
+            # bound (it self-heals conflicts at startup), falling back to the
+            # historical default.
+            default_port = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective") or 8555
 
         import homeassistant.helpers.config_validation as cv
 
