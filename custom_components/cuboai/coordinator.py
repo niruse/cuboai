@@ -75,7 +75,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
 
                         try:
                             th = client.get_temp_humidity()
-                            
+
                             temp = lw.get("temp_c") if lw.get("temp_c") is not None else th.temperature
                             humid = lw.get("humidity_pct") if lw.get("humidity_pct") is not None else th.humidity
 

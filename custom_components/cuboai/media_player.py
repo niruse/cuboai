@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import sys
@@ -333,21 +334,21 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
                     import yt_dlp
 
-                import os
-                import hashlib
                 import glob
+                import hashlib
+                import os
 
                 is_caching_enabled = self.hass.data.get("cuboai", {}).get("youtube_cache_enabled", False)
                 cache_dir = self.hass.config.path("www", "cuboai_cache")
-                
+
                 if is_caching_enabled and not os.path.exists(cache_dir):
                     try:
                         os.makedirs(cache_dir, exist_ok=True)
                     except Exception:
                         pass
-                        
+
                 cache_hash = hashlib.md5(media_id.encode()).hexdigest()
-                
+
                 if is_caching_enabled:
                     existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
                     if existing:
@@ -361,7 +362,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 cookie_path = self.hass.config.path("cuboai_cookies.txt")
                 if os.path.exists(cookie_path):
                     ydl_opts["cookiefile"] = cookie_path
-                
+
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(media_id, download=is_caching_enabled)
@@ -370,7 +371,7 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                             if existing:
                                 ext = existing[0].split(".")[-1]
                                 return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
-                        
+
                         if "entries" in info and len(info["entries"]) > 0:
                             info = info["entries"][0]
                         return info.get("url", media_id)
@@ -463,7 +464,9 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     # open() blocks — do it in the executor, and close our copy
                     # right after spawning (the child duplicates the fd).
                     log_path = self.hass.config.path("cuboai_debug.log")
-                    stderr_dest = await self.hass.async_add_executor_job(lambda: open(log_path, "a"))
+                    stderr_dest = await self.hass.async_add_executor_job(
+                        functools.partial(open, log_path, "a")
+                    )
                 else:
                     stderr_dest = asyncio.subprocess.DEVNULL
 
