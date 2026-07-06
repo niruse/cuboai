@@ -1230,19 +1230,14 @@ class CuboAICameraCard extends HTMLElement {
                 // "number.cuboai_speaker_timer_<device>" guess never existed.
                 const base = this._speakerEntityId.split('.')[1].replace(/_speaker$/, '');
                 const minutes = parseInt(e.target.value);
+                // Play Time governs card playback (streams AND lullabies played
+                // from the card — HA sends the lullaby stop). The separate
+                // Lullaby Timer entity stays camera-native for plays from the
+                // entity controls / CuboAI app.
                 this._hass.callService('number', 'set_value', {
                   entity_id: `number.${base}_speaker_play_time`,
                   value: minutes
                 });
-                // One Play Time governs everything: lullabies play natively on
-                // the camera, which enforces its own Lullaby Timer — keep it in
-                // sync so the dropdown applies to lullabies too (0 = forever).
-                if (this._hass.states[`number.${base}_lullaby_timer`]) {
-                  this._hass.callService('number', 'set_value', {
-                    entity_id: `number.${base}_lullaby_timer`,
-                    value: minutes
-                  });
-                }
               }
             });
           }

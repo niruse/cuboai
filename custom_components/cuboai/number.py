@@ -41,11 +41,12 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._attr_unique_id = f"cuboai_lullaby_timer_{self._device_id}"
         self._attr_icon = "mdi:timer-music"
 
-        # Same range as the Speaker Play Time so the card's single Play Time
-        # dropdown can drive both timers (0 = repeat forever).
+        # Camera-native timer: only the durations the camera firmware supports
+        # (0 = repeat forever). Card playback uses Play Time + an HA-sent stop
+        # instead, so it is not limited to these values.
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 120
-        self._attr_native_step = 10
+        self._attr_native_max_value = 60
+        self._attr_native_step = 30
         self._attr_native_unit_of_measurement = "min"
 
         self._timer_value = 30
@@ -67,9 +68,8 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._timer_value = int(value)
         self.async_write_ha_state()
 
-        # The stop is enforced by Home Assistant (the camera firmware only
-        # supports a few fixed durations): notify the lullaby player so it
-        # reschedules its stop timer if a lullaby is currently playing.
+        # Notify the lullaby player: if a NATIVE lullaby is playing it pushes
+        # the new duration to the camera; card sessions (Play Time) ignore it.
         from homeassistant.helpers.dispatcher import async_dispatcher_send
 
         async_dispatcher_send(self.hass, f"cuboai_lullaby_timer_changed_{self._device_id}", self._timer_value)
