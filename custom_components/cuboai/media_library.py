@@ -12,7 +12,6 @@ class CuboMediaLibrary:
         self.hass = hass
         self._path = hass.config.path(".storage", "cuboai_media.json")
         self._data = {"custom_songs": [], "playlists": []}
-        self._load()
 
     def _load(self):
         if os.path.exists(self._path):
@@ -61,6 +60,11 @@ def async_setup_services(hass: HomeAssistant):
         return
 
     library = CuboMediaLibrary(hass)
+    
+    # Run the blocking I/O _load in an executor
+    import asyncio
+    asyncio.create_task(hass.async_add_executor_job(library._load))
+    
     hass.data["cuboai_media_library_instance"] = library
     library.init_sensor()
 
