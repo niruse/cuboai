@@ -39,6 +39,36 @@ _TUTK_DOCKER_ARCH = {
     "arm64": "arm64",
 }
 
+# go2rtc release-asset arch -> expected ELF e_machine value
+_ELF_MACHINE = {
+    "amd64": 62,  # EM_X86_64
+    "arm64": 183,  # EM_AARCH64
+    "arm": 40,  # EM_ARM
+    "386": 3,  # EM_386
+}
+
+
+def _binary_matches_arch(path: str, go2rtc_arch: str) -> bool:
+    """True if the ELF binary at `path` matches the expected architecture.
+
+    An existence-only check kept a wrong-architecture binary forever (e.g. an
+    ARM64 go2rtc shipped to an x86_64 host), so go2rtc silently never started
+    and every RTSP consumer got 'Connection refused' (issue #80).
+    """
+    expected = _ELF_MACHINE.get(go2rtc_arch)
+    if expected is None:
+        return True  # unknown arch: don't fight it
+    try:
+        import struct
+
+        with open(path, "rb") as f:
+            header = f.read(20)
+        if len(header) < 20 or header[:4] != b"\x7fELF":
+            return False
+        return struct.unpack_from("<H", header, 18)[0] == expected
+    except OSError:
+        return False
+
 
 async def _get_docker_token(session: aiohttp.ClientSession) -> str:
     """Get anonymous pull token for wyze-bridge from Docker Hub."""
@@ -139,11 +169,26 @@ async def _download_go2rtc(hass, go2rtc_arch: str, dest_dir: str):
     """Download go2rtc binary from GitHub."""
     binary_path = os.path.join(dest_dir, "go2rtc")
 
-    def _exists():
+    def _existing_binary_valid():
         os.makedirs(dest_dir, exist_ok=True)
-        return os.path.exists(binary_path)
+        if not os.path.exists(binary_path):
+            return False
+        # Existence is not enough: validate the ELF architecture so a stale
+        # wrong-arch binary (e.g. ARM64 on an x86_64 host) self-heals instead
+        # of persisting forever (issue #80).
+        if _binary_matches_arch(binary_path, go2rtc_arch):
+            return True
+        _LOGGER.warning(
+            "Existing go2rtc binary does not match host architecture (%s) — replacing it.",
+            go2rtc_arch,
+        )
+        try:
+            os.remove(binary_path)
+        except OSError as e:
+            _LOGGER.error("Could not remove wrong-architecture go2rtc binary: %s", e)
+        return False
 
-    if await hass.async_add_executor_job(_exists):
+    if await hass.async_add_executor_job(_existing_binary_valid):
         _LOGGER.debug("go2rtc binary already downloaded.")
         return
 
