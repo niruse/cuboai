@@ -192,14 +192,6 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
     async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
         """Send an audio file or TTS to the go2rtc speaker stream."""
         try:
-            await self.hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {"title": "CuboAI Debug", "message": f"async_play_media called with {media_id}"},
-            )
-        except Exception:
-            pass
-        try:
             import logging
 
             from homeassistant.components.media_player.browse_media import async_process_play_media_url
@@ -311,12 +303,6 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
         return media_id
 
     async def _queue_loop(self):
-        try:
-            await self.hass.services.async_call(
-                "persistent_notification", "create", {"title": "CuboAI Debug", "message": "_queue_loop started!"}
-            )
-        except Exception:
-            pass
         import asyncio
         import logging
 
