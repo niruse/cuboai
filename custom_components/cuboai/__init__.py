@@ -245,6 +245,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:
         _LOGGER.warning("Failed to dynamically refresh CuboAI camera profiles: %s", e)
 
+    # Remove devices (and their entities) for cameras the user deselected —
+    # otherwise they linger in the registry as "unavailable" and still show up.
+    try:
+        from homeassistant.helpers import device_registry as dr
+
+        configured_ids = {c["device_id"] for c in entry.data.get("cameras", [])}
+        known_account_ids = {c["device_id"] for c in entry.data.get("all_cameras", [])}
+        dev_reg = dr.async_get(hass)
+        for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+            cam_ids = {ident[1] for ident in device.identifiers if ident[0] == DOMAIN}
+            # Only touch devices that are account cameras and no longer selected
+            if cam_ids and cam_ids <= known_account_ids and not (cam_ids & configured_ids):
+                _LOGGER.info("Removing deselected camera device: %s (%s)", device.name, cam_ids)
+                dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+    except Exception as e:
+        _LOGGER.warning("Failed to clean up deselected camera devices: %s", e)
+
     _LOGGER.debug("Cameras fetched. Setting up coordinator...")
     from .coordinator import CuboAICoordinator
 
