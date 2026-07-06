@@ -119,7 +119,8 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         try:
             session = async_get_clientsession(self.hass)
             async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:
-                if resp.status == 200:
+                # go2rtc answers 200 or 201 (Created) depending on version
+                if resp.status in (200, 201):
                     return await resp.text()
                 _LOGGER.error(f"go2rtc returned status {resp.status} for WebRTC offer")
         except Exception as e:
