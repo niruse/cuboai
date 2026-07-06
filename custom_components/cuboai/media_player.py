@@ -422,9 +422,21 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
         import asyncio
 
         current_task = asyncio.current_task()
+        loop = asyncio.get_running_loop()
+
+        # Play Time is a TOTAL session budget, read once when playback starts:
+        # a 30-min play time with 3-min songs must stop after ~30 minutes, not
+        # give every track its own 30-minute allowance. Change it mid-playback
+        # and it applies the next time playback starts.
+        timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
+        deadline = loop.time() + timer_min * 60 if timer_min > 0 else None
+
         try:
             while self._queue:
-                timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
+                if deadline is not None and loop.time() >= deadline:
+                    _LOGGER.info(f"Speaker play time expired ({timer_min} min) — stopping queue")
+                    self._queue.clear()
+                    break
 
                 raw_media_id = self._queue.pop(0)
 
@@ -496,11 +508,12 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     if hasattr(stderr_dest, "close"):
                         stderr_dest.close()
 
-                if timer_min > 0:
+                if deadline is not None:
                     try:
-                        await asyncio.wait_for(self._backchannel_proc.wait(), timeout=timer_min * 60)
+                        # Each track only gets whatever remains of the session budget
+                        await asyncio.wait_for(self._backchannel_proc.wait(), timeout=max(1.0, deadline - loop.time()))
                     except TimeoutError:
-                        _LOGGER.info(f"Speaker sleep timer expired ({timer_min} min)")
+                        _LOGGER.info(f"Speaker play time expired ({timer_min} min)")
                         self._queue.clear()  # clear queue to stop playing
                         if getattr(self, "_backchannel_proc", None):
                             try:
