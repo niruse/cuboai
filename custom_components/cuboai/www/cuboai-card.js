@@ -387,10 +387,44 @@ class CuboAICameraCard extends HTMLElement {
             }
           };
 
+          // Shared per-camera card settings (shuffle, ...) stored server-side in the
+          // media library so they sync across all devices/browsers.
+          const findLibraryState = () => {
+            if (!this._hass || !this._hass.states) return null;
+            for (const key in this._hass.states) {
+              if (key.startsWith('sensor.cuboai_media_library')) return this._hass.states[key];
+            }
+            return null;
+          };
+          const loadSharedSettings = () => {
+            try {
+              const lib = findLibraryState();
+              if (lib && lib.attributes && lib.attributes.settings) {
+                return lib.attributes.settings[deviceId] || {};
+              }
+            } catch (e) {}
+            return {};
+          };
+          const saveSharedSettings = (patch) => {
+            try {
+              this._settingsWriteTs = Date.now();
+              const lib = findLibraryState();
+              const all = (lib && lib.attributes && lib.attributes.settings)
+                ? JSON.parse(JSON.stringify(lib.attributes.settings)) : {};
+              all[deviceId] = Object.assign({}, all[deviceId] || {}, patch);
+              if (this._hass) this._hass.callService('cuboai', 'save_settings', { settings: all });
+            } catch (e) {}
+          };
+
           if (this._playlistPage === undefined) {
              this._playlistPage = 1;
              this._songPage = 1;
-             this._shuffleMode = localStorage.getItem(`cuboai_shuffle_${deviceId}`) === 'true';
+             this._deviceId = deviceId;
+             const sharedSettings = loadSharedSettings();
+             // Server-side value wins; localStorage is only the pre-sync fallback
+             this._shuffleMode = sharedSettings.shuffle !== undefined
+               ? !!sharedSettings.shuffle
+               : localStorage.getItem(`cuboai_shuffle_${deviceId}`) === 'true';
              this._repeatMode = localStorage.getItem(`cuboai_repeat_${deviceId}`) || 'off';
              
              // Only clear inPlaylist if it's the first render to prevent checking jumping
@@ -1155,6 +1189,7 @@ class CuboAICameraCard extends HTMLElement {
             toggleShuffleBtn.addEventListener('click', () => {
               this._shuffleMode = !this._shuffleMode;
               localStorage.setItem(`cuboai_shuffle_${deviceId}`, this._shuffleMode);
+              saveSharedSettings({ shuffle: this._shuffleMode });
               renderSongs();
             });
           }
@@ -1189,9 +1224,13 @@ class CuboAICameraCard extends HTMLElement {
           
           if (playTimeSelect) {
             playTimeSelect.addEventListener('change', (e) => {
-              if (this._hass) {
+              if (this._hass && this._speakerEntityId) {
+                // Entity ids derive from the entity NAME ("{baby} Speaker Play Time"),
+                // so build it from the speaker's object id — the old hardcoded
+                // "number.cuboai_speaker_timer_<device>" guess never existed.
+                const base = this._speakerEntityId.split('.')[1].replace(/_speaker$/, '');
                 this._hass.callService('number', 'set_value', {
-                  entity_id: 'number.cuboai_speaker_timer_' + deviceId,
+                  entity_id: `number.${base}_speaker_play_time`,
                   value: parseInt(e.target.value)
                 });
               }
@@ -1555,6 +1594,17 @@ class CuboAICameraCard extends HTMLElement {
       const newLibraryStateStr = currentLibraryStateObj ? JSON.stringify(currentLibraryStateObj.attributes) : null;
       if (this._lastLibraryStateStr !== newLibraryStateStr) {
         this._lastLibraryStateStr = newLibraryStateStr;
+        // Adopt shuffle changes made on other devices (skipped for a few
+        // seconds after a local toggle so our own optimistic state wins)
+        try {
+          if (currentLibraryStateObj && this._deviceId &&
+              (!this._settingsWriteTs || Date.now() - this._settingsWriteTs > 3000)) {
+            const shared = (currentLibraryStateObj.attributes.settings || {})[this._deviceId] || {};
+            if (shared.shuffle !== undefined) {
+              this._shuffleMode = !!shared.shuffle;
+            }
+          }
+        } catch (e) {}
         if (this.musicBar && typeof this._renderSongsFn === 'function') {
            this._renderSongsFn();
         }
@@ -1675,8 +1725,9 @@ class CuboAICameraCard extends HTMLElement {
     }
     
     if (speakerEntityId) {
-      const deviceId = speakerEntityId.split('_')[2];
-      const timerState = hass.states['number.cuboai_speaker_timer_' + deviceId];
+      // Derive from the speaker's object id — entity ids come from entity names
+      const base = speakerEntityId.split('.')[1].replace(/_speaker$/, '');
+      const timerState = hass.states[`number.${base}_speaker_play_time`];
       if (timerState && this.musicBar) {
         const playTimeSelect = this.musicBar.querySelector('#playTimeSelect');
         if (playTimeSelect && playTimeSelect.value !== timerState.state) {

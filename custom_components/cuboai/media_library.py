@@ -11,7 +11,7 @@ class CuboMediaLibrary:
     def __init__(self, hass: HomeAssistant):
         self.hass = hass
         self._path = hass.config.path(".storage", "cuboai_media.json")
-        self._data = {"custom_songs": [], "playlists": []}
+        self._data = {"custom_songs": [], "playlists": [], "settings": {}}
 
     def _load(self):
         if os.path.exists(self._path):
@@ -37,6 +37,12 @@ class CuboMediaLibrary:
 
     def update_playlists(self, playlists):
         self._data["playlists"] = playlists
+        self._save()
+        self.hass.loop.call_soon_threadsafe(self._update_sensor)
+
+    def update_settings(self, settings):
+        """Per-camera card settings (shuffle/repeat, ...) shared across devices."""
+        self._data["settings"] = settings
         self._save()
         self.hass.loop.call_soon_threadsafe(self._update_sensor)
 
@@ -76,5 +82,10 @@ async def async_setup_services(hass: HomeAssistant):
         playlists = call.data.get("playlists", [])
         await hass.async_add_executor_job(library.update_playlists, playlists)
 
+    async def handle_save_settings(call):
+        settings = call.data.get("settings", {})
+        await hass.async_add_executor_job(library.update_settings, settings)
+
     hass.services.async_register("cuboai", "save_custom_songs", handle_save_custom_songs)
     hass.services.async_register("cuboai", "save_playlists", handle_save_playlists)
+    hass.services.async_register("cuboai", "save_settings", handle_save_settings)

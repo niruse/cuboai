@@ -148,9 +148,10 @@ class CuboMediaLibrarySensor(SensorEntity):
             return {
                 "custom_songs": data.get("custom_songs", []),
                 "playlists": data.get("playlists", []),
+                "settings": data.get("settings", {}),
                 "last_update": self.hass.data.get("cuboai_media_library_update_time", 0),
             }
-        return {"custom_songs": [], "playlists": []}
+        return {"custom_songs": [], "playlists": [], "settings": {}}
 
 
 class CuboLastAlertSensor(CoordinatorEntity, SensorEntity):
