@@ -137,11 +137,15 @@ def _set_status_led(uid, account, password, camera_ip, on: bool):
 
 
 class CuboYouTubeCacheSwitch(RestoreEntity, SwitchEntity):
-    """Switch to toggle local caching of YouTube songs."""
+    """Switch to toggle local caching of YouTube and Spotify songs.
+
+    Spotify links are resolved to a YouTube search and downloaded the same
+    way, so one toggle covers both sources.
+    """
 
     def __init__(self):
         self._attr_has_entity_name = True
-        self._attr_name = "Cache YouTube Songs"
+        self._attr_name = "Cache YouTube/Spotify Songs"
         self._attr_unique_id = "cuboai_youtube_cache"
         self._attr_icon = "mdi:youtube"
         self._attr_entity_category = EntityCategory.CONFIG

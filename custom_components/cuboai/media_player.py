@@ -322,6 +322,31 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
             def _extract_yt_url():
                 nonlocal media_id
+                import glob
+                import hashlib
+                import os
+
+                is_caching_enabled = self.hass.data.get("cuboai", {}).get("youtube_cache_enabled", False)
+                cache_dir = self.hass.config.path("www", "cuboai_cache")
+
+                # Key the cache by the ORIGINAL id (YouTube link, Spotify link or
+                # ytsearch string) so a cached Spotify song replays straight from
+                # disk without contacting spotify.com for the title again.
+                cache_hash = hashlib.md5(media_id.encode()).hexdigest()
+
+                if is_caching_enabled:
+                    existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
+                    if existing:
+                        ext = existing[0].split(".")[-1]
+                        return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
+                    if not os.path.exists(cache_dir):
+                        try:
+                            os.makedirs(cache_dir, exist_ok=True)
+                        except Exception:
+                            pass
+
+                # Spotify: yt-dlp can't download from Spotify, so resolve the track
+                # title and search it on YouTube instead.
                 if "spotify.com" in media_id:
                     try:
                         import re
@@ -345,27 +370,6 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
                     import yt_dlp
-
-                import glob
-                import hashlib
-                import os
-
-                is_caching_enabled = self.hass.data.get("cuboai", {}).get("youtube_cache_enabled", False)
-                cache_dir = self.hass.config.path("www", "cuboai_cache")
-
-                if is_caching_enabled and not os.path.exists(cache_dir):
-                    try:
-                        os.makedirs(cache_dir, exist_ok=True)
-                    except Exception:
-                        pass
-
-                cache_hash = hashlib.md5(media_id.encode()).hexdigest()
-
-                if is_caching_enabled:
-                    existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
-                    if existing:
-                        ext = existing[0].split(".")[-1]
-                        return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
 
                 ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
                 if is_caching_enabled:

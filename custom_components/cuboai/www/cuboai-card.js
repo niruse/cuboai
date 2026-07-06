@@ -599,12 +599,13 @@ class CuboAICameraCard extends HTMLElement {
           const toggleCacheBtn = this.musicBar.querySelector('#toggleCacheBtn');
           const playTimeSelect = this.musicBar.querySelector('#playTimeSelect');
 
-          // The global "Cache YouTube Songs" switch entity (entity_id differs
-          // between old installs and new ones with the Media Library device).
+          // The global "Cache YouTube/Spotify Songs" switch entity (entity_id
+          // differs between old installs and new ones: cache_youtube_songs vs
+          // cache_youtube_spotify_songs — match the common prefix).
           const findCacheSwitch = () => {
             if (!this._hass) return null;
             return Object.keys(this._hass.states).find(
-              id => id.startsWith('switch.') && id.includes('cache_youtube_songs')
+              id => id.startsWith('switch.') && id.includes('cache_youtube')
             ) || null;
           };
           
