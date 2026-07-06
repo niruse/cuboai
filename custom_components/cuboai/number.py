@@ -4,6 +4,7 @@ from homeassistant.components.number import NumberEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .utils import retry_camera_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         bright_pct = int(value)
 
+        @retry_camera_command("Night light brightness command")
         def _set_brightness():
             # Imported here so the (potentially heavy) tutk modules load in the
             # executor thread, not the event loop.

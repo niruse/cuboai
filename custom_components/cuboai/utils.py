@@ -60,6 +60,40 @@ def log_to_file(msg):
         pass
 
 
+def retry_camera_command(description: str, attempts: int = 2, delay: float = 2.0):
+    """Decorator for sync camera-command helpers (run in the executor).
+
+    The camera rate-limits rapid session attempts, so a command issued while a
+    coordinator poll or another command holds a session can fail transiently —
+    retry once before surfacing a clean HomeAssistantError (instead of the
+    generic "unknown error" toast a raw exception produces).
+    """
+    import functools
+    import time
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_err = None
+            for attempt in range(attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_err = e
+                    if attempt < attempts - 1:
+                        log_to_file(f"{description} attempt {attempt + 1} failed, retrying: {e}")
+                        time.sleep(delay)
+            from homeassistant.exceptions import HomeAssistantError
+
+            raise HomeAssistantError(
+                f"{description} failed — the camera may be busy, try again in a few seconds ({last_err})"
+            ) from last_err
+
+        return wrapper
+
+    return decorator
+
+
 def find_available_port(start_port=8555, max_port=8600):
     """Find an available port for go2rtc RTSP.
 

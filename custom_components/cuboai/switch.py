@@ -6,6 +6,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .utils import retry_camera_command
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         async_add_entities([CuboYouTubeCacheSwitch()])
 
 
+@retry_camera_command("Sleep mode command")
 def _set_sleep_mode(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set sleep mode."""
     try:
@@ -106,6 +108,7 @@ class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
+@retry_camera_command("Status LED command")
 def _set_status_led(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set status led."""
     try:
@@ -214,6 +217,7 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
+@retry_camera_command("Flip screen command")
 def _set_flip_screen(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set flip screen."""
     try:
@@ -286,6 +290,7 @@ class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
+@retry_camera_command("Baby presence command")
 def _set_baby_presence(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set baby presence alert."""
     try:

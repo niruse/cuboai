@@ -70,6 +70,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         async_add_entities(entities)
 
 
+from .utils import retry_camera_command
+
+
+@retry_camera_command("Lullaby command")
 def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_uuid=None, volume=None, timer=None):
     """Synchronous function to control lullabies."""
 
@@ -139,9 +143,9 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                     resp = sess._cubo_set(build_set_lullaby_vol_duration(vol, timer_val)[1])
     except Exception as e:
         log_to_file(f"[Lullaby] ERROR: {e}")
-        # Surface the failure to the service caller instead of silently showing
-        # an optimistic "playing" state; the coordinator refresh corrects state.
-        _LOGGER.error("Lullaby command '%s' failed: %s", cmd_type, e)
+        # Propagate so the retry decorator can retry and then surface a clean
+        # HomeAssistantError instead of an optimistic "playing" state.
+        _LOGGER.warning("Lullaby command '%s' failed: %s", cmd_type, e)
         raise
 
 
@@ -195,6 +199,15 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
 
     async def async_turn_off(self) -> None:
         await self.async_media_stop()
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Store the speaker volume (applied to the next queued track).
+
+        The entity advertises VOLUME_SET; without this override the base class
+        raises NotImplementedError and the UI shows an 'unknown error' toast.
+        """
+        self._attr_volume_level = volume
+        self.async_write_ha_state()
 
     async def async_set_repeat(self, repeat: RepeatMode) -> None:
         self._attr_repeat = repeat
