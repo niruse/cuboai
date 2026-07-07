@@ -111,6 +111,14 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # We use the combined stream to support two-way audio (microphone)
         rtsp_port = self._effective_rtsp_port()
 
+        # When NVR mode protects the RTSP listener, HA must authenticate too
+        auth = ""
+        opts = self.coordinator.config_entry.options
+        if opts.get("nvr_enabled") and opts.get("nvr_password"):
+            from urllib.parse import quote
+
+            auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
+
         # Pre-warm the go2rtc producer: on a cold start the pure-python engine
         # needs several seconds to connect to the camera and deliver the first
         # HEVC keyframe — longer than the HLS stream worker's demux timeout,
@@ -130,7 +138,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         except Exception as e:
             _LOGGER.debug("Stream pre-warm failed (continuing anyway): %s", e)
 
-        return f"rtsp://127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
+        return f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
     async def _go2rtc_webrtc_offer(self, offer_sdp: str) -> str | None:
         """POST the WebRTC offer to the internal go2rtc and return the answer SDP."""

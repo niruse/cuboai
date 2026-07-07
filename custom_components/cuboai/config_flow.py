@@ -340,6 +340,14 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 new_data["cameras"] = [c for c in all_cams if c["device_id"] in selected]
                 self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
 
+            # NVR exposure: if enabled without a password, generate a strong
+            # one automatically — the full ready-to-paste URL is shown on the
+            # "CuboAI WebRTC Stream" sensor attributes.
+            if user_input.get("nvr_enabled") and not user_input.get("nvr_password"):
+                import secrets
+
+                user_input["nvr_password"] = secrets.token_urlsafe(9)
+
             # The YouTube/Spotify cache is owned by the Cache YouTube Songs
             # switch entity (single source of truth, restored across restarts);
             # this checkbox is just a second way to flip it.
@@ -403,6 +411,18 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 "rtsp_port",
                 default=default_port,
             ): vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
+            vol.Optional(
+                "nvr_enabled",
+                default=self.config_entry.options.get("nvr_enabled", False),
+            ): bool,
+            vol.Optional(
+                "nvr_username",
+                default=self.config_entry.options.get("nvr_username", "cuboai"),
+            ): str,
+            vol.Optional(
+                "nvr_password",
+                default=self.config_entry.options.get("nvr_password", ""),
+            ): str,
             vol.Required(
                 "alerts_count",
                 default=self.config_entry.options.get("alerts_count", self.config_entry.data.get("alerts_count", 5)),

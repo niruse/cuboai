@@ -491,12 +491,36 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
         ) or self.coordinator.config_entry.options.get(
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
-        return {
+        opts = self.coordinator.config_entry.options
+        nvr_on = bool(opts.get("nvr_enabled") and opts.get("nvr_password"))
+
+        auth = ""
+        if nvr_on:
+            from urllib.parse import quote
+
+            auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
+
+        attrs = {
             "go2rtc_server": "http://127.0.0.1:1985",
-            "rtsp_url": f"rtsp://127.0.0.1:{rtsp_port}/cuboai_{self._device_id}",
+            "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_{self._device_id}",
             "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
             "stream_id": f"cuboai_{self._device_id}",
         }
+
+        if nvr_on:
+            # Ready-to-paste URL for an NVR (HiLook/Hikvision, Synology, ...):
+            # reachable from the LAN via the HA host's address.
+            host = None
+            try:
+                from urllib.parse import urlparse
+
+                from homeassistant.helpers.network import get_url
+
+                host = urlparse(get_url(self.hass, allow_external=False, allow_ip=True)).hostname
+            except Exception:
+                pass
+            attrs["nvr_rtsp_url"] = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_{self._device_id}"
+        return attrs
 
     @property
     def device_info(self):

@@ -150,6 +150,14 @@ class Go2RTCManager:
                 "listen": f":{webrtc_port}",
             },
         }
+
+        # NVR mode: protect the RTSP listener with credentials so external
+        # recorders (HiLook/Hikvision, Synology, Frigate, ...) can consume the
+        # stream securely. go2rtc applies the credentials to internal
+        # consumers (its ffmpeg re-encoders) automatically.
+        if self._options.get("nvr_enabled") and self._options.get("nvr_password"):
+            config["rtsp"]["username"] = self._options.get("nvr_username") or "cuboai"
+            config["rtsp"]["password"] = self._options["nvr_password"]
         if "streams" not in config:
             config["streams"] = {}
 
