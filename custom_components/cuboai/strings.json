@@ -49,6 +49,9 @@
     }
   },
   "options": {
+    "error": {
+      "rtsp_port_in_use": "This port is already in use by another service — choose a different one."
+    },
     "step": {
       "init": {
         "title": "CuboAI Options",

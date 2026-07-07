@@ -329,7 +329,24 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         setup_file_logger(self.hass)
+        errors = {}
         if user_input is not None:
+            # Validate a manually chosen RTSP port BEFORE saving: it is valid
+            # if it's the port our own go2rtc currently holds, or if it can
+            # actually be bound. Otherwise reject with a clear error instead
+            # of silently self-healing to a different port at runtime.
+            try:
+                chosen_port = int(user_input.get("rtsp_port") or 0)
+            except (TypeError, ValueError):
+                chosen_port = 0
+            current_port = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
+            if chosen_port and chosen_port != current_port:
+                from .go2rtc import _port_bindable
+
+                if not await self.hass.async_add_executor_job(_port_bindable, chosen_port):
+                    errors["rtsp_port"] = "rtsp_port_in_use"
+
+        if user_input is not None and not errors:
             # Camera selection is stored in entry DATA (it defines which devices
             # exist), the rest are regular options.
             selected = user_input.pop("cameras", None)
@@ -453,4 +470,5 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),
+            errors=errors,
         )
