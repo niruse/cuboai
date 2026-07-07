@@ -492,10 +492,12 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
         opts = self.coordinator.config_entry.options
-        nvr_on = bool(opts.get("nvr_enabled") and opts.get("nvr_password"))
+        nvr_enabled = bool(opts.get("nvr_enabled"))
+        has_pw = bool(opts.get("nvr_password"))
 
+        # Auth is only applied when a password is set; empty password = open
         auth = ""
-        if nvr_on:
+        if has_pw:
             from urllib.parse import quote
 
             auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
@@ -507,9 +509,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
             "stream_id": f"cuboai_{self._device_id}",
         }
 
-        if nvr_on:
+        if nvr_enabled:
             # Ready-to-paste URL for an NVR (HiLook/Hikvision, Synology, ...):
-            # reachable from the LAN via the HA host's address.
+            # reachable from the LAN via the HA host's address. The ?video
+            # suffix serves video only (Hikvision often rejects the AAC audio).
             host = None
             try:
                 from urllib.parse import urlparse
@@ -519,7 +522,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
                 host = urlparse(get_url(self.hass, allow_external=False, allow_ip=True)).hostname
             except Exception:
                 pass
-            attrs["nvr_rtsp_url"] = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_{self._device_id}"
+            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_{self._device_id}"
+            attrs["nvr_rtsp_url"] = base
+            attrs["nvr_rtsp_url_video_only"] = base + "?video"
+            attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"
         return attrs
 
     @property

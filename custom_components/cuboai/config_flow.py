@@ -357,13 +357,11 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 new_data["cameras"] = [c for c in all_cams if c["device_id"] in selected]
                 self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
 
-            # NVR exposure: if enabled without a password, generate a strong
-            # one automatically — the full ready-to-paste URL is shown on the
-            # "CuboAI WebRTC Stream" sensor attributes.
-            if user_input.get("nvr_enabled") and not user_input.get("nvr_password"):
-                import secrets
-
-                user_input["nvr_password"] = secrets.token_urlsafe(9)
+            # NVR exposure: an empty password means NO authentication on the
+            # RTSP listener (many NVRs — Hikvision/HiLook — only speak Digest
+            # and reject go2rtc's Basic auth, so no-auth is the reliable path).
+            # A non-empty password enables Basic auth. Either way the
+            # ready-to-paste URL is on the "CuboAI WebRTC Stream" sensor.
 
             # The YouTube/Spotify cache is owned by the Cache YouTube Songs
             # switch entity (single source of truth, restored across restarts);

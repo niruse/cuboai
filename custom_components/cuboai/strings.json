@@ -58,9 +58,9 @@
         "data": {
           "cameras": "Cameras to add (uncheck to remove)",
           "cache_youtube_songs": "Save YouTube/Spotify songs to local cache",
-          "nvr_enabled": "Expose RTSP stream for NVR (adds username/password protection)",
+          "nvr_enabled": "Expose RTSP stream for NVR (shows a copyable URL on the WebRTC Stream sensor)",
           "nvr_username": "NVR stream username",
-          "nvr_password": "NVR stream password (left empty = auto-generated)",
+          "nvr_password": "NVR stream password (leave EMPTY for no password — most compatible with Hikvision/HiLook)",
           "download_images": "Download alert images locally",
           "alerts_count": "Number of alerts to retain in state attributes",
           "hours_back": "Time window to check for alerts (hours)",
