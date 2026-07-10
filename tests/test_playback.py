@@ -7,7 +7,7 @@ the value and calls playtime_expired() on every poll — these tests lock the
 pure decision in place.
 """
 
-from custom_components.cuboai.playback import playtime_expired
+from custom_components.cuboai.playback import playtime_expired, should_loop_playback
 
 
 class TestPlaytimeExpired:
@@ -46,3 +46,32 @@ class TestPlaytimeExpired:
         # user sets 10 min mid-session -> expires at 600s from session start
         assert playtime_expired(session_start, 599, 10) is False
         assert playtime_expired(session_start, 600, 10) is True
+
+
+class TestShouldLoopPlayback:
+    """Play Time means 'play FOR this long' — loop content until the budget."""
+
+    def test_loops_while_playtime_set_and_not_expired(self):
+        # single song finished, 30-min Play Time still running -> keep playing
+        assert should_loop_playback(30, has_tracks=True, expired=False) is True
+
+    def test_no_loop_when_infinite(self):
+        # no Play Time -> stop when the queue empties (Repeat handles looping)
+        assert should_loop_playback(0, has_tracks=True, expired=False) is False
+
+    def test_no_loop_when_expired(self):
+        assert should_loop_playback(30, has_tracks=True, expired=True) is False
+
+    def test_no_loop_when_no_tracks(self):
+        # e.g. a lullaby-only session records no songs to loop
+        assert should_loop_playback(30, has_tracks=False, expired=False) is False
+
+    def test_single_song_soother_scenario(self):
+        """A single 3-min song with Play Time 30 min: after the song ends
+        (t=180) and the budget is not spent, it loops; at t>=1800 it stops."""
+        # not expired at 180s -> loop the song again
+        assert playtime_expired(0.0, 180, 30) is False
+        assert should_loop_playback(30, True, playtime_expired(0.0, 180, 30)) is True
+        # expired at 1800s -> stop
+        assert playtime_expired(0.0, 1800, 30) is True
+        assert should_loop_playback(30, True, playtime_expired(0.0, 1800, 30)) is False

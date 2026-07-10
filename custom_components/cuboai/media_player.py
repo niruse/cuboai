@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .playback import playtime_expired as _playtime_expired
+from .playback import should_loop_playback as _should_loop_playback
 from .tutk.cuboai_messages import LULLABY_CATALOG
 
 _LOGGER = logging.getLogger(__name__)
@@ -436,16 +437,32 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
         # effect within a few seconds instead of being ignored until the next
         # session.
         session_start = loop.time()
+        # Tracks played this session (songs only) so Play Time can LOOP them:
+        # "Play Time: 30 min" means play for 30 minutes, not "play once, max 30".
+        session_tracks = []
+        played_ok_since_refill = True
+
+        def _timer_min():
+            return _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
 
         def _expired():
-            timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
-            return _playtime_expired(session_start, loop.time(), timer_min)
+            return _playtime_expired(session_start, loop.time(), _timer_min())
 
         try:
-            while self._queue:
+            while True:
                 if _expired():
                     _LOGGER.info("Speaker play time expired — stopping queue")
                     self._queue.clear()
+                    break
+
+                if not self._queue:
+                    # Queue drained: while a Play Time is set, loop the session's
+                    # songs until the budget is spent. The played_ok guard avoids
+                    # a hot loop if every track fails to extract/play instantly.
+                    if _should_loop_playback(_timer_min(), bool(session_tracks), _expired()) and played_ok_since_refill:
+                        played_ok_since_refill = False
+                        self._queue.extend(session_tracks)
+                        continue
                     break
 
                 raw_media_id = self._queue.pop(0)
@@ -531,6 +548,12 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 finally:
                     if hasattr(stderr_dest, "close"):
                         stderr_dest.close()
+
+                # Remember this song so Play Time can loop the session, and note
+                # that real playback happened (clears the hot-loop guard).
+                played_ok_since_refill = True
+                if raw_media_id not in session_tracks:
+                    session_tracks.append(raw_media_id)
 
                 # Poll the track in short slices so a Play Time change mid-song
                 # (or reaching the session budget) stops playback within ~5 s

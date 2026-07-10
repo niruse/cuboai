@@ -196,6 +196,31 @@ class CuboAICameraCard extends HTMLElement {
     return { type: "custom:cuboai-camera-card", device_id: "" };
   }
 
+  // ── Shared per-camera settings (synced across all devices via the media
+  //    library sensor + cuboai.save_settings service) ─────────────────────
+  _findLibrarySensor() {
+    if (!this._hass || !this._hass.states) return null;
+    for (const k in this._hass.states) {
+      if (k.startsWith('sensor.cuboai_media_library')) return this._hass.states[k];
+    }
+    return null;
+  }
+  _getSharedSetting(deviceId, key) {
+    const lib = this._findLibrarySensor();
+    const s = lib && lib.attributes && lib.attributes.settings && lib.attributes.settings[deviceId];
+    return s ? s[key] : undefined;
+  }
+  _setSharedSetting(deviceId, patch) {
+    try {
+      const lib = this._findLibrarySensor();
+      const all = (lib && lib.attributes && lib.attributes.settings)
+        ? JSON.parse(JSON.stringify(lib.attributes.settings)) : {};
+      all[deviceId] = Object.assign({}, all[deviceId] || {}, patch);
+      this._settingsWriteTs = Date.now();
+      if (this._hass) this._hass.callService('cuboai', 'save_settings', { settings: all });
+    } catch (e) {}
+  }
+
   set hass(hass) {
     if (this._error) {
       this.innerHTML = `<div style="background: #fee; border: 1px solid #fcc; color: #c00; padding: 15px; border-radius: 8px;"><h3>CuboAI Card Configuration Error</h3><p>${this._error.message}</p><pre>${this._error.stack}</pre></div>`;
@@ -252,7 +277,14 @@ class CuboAICameraCard extends HTMLElement {
       } else if (defaultMuteState === 'muted') {
         this.isMuted = true;
       } else {
-        this.isMuted = savedMuted ? savedMuted === 'true' : true;
+        // 'remember': the shared (cross-device) setting wins, then this
+        // browser's localStorage, then default muted.
+        const sharedMuted = this._getSharedSetting(deviceId, 'muted');
+        if (sharedMuted !== undefined) {
+          this.isMuted = !!sharedMuted;
+        } else {
+          this.isMuted = savedMuted ? savedMuted === 'true' : true;
+        }
       }
 
       let babyName = null;
@@ -1605,6 +1637,10 @@ class CuboAICameraCard extends HTMLElement {
                     this.isMuted = video ? video.muted : (audio ? audio.muted : false);
                     if (audio) audio.muted = this.isMuted;
                     localStorage.setItem(`cuboai_muted_${deviceId}`, this.isMuted ? 'true' : 'false');
+                    // Sync mute across devices (respected only in 'remember' mode)
+                    if ((this._config?.default_mute_state || 'remember') === 'remember') {
+                      this._setSharedSetting(deviceId, { muted: this.isMuted });
+                    }
                   }, 100);
                 });
               }
@@ -1703,6 +1739,22 @@ class CuboAICameraCard extends HTMLElement {
             const shared = (currentLibraryStateObj.attributes.settings || {})[this._deviceId] || {};
             if (shared.shuffle !== undefined) {
               this._shuffleMode = !!shared.shuffle;
+            }
+            // Adopt a mute change from another device (only in 'remember' mode).
+            if (shared.muted !== undefined && (this._config?.default_mute_state || 'remember') === 'remember') {
+              const wantMuted = !!shared.muted;
+              if (wantMuted !== this.isMuted) {
+                this.isMuted = wantMuted;
+                const root = this.content?.shadowRoot || this.content;
+                if (root) {
+                  const v = root.querySelector('video');
+                  const a = root.querySelector('audio');
+                  const vi = root.querySelector('.volume');
+                  if (v) v.muted = wantMuted;
+                  if (a) a.muted = wantMuted;
+                  if (vi) vi.icon = wantMuted ? 'mdi:volume-mute' : 'mdi:volume-high';
+                }
+              }
             }
           }
         } catch (e) {}
