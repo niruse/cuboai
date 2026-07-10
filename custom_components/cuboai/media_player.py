@@ -15,6 +15,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .playback import playtime_expired as _playtime_expired
 from .tutk.cuboai_messages import LULLABY_CATALOG
 
 _LOGGER = logging.getLogger(__name__)
@@ -429,17 +430,21 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
         current_task = asyncio.current_task()
         loop = asyncio.get_running_loop()
 
-        # Play Time is a TOTAL session budget, read once when playback starts:
-        # a 30-min play time with 3-min songs must stop after ~30 minutes, not
-        # give every track its own 30-minute allowance. Change it mid-playback
-        # and it applies the next time playback starts.
-        timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
-        deadline = loop.time() + timer_min * 60 if timer_min > 0 else None
+        # Play Time is a TOTAL session budget measured from when playback
+        # started. The value is RE-READ on every check (via _expired below), so
+        # setting Play Time AFTER pressing Play — the natural flow — takes
+        # effect within a few seconds instead of being ignored until the next
+        # session.
+        session_start = loop.time()
+
+        def _expired():
+            timer_min = _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
+            return _playtime_expired(session_start, loop.time(), timer_min)
 
         try:
             while self._queue:
-                if deadline is not None and loop.time() >= deadline:
-                    _LOGGER.info(f"Speaker play time expired ({timer_min} min) — stopping queue")
+                if _expired():
+                    _LOGGER.info("Speaker play time expired — stopping queue")
                     self._queue.clear()
                     break
 
@@ -469,13 +474,22 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                         )
                         # Lullabies loop forever natively. We clear the queue because a playlist stops at a lullaby.
                         self._queue.clear()
-                        # Delegated (card) lullabies follow the session's Play Time budget;
-                        # wait until then (or an hour if infinite) so the Speaker doesn't
-                        # show "playing" long after the lullaby stopped.
-                        if deadline is not None:
-                            await asyncio.sleep(max(10.0, deadline - loop.time()) + 10)
-                        else:
-                            await asyncio.sleep(3600)
+                        # Delegated (card) lullabies follow the session's Play Time budget.
+                        # Poll so a mid-session Play Time change (or a manual stop of the
+                        # lullaby entity) is honoured within ~2 s.
+                        while not _expired():
+                            lull = self.hass.states.get(lullaby_entity_id)
+                            if lull and lull.state != MediaPlayerState.PLAYING:
+                                break  # stopped elsewhere
+                            await asyncio.sleep(2)
+                        if self._delegated_lullaby:
+                            self._delegated_lullaby = False
+                            try:
+                                await self.hass.services.async_call(
+                                    "media_player", "media_stop", {"entity_id": lullaby_entity_id}
+                                )
+                            except Exception:
+                                pass
                     else:
                         _LOGGER.error("Lullaby entity not found")
                     continue
@@ -518,20 +532,24 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                     if hasattr(stderr_dest, "close"):
                         stderr_dest.close()
 
-                if deadline is not None:
-                    try:
-                        # Each track only gets whatever remains of the session budget
-                        await asyncio.wait_for(self._backchannel_proc.wait(), timeout=max(1.0, deadline - loop.time()))
-                    except TimeoutError:
-                        _LOGGER.info(f"Speaker play time expired ({timer_min} min)")
-                        self._queue.clear()  # clear queue to stop playing
+                # Poll the track in short slices so a Play Time change mid-song
+                # (or reaching the session budget) stops playback within ~5 s
+                # instead of only between tracks.
+                while True:
+                    if _expired():
+                        _LOGGER.info("Speaker play time expired — stopping playback")
+                        self._queue.clear()
                         if getattr(self, "_backchannel_proc", None):
                             try:
                                 self._backchannel_proc.terminate()
                             except Exception:
                                 pass
-                else:
-                    await self._backchannel_proc.wait()
+                        break
+                    try:
+                        await asyncio.wait_for(self._backchannel_proc.wait(), timeout=5)
+                        break  # track finished on its own
+                    except TimeoutError:
+                        continue  # re-check the budget and keep waiting
 
                 self._backchannel_proc = None
 

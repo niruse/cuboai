@@ -533,9 +533,9 @@ class CuboAICameraCard extends HTMLElement {
               <button id="stopMusicBtn" class="cubo-btn cubo-btn-red">Stop</button>
             </div>
 
-            <div class="library-header" style="justify-content: space-between;">
+            <div class="library-header" style="justify-content: space-between; flex-wrap: wrap; gap: 6px;">
               <div class="library-title">Saved Playlists</div>
-              <div style="display: flex; gap: 6px; align-items: center;">
+              <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 100%;">
                 <select id="playlistUserFilter" class="cubo-select" style="padding: 2px; font-size: 11px; min-height: unset; height: auto;">
                   <option value="all" ${this._playlistUserFilter === 'me' ? '' : 'selected'}>All Users</option>
                   <option value="me" ${this._playlistUserFilter === 'me' ? 'selected' : ''}>My Playlists</option>
