@@ -11,7 +11,7 @@ from custom_components.cuboai.api.cuboai_functions import _extract_lan_ip
 
 class TestExtractLanIp:
     def test_valid_private_candidate(self):
-        assert _extract_lan_ip("192.168.240.85", "") == "192.168.240.85"
+        assert _extract_lan_ip("192.168.1.85", "") == "192.168.1.85"
 
     def test_rejects_out_of_range_octets(self):
         assert _extract_lan_ip("999.999.999.999", "") is None

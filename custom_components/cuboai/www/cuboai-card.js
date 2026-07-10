@@ -274,6 +274,12 @@ class CuboAICameraCard extends HTMLElement {
           }
       }
 
+      // Show the camera's last snapshot while (re)connecting instead of a black
+      // frame. entity_picture is an access-token URL served by HA, so it works
+      // from any device (mobile included).
+      const poster =
+        (webrtcEntity && hass.states[webrtcEntity]?.attributes?.entity_picture) || undefined;
+
       const webrtcConfig = {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
@@ -281,8 +287,10 @@ class CuboAICameraCard extends HTMLElement {
         mode: 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
+        poster: poster,
         media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
       };
+      this._desiredMuted = this.isMuted;
       
       // Add the microphone overlay button
       if (!this.micButton) {
@@ -355,6 +363,29 @@ class CuboAICameraCard extends HTMLElement {
           }
           this.content.hass = this._hass;
           this.appendChild(this.content);
+
+          // Mobile browsers block UNMUTED autoplay, so a card configured to open
+          // with sound still starts muted until the user interacts. Apply the
+          // desired mute state on the first tap/click anywhere on the card.
+          if (!this._muteGestureBound) {
+            this._muteGestureBound = true;
+            const applyDesiredMute = (ev) => {
+              const root = this.content?.shadowRoot || this.content;
+              const video = root && root.querySelector('video');
+              const desired = this._desiredMuted;
+              if (desired === undefined || !video) return; // not ready — keep listening
+              const audio = root.querySelector('audio');
+              video.muted = desired;
+              if (audio) audio.muted = desired;
+              this.isMuted = desired;
+              const volumeIcon = root.querySelector('.volume');
+              if (volumeIcon) volumeIcon.icon = desired ? 'mdi:volume-mute' : 'mdi:volume-high';
+              // Applied — stop listening (only self-removes once it actually took effect)
+              this.removeEventListener('pointerdown', applyDesiredMute, { capture: true });
+            };
+            // Satisfies the mobile autoplay gesture requirement on first real tap.
+            this.addEventListener('pointerdown', applyDesiredMute, { capture: true });
+          }
           if (this.bpmOverlay) this.appendChild(this.bpmOverlay);
           if (this.envOverlay) this.appendChild(this.envOverlay);
           
@@ -1724,6 +1755,7 @@ class CuboAICameraCard extends HTMLElement {
              mode: 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
+             poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
              media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
            };
            customElements.whenDefined('webrtc-camera').then(() => {
@@ -1761,6 +1793,7 @@ class CuboAICameraCard extends HTMLElement {
                  mode: 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,
+                 poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,
                  media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
                };
                customElements.whenDefined('webrtc-camera').then(() => {
