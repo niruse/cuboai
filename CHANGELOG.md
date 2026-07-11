@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.1]
+
+### Fixed
+- **NVR password could never be cleared**: the options form declared the password with `default=<old value>`, so when the field was cleared the frontend omitted the key and voluptuous silently re-inserted the old password — the "no authentication" mode was unreachable and the NVR URL sensor kept showing stale credentials. The field now uses `suggested_value` (still pre-filled, but clearing it really clears it) and an emptied password is stored explicitly as `""`, which disables RTSP auth and updates the sensor URL on reload.
+
 ## [2.4.0]
 
 ### Fixed

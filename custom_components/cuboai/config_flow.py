@@ -362,6 +362,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             # and reject go2rtc's Basic auth, so no-auth is the reliable path).
             # A non-empty password enables Basic auth. Either way the
             # ready-to-paste URL is on the "CuboAI WebRTC Stream" sensor.
+            # A CLEARED password field arrives with the key absent (see the
+            # suggested_value note in the schema) — store it explicitly as ""
+            # so the old password can't survive anywhere downstream.
+            user_input["nvr_password"] = user_input.get("nvr_password") or ""
 
             # The YouTube/Spotify cache is owned by the Cache YouTube Songs
             # switch entity (single source of truth, restored across restarts);
@@ -434,9 +438,15 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 "nvr_username",
                 default=self.config_entry.options.get("nvr_username", "cuboai"),
             ): str,
+            # suggested_value (NOT default=) is critical here: with default=,
+            # CLEARING the field makes the frontend omit the key and voluptuous
+            # re-inserts the old password as the default — so an empty password
+            # could never be saved and the NVR URL sensor kept the stale creds.
+            # With suggested_value the field is still pre-filled, but clearing
+            # it leaves the key absent and the submit handler stores "".
             vol.Optional(
                 "nvr_password",
-                default=self.config_entry.options.get("nvr_password", ""),
+                description={"suggested_value": self.config_entry.options.get("nvr_password", "")},
             ): str,
             vol.Required(
                 "alerts_count",
