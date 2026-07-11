@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.3]
+
+### Added
+- **Brand icons**: the integration now ships its own CuboAI icon (`custom_components/cuboai/brand/`), served natively by Home Assistant 2026.3+ in Settings → Devices & Services, the config flow, and HACS — no home-assistant/brands entry needed.
+
 ## [2.4.2]
 
 ### Fixed
