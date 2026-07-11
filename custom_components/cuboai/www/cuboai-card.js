@@ -349,7 +349,7 @@ class CuboAICameraCard extends HTMLElement {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
         url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: this.micEnabled ? 'webrtc' : 'mse',
+        mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
         ui: true,
         muted: this.isMuted,
         poster: poster,
@@ -400,7 +400,11 @@ class CuboAICameraCard extends HTMLElement {
           // other's source out of the <video> (SourceBuffer errors, automute,
           // and audio-less WebRTC takeovers). MSE carries the camera's AAC
           // audio for listening; WebRTC is only needed for the two-way mic.
-          webrtcConfig.mode = this.micEnabled ? 'webrtc' : 'mse';
+          // Apple WebKit (iOS) keeps the legacy dual mode: iOS has no classic
+          // MSE (ManagedMediaSource only on 17.1+), the native player handles
+          // the dual negotiation fine, and dual mode is the configuration
+          // proven to deliver sound on iPhones.
+          webrtcConfig.mode = (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse');
           webrtcConfig.media = this.micEnabled ? 'video,audio,microphone' : 'video,audio';
           webrtcConfig.muted = this.isMuted;
           if (this.content && this.content.setConfig) {
@@ -1440,11 +1444,16 @@ class CuboAICameraCard extends HTMLElement {
             const audio = root.querySelector('audio');
             const volumeIcon = root.querySelector('.volume');
 
-            // Keep the speaker button ALWAYS visible. webrtc-camera creates it
-            // display:none and only reveals it after audio is detected on each
-            // (re)connect — that's the "button blinks out / missing for a
-            // second" on MSE. Our CSS override (injected once) pins it.
-            if (!this._cuboVolumeStyleDone && root.querySelector('.controls')) {
+            // Speaker button visibility. webrtc-camera creates it display:none
+            // and only reveals it after audio is detected on each (re)connect —
+            // that's the "button blinks out / missing for a second" on MSE, so
+            // on desktop/Android we pin it ALWAYS visible. Apple WebKit (iOS —
+            // every iOS browser) keeps STOCK webrtc-camera behaviour (as in
+            // v2.3.x): the icon appears once audio is detected and the user
+            // taps it to unmute — forcing it visible there covered the native
+            // player controls, and hiding it removed the unmute button.
+            if (!this._cuboVolumeStyleDone && root.querySelector('.controls')
+                && !(navigator.vendor && navigator.vendor.includes('Apple'))) {
               this._cuboVolumeStyleDone = true;
               const st = document.createElement('style');
               st.textContent = '.controls .volume { display: block !important; }';
@@ -1459,7 +1468,8 @@ class CuboAICameraCard extends HTMLElement {
             // after 3 failed attempts we accept muted and wait for the first
             // user interaction instead of fighting a losing battle.
             if (video && video.muted && !this.isMuted && !this._userMutedThisSession
-                && !this._soundNeedsGesture) {
+                && !this._soundNeedsGesture
+                && !(navigator.vendor && navigator.vendor.includes('Apple'))) {
               if (!video.paused && (this._reUnmuteAttempts || 0) < 3) {
                 this._reUnmuteAttempts = (this._reUnmuteAttempts || 0) + 1;
                 video.muted = false;
@@ -1521,6 +1531,10 @@ class CuboAICameraCard extends HTMLElement {
                 // sites — and only fall back to muted + unmute-on-first-
                 // interaction when the browser blocks it. An explicit mute by
                 // the user always wins (_userMutedThisSession).
+                // Apple WebKit (iOS) is excluded: the video plays with NATIVE
+                // player controls there, mute/unmute belongs to the native
+                // speaker button, and scripted mute changes fight the user.
+                const isAppleAudio = navigator.vendor && navigator.vendor.includes('Apple');
                 const armGestureUnmute = () => {
                   if (this._autoUnmuteArmed) return;
                   this._autoUnmuteArmed = true;
@@ -1552,7 +1566,7 @@ class CuboAICameraCard extends HTMLElement {
                 // after repeated browser blocks and needs to arm this).
                 this._armGestureUnmute = armGestureUnmute;
 
-                if (this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture) {
+                if (!isAppleAudio && this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture) {
                   video.muted = false;
                   this.isMuted = false;
                   const p = video.play();
@@ -1571,7 +1585,7 @@ class CuboAICameraCard extends HTMLElement {
                       armGestureUnmute();
                     });
                   }
-                } else {
+                } else if (!isAppleAudio) {
                   video.muted = this.isMuted;
                 }
                 this._reUnmuteAttempts = 0;
@@ -1960,7 +1974,7 @@ class CuboAICameraCard extends HTMLElement {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
              url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: this.micEnabled ? 'webrtc' : 'mse',
+             mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
              ui: true,
              muted: this.isMuted,
              poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
@@ -1998,7 +2012,7 @@ class CuboAICameraCard extends HTMLElement {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
                  url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: this.micEnabled ? 'webrtc' : 'mse',
+                 mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
                  ui: true,
                  muted: this.isMuted,
                  poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,

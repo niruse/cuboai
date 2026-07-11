@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.2]
+
+### Fixed
+- **iOS (iPhone) sound broken by 2.4.0**: the MSE-only listening transport doesn't fit Apple WebKit — iPhones have no classic MSE (`ManagedMediaSource` only from iOS 17.1), and the 2.4.0 audio logic interfered with the native player. iOS now keeps the exact v2.3.x behaviour on all three fronts: legacy `webrtc,mse` dual transport (the configuration proven to deliver sound on iPhones), stock speaker-icon behaviour (appears when audio is detected, tap to unmute), and zero scripted mute interference — the desktop unmute logic, mute watchdog, and pinned speaker icon apply to desktop/Android only.
+
 ## [2.4.1]
 
 ### Fixed
