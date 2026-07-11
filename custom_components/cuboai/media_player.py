@@ -1,4 +1,3 @@
-import functools
 import logging
 import os
 import sys
@@ -12,6 +11,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -152,7 +152,7 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
         raise
 
 
-class CuboAIMediaPlayer(MediaPlayerEntity):
+class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
     """Media Player entity to send audio to the CuboAI camera."""
 
     def __init__(self, manager, cam, options):
@@ -199,6 +199,26 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",
         }
+
+    async def async_added_to_hass(self) -> None:
+        """Restore repeat mode and volume after a reload or HA restart.
+
+        Without this, every restart silently resets Repeat to OFF — and since
+        the card treats the entity as the live authority for repeat, ALL
+        devices then show (and behave as) Repeat OFF after a reboot.
+        """
+        await super().async_added_to_hass()
+        try:
+            last = await self.async_get_last_state()
+            if last:
+                rep = last.attributes.get("repeat")
+                if rep in ("off", "all", "one"):
+                    self._attr_repeat = RepeatMode(rep)
+                vol = last.attributes.get("volume_level")
+                if isinstance(vol, (int, float)) and 0 <= vol <= 1:
+                    self._attr_volume_level = float(vol)
+        except Exception:
+            _LOGGER.debug("Could not restore speaker repeat/volume", exc_info=True)
 
     async def async_turn_off(self) -> None:
         await self.async_media_stop()
@@ -531,8 +551,20 @@ class CuboAIMediaPlayer(MediaPlayerEntity):
                 if self._options.get("enable_debug_logs", False):
                     # open() blocks — do it in the executor, and close our copy
                     # right after spawning (the child duplicates the fd).
+                    # Rotate first: this file collects raw subprocess stderr in
+                    # append mode, so without a cap it grows forever while
+                    # debug logs are enabled (one stream per track, looping).
                     log_path = self.hass.config.path("cuboai_debug.log")
-                    stderr_dest = await self.hass.async_add_executor_job(functools.partial(open, log_path, "a"))
+
+                    def _open_rotated(path=log_path, max_bytes=5 * 1024 * 1024):
+                        try:
+                            if os.path.exists(path) and os.path.getsize(path) > max_bytes:
+                                os.replace(path, path + ".1")
+                        except OSError:
+                            pass
+                        return open(path, "a")
+
+                    stderr_dest = await self.hass.async_add_executor_job(_open_rotated)
                 else:
                     stderr_dest = asyncio.subprocess.DEVNULL
 

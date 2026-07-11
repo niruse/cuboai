@@ -1,6 +1,6 @@
 import logging
 
-from homeassistant.components.number import NumberEntity
+from homeassistant.components.number import NumberEntity, RestoreNumber
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -27,7 +27,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         async_add_entities(numbers)
 
 
-class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
+class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
     def __init__(self, coordinator, camera, options):
         super().__init__(coordinator)
         self._device_id = camera["device_id"]
@@ -50,6 +50,20 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_unit_of_measurement = "min"
 
         self._timer_value = 30
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last timer value after a reload or HA restart.
+
+        Options changes (e.g. toggling debug logs) reload the whole
+        integration; without restore the timer silently resets.
+        """
+        await super().async_added_to_hass()
+        try:
+            last = await self.async_get_last_number_data()
+            if last is not None and last.native_value is not None:
+                self._timer_value = int(last.native_value)
+        except Exception:
+            _LOGGER.debug("Could not restore lullaby timer value", exc_info=True)
 
     @property
     def native_value(self):
@@ -75,7 +89,7 @@ class CuboLullabyTimerNumber(CoordinatorEntity, NumberEntity):
         async_dispatcher_send(self.hass, f"cuboai_lullaby_timer_changed_{self._device_id}", self._timer_value)
 
 
-class CuboSpeakerTimerNumber(CoordinatorEntity, NumberEntity):
+class CuboSpeakerTimerNumber(CoordinatorEntity, RestoreNumber):
     def __init__(self, coordinator, camera, options):
         super().__init__(coordinator)
         self._device_id = camera["device_id"]
@@ -91,6 +105,21 @@ class CuboSpeakerTimerNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_unit_of_measurement = "min"
 
         self._timer_value = 0
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last Play Time after a reload or HA restart.
+
+        Without this, any options change (e.g. enabling debug logs) reloads
+        the integration and resets Play Time to 0 (= Infinite), so a queued
+        playlist plays a single pass and stops instead of looping.
+        """
+        await super().async_added_to_hass()
+        try:
+            last = await self.async_get_last_number_data()
+            if last is not None and last.native_value is not None:
+                self._timer_value = int(last.native_value)
+        except Exception:
+            _LOGGER.debug("Could not restore speaker play time", exc_info=True)
 
     @property
     def native_value(self):

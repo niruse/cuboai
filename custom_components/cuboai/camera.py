@@ -16,10 +16,18 @@ async def async_setup_entry(hass, entry, async_add_entities):
     if not cameras and "device_id" in entry.data:
         cameras = [{"device_id": entry.data["device_id"], "baby_name": entry.data["baby_name"]}]
 
+    # Modern HA detects WebRTC support by CLASS introspection (whether
+    # async_handle_async_webrtc_offer is overridden) — properties and feature
+    # flags can't hide it. So the WebRTC handlers live on a subclass that is
+    # only instantiated when the entry opts in (HEVC models, where frontend
+    # HLS can't play the video). Default is the plain HLS class: H264+AAC
+    # plays natively, no opus transcode, no WebRTC session churn.
+    cls = CuboLocalCameraWebRTC if entry.options.get("frontend_webrtc") else CuboLocalCamera
+
     camera_entities = []
     for camera in cameras:
         if "uid" in camera:
-            camera_entities.append(CuboLocalCamera(coordinator, camera))
+            camera_entities.append(cls(coordinator, camera))
 
     if camera_entities:
         async_add_entities(camera_entities)
@@ -51,19 +59,20 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
     def supported_features(self) -> int:
         from homeassistant.components.camera import CameraEntityFeature
 
-        features = CameraEntityFeature.STREAM
-        # Dynamically add WEB_RTC if the current HA version supports it
-        if hasattr(CameraEntityFeature, "WEB_RTC"):
-            features |= CameraEntityFeature.WEB_RTC
-        return features
+        return CameraEntityFeature.STREAM
 
     @property
     def frontend_stream_type(self) -> str | None:
-        """Return the type of stream supported by this camera."""
+        """HLS: the camera delivers H264+AAC, which HLS carries natively
+        (sound included, no transcode). The WebRTC path needs an AAC→Opus
+        ffmpeg transcode inside go2rtc that keeps EOF-ing — every death kills
+        the WebRTC session, so the more-info view lags and reconnects in a
+        loop ("Received event for unknown subscription"). WebRTC lives on the
+        CuboLocalCameraWebRTC subclass for HEVC models (frontend_webrtc
+        option)."""
         from homeassistant.components.camera import StreamType
 
-        # If WebRTC is supported, force WebRTC on frontend to avoid HLS HEVC failure
-        return getattr(StreamType, "WEB_RTC", "web_rtc")
+        return getattr(StreamType, "HLS", "hls")
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return a still image response from the camera."""
@@ -140,6 +149,41 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
         return f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+class CuboLocalCameraWebRTC(CuboLocalCamera):
+    """WebRTC-frontend variant, used only when the entry sets frontend_webrtc.
+
+    HA decides a camera supports native WebRTC by checking whether the CLASS
+    overrides async_handle_async_webrtc_offer — so these handlers must not
+    exist on the default (HLS) class at all, or every HA frontend prefers
+    WebRTC and lands on the fragile AAC→Opus transcode. HEVC models need this
+    variant because frontend HLS cannot play HEVC video.
+    """
+
+    @property
+    def supported_features(self) -> int:
+        from homeassistant.components.camera import CameraEntityFeature
+
+        features = CameraEntityFeature.STREAM
+        if hasattr(CameraEntityFeature, "WEB_RTC"):
+            features |= CameraEntityFeature.WEB_RTC
+        return features
+
+    @property
+    def frontend_stream_type(self) -> str | None:
+        from homeassistant.components.camera import StreamType
+
+        return getattr(StreamType, "WEB_RTC", "web_rtc")
+
     async def _go2rtc_webrtc_offer(self, offer_sdp: str) -> str | None:
         """POST the WebRTC offer to the internal go2rtc and return the answer SDP."""
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -181,12 +225,3 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
         """Nothing to clean up: the exchange is stateless on our side."""
-
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "name": f"CuboAI {self._baby_name}",
-            "manufacturer": "CuboAI",
-            "model": "Baby Monitor",
-        }

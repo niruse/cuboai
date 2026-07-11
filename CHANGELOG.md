@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0]
+
+### Fixed
+- **Reliable live audio in the card (desktop "no sound" fix)**: the card listed `mode: webrtc,mse` — video-rtc runs BOTH transports simultaneously and they race, with the winner ripping the other's source out of the `<video>` (endless `SourceBuffer` errors, spontaneous mutes, and audio-less WebRTC takeovers — the camera's AAC audio cannot ride WebRTC without a fragile Opus transcode). The card now uses exactly one transport per state: **MSE for listening** (plays the camera's AAC natively, like the mobile app) and **WebRTC only while the two-way mic is active**.
+- **Native HA camera view (more-info / device page) lag & reconnect loop**: the entity forced WebRTC on the frontend, which requires an AAC→Opus ffmpeg transcode inside go2rtc that dies on every stream stall — each death killed the WebRTC session and the frontend resubscribed in a loop ("Received event for unknown subscription"). The frontend now defaults to **HLS** (carries H264+AAC natively, no transcode). HA detects WebRTC support by class introspection, so the WebRTC handlers moved to an opt-in subclass: set the `frontend_webrtc` entry option for HEVC models where frontend HLS can't play the video.
+- **"Always Start Unmuted" broke the player**: browsers refuse unmuted autoplay, so the video never started and the volume button never rendered. The card now always starts playback muted (video + controls always alive), then tries for sound: if the browser allows unmuted play it's immediate; otherwise the card unmutes on the user's first interaction. An explicit user mute always wins.
+- **Spontaneous re-mutes**: video-rtc force-mutes on ANY `play()` rejection, including harmless `AbortError`s from MSE source reloads ("plays with sound, flips to mute seconds later"). A watchdog now reverts mutes nobody asked for, detects Chrome's "unmuting failed, element paused instead" punishment, and degrades gracefully to unmute-on-first-click.
+- **Speaker button missing/unclickable**: webrtc-camera creates the volume control `display:none` and only reveals it after audio detection on each (re)connect. The card pins it always-visible and keeps its icon in sync with the real mute state.
+- **Card editor showed stale values**: the editor rendered once and ignored the saved config delivered afterwards, so dropdowns (e.g. "Initial Audio State") always showed defaults. The form now re-syncs whenever the config arrives.
+- **Repeat mode (and speaker volume) reset on every restart**: the speaker media player is now a `RestoreEntity` — Repeat and volume survive HA restarts, and since the entity is the live cross-device authority for repeat, all devices stay in sync after a reboot.
+- **Lullaby Timer / Play Time reset on every integration reload**: both number entities now restore their last value (`RestoreNumber`).
+- **Media library wipe guard**: a stale browser could save an empty song/playlist list over a populated library. Saves that would replace >1 items with an empty list are now refused.
+- **Video opened slightly zoomed/cropped**: the inner video defaulted to crop-to-fill; it now shows the whole camera frame (`object-fit: contain`).
+
+### Changed
+- Repeat chip in the card updates optimistically (instant feedback, entity round-trip confirms).
+
 ## [2.3.6]
 
 ### Fixed

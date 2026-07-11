@@ -29,13 +29,30 @@ class CuboMediaLibrary:
             _LOGGER.error(f"Failed to save CuboAI media library: {e}")
 
     def update_custom_songs(self, songs):
-        _LOGGER.warning(f"Updating custom songs. Old: {len(self._data.get('custom_songs', []))} New: {len(songs)}")
-        _LOGGER.warning("Calling async_dispatcher_send soon...")
+        old = self._data.get("custom_songs", []) or []
+        _LOGGER.info(f"Updating custom songs. Old: {len(old)} New: {len(songs)}")
+        # Safety guard: never let a stale client wipe the whole library.
+        # Deleting the last song (1 -> 0) is allowed; replacing many songs
+        # with an empty list is almost certainly a stale browser/cache bug
+        # (this is how the library was wiped on 2026-07-10).
+        if not songs and len(old) > 1:
+            _LOGGER.warning(
+                "Refusing to replace %d custom songs with an empty list "
+                "(possible stale client state). Ignoring save.", len(old)
+            )
+            return
         self._data["custom_songs"] = songs
         self._save()
         self.hass.loop.call_soon_threadsafe(self._update_sensor)
 
     def update_playlists(self, playlists):
+        old = self._data.get("playlists", []) or []
+        if not playlists and len(old) > 1:
+            _LOGGER.warning(
+                "Refusing to replace %d playlists with an empty list "
+                "(possible stale client state). Ignoring save.", len(old)
+            )
+            return
         self._data["playlists"] = playlists
         self._save()
         self.hass.loop.call_soon_threadsafe(self._update_sensor)

@@ -18,6 +18,24 @@ if (!window._cuboai_registry_patched) {
 class CuboAICameraCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config;
+    // HA may deliver `hass` (which triggers the one-time render) BEFORE
+    // setConfig, or update the config after the first render. Since render()
+    // only runs once, re-sync the form controls here — otherwise the dropdowns
+    // show stale defaults (e.g. "Remember Last State" while the saved config is
+    // actually "unmuted").
+    if (this._rendered) this._applyConfigToForm();
+  }
+
+  _applyConfigToForm() {
+    const c = this._config || {};
+    const set = (sel, val) => {
+      const el = this.querySelector(sel);
+      if (el) el.value = val;
+    };
+    set('#camera-select', c.device_id || '');
+    set('#mute-select', c.default_mute_state || 'remember');
+    set('#song-filter-select', c.default_song_filter || 'all');
+    set('#playlist-filter-select', c.default_playlist_filter || 'all');
   }
 
   set hass(hass) {
@@ -175,9 +193,14 @@ class CuboAICameraCardEditor extends HTMLElement {
       newConfig.default_playlist_filter = target.value;
     }
 
-    const event = new Event("config-changed", { bubbles: true, composed: true });
-    event.detail = { config: newConfig };
-    this.dispatchEvent(event);
+    // Use CustomEvent so `detail` is delivered reliably (a plain Event with a
+    // manually-attached detail is ignored by newer HA editors, leaving Save
+    // greyed out because HA never sees the config change).
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: newConfig },
+      bubbles: true,
+      composed: true,
+    }));
   }
 }
 
@@ -272,25 +295,35 @@ class CuboAICameraCard extends HTMLElement {
       const savedMuted = localStorage.getItem(`cuboai_muted_${deviceId}`);
       const defaultMuteState = this._config?.default_mute_state || 'remember';
       
+      // Decide whether the user ultimately wants SOUND (unmuted) or silence.
+      let wantUnmuted;
       if (defaultMuteState === 'unmuted') {
-        this.isMuted = false;
+        wantUnmuted = true;
       } else if (defaultMuteState === 'muted') {
-        this.isMuted = true;
+        wantUnmuted = false;
       } else {
         // 'remember': the shared (cross-device) setting wins, then this
         // browser's localStorage, then default muted.
         const sharedMuted = this._getSharedSetting(deviceId, 'muted');
         if (sharedMuted !== undefined) {
-          this.isMuted = !!sharedMuted;
+          wantUnmuted = !sharedMuted;
         } else {
-          this.isMuted = savedMuted ? savedMuted === 'true' : true;
+          wantUnmuted = savedMuted ? savedMuted !== 'true' : false;
         }
       }
+      // ALWAYS start muted. Browsers block UNMUTED autoplay, and a video that
+      // can't autoplay leaves webrtc-camera with no rendered controls — that is
+      // why the speaker button used to vanish / go unclickable on "Always
+      // Unmute". Starting muted guarantees the video plays and the speaker
+      // button stays visible and clickable. If the setting wants sound we
+      // unmute on the user's first interaction (handled in the video init).
+      this.isMuted = true;
+      this._wantUnmuted = wantUnmuted;
 
       let babyName = null;
       if (this._speakerEntityId) {
           const nameParts = this._speakerEntityId.replace('media_player.', '').replace('_speaker', '').split('_');
-          babyName = nameParts[nameParts.length - 1]; // e.g. "suwon"
+          babyName = nameParts[nameParts.length - 1]; // e.g. "nursery"
       }
       
       let webrtcEntity = null;
@@ -316,14 +349,13 @@ class CuboAICameraCard extends HTMLElement {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
         url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: 'webrtc,mse',
+        mode: this.micEnabled ? 'webrtc' : 'mse',
         ui: true,
         muted: this.isMuted,
         poster: poster,
         media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
       };
-      this._desiredMuted = this.isMuted;
-      
+
       // Add the microphone overlay button
       if (!this.micButton) {
         this.micButton = document.createElement('ha-icon-button');
@@ -362,7 +394,13 @@ class CuboAICameraCard extends HTMLElement {
             if (volumeIcon) volumeIcon.icon = this.isMuted ? 'mdi:volume-mute' : 'mdi:volume-high';
           }
           
-          // Re-render the child to apply the new media config
+          // Re-render the child to apply the new media config.
+          // IMPORTANT: single transport per state. Listing 'mse,webrtc'
+          // together makes video-rtc run BOTH and race — the winner rips the
+          // other's source out of the <video> (SourceBuffer errors, automute,
+          // and audio-less WebRTC takeovers). MSE carries the camera's AAC
+          // audio for listening; WebRTC is only needed for the two-way mic.
+          webrtcConfig.mode = this.micEnabled ? 'webrtc' : 'mse';
           webrtcConfig.media = this.micEnabled ? 'video,audio,microphone' : 'video,audio';
           webrtcConfig.muted = this.isMuted;
           if (this.content && this.content.setConfig) {
@@ -395,29 +433,12 @@ class CuboAICameraCard extends HTMLElement {
           }
           this.content.hass = this._hass;
           this.appendChild(this.content);
-
-          // Mobile browsers block UNMUTED autoplay, so a card configured to open
-          // with sound still starts muted until the user interacts. Apply the
-          // desired mute state on the first tap/click anywhere on the card.
-          if (!this._muteGestureBound) {
-            this._muteGestureBound = true;
-            const applyDesiredMute = (ev) => {
-              const root = this.content?.shadowRoot || this.content;
-              const video = root && root.querySelector('video');
-              const desired = this._desiredMuted;
-              if (desired === undefined || !video) return; // not ready — keep listening
-              const audio = root.querySelector('audio');
-              video.muted = desired;
-              if (audio) audio.muted = desired;
-              this.isMuted = desired;
-              const volumeIcon = root.querySelector('.volume');
-              if (volumeIcon) volumeIcon.icon = desired ? 'mdi:volume-mute' : 'mdi:volume-high';
-              // Applied — stop listening (only self-removes once it actually took effect)
-              this.removeEventListener('pointerdown', applyDesiredMute, { capture: true });
-            };
-            // Satisfies the mobile autoplay gesture requirement on first real tap.
-            this.addEventListener('pointerdown', applyDesiredMute, { capture: true });
-          }
+          // Note: mobile browsers block UNMUTED autoplay by policy, so a card
+          // configured to open with sound still starts muted on mobile until the
+          // user taps webrtc-camera's own volume button. We intentionally do NOT
+          // intercept taps here — doing so fought the volume button and prevented
+          // unmuting ("can't hear"). The initial muted state is passed via the
+          // webrtc-camera `muted` config above.
           if (this.bpmOverlay) this.appendChild(this.bpmOverlay);
           if (this.envOverlay) this.appendChild(this.envOverlay);
           
@@ -436,10 +457,15 @@ class CuboAICameraCard extends HTMLElement {
                   }
                 }
               }
-              // One-time migration from local storage
-              let migrated = localStorage.getItem(`cuboai_custom_songs_migrated_${deviceId}`);
+              const libSongs = (libraryState && libraryState.attributes && libraryState.attributes.custom_songs) || [];
+
+              // Restore from this browser's local storage whenever the server
+              // library is EMPTY but local storage still has songs — recovers
+              // from accidental wipes and covers first-time migration. Only
+              // runs when the library sensor is actually present (so a slow
+              // startup doesn't false-trigger a restore).
               let stored = localStorage.getItem(`cuboai_custom_songs_${deviceId}`);
-              if (!migrated && stored) {
+              if (stored && libraryState && libSongs.length === 0) {
                 const parsed = JSON.parse(stored);
                 if (parsed && parsed.length > 0) {
                   localStorage.setItem(`cuboai_custom_songs_migrated_${deviceId}`, 'true');
@@ -448,8 +474,8 @@ class CuboAICameraCard extends HTMLElement {
                 }
               }
 
-              if (libraryState && libraryState.attributes && libraryState.attributes.custom_songs) {
-                return JSON.parse(JSON.stringify(libraryState.attributes.custom_songs));
+              if (libSongs.length > 0) {
+                return JSON.parse(JSON.stringify(libSongs));
               }
             } catch(e) {}
             return JSON.parse(JSON.stringify(defaultSongs));
@@ -473,10 +499,11 @@ class CuboAICameraCard extends HTMLElement {
                   }
                 }
               }
-              // One-time migration from local storage
-              let migrated = localStorage.getItem(`cuboai_playlists_migrated_${deviceId}`);
+              const libPlaylists = (libraryState && libraryState.attributes && libraryState.attributes.playlists) || [];
+
+              // Restore from local storage only when the server library is empty
               let stored = localStorage.getItem(`cuboai_playlists_${deviceId}`);
-              if (!migrated && stored) {
+              if (stored && libraryState && libPlaylists.length === 0) {
                 const parsed = JSON.parse(stored);
                 if (parsed && parsed.length > 0) {
                   localStorage.setItem(`cuboai_playlists_migrated_${deviceId}`, 'true');
@@ -485,10 +512,7 @@ class CuboAICameraCard extends HTMLElement {
                 }
               }
 
-              if (libraryState && libraryState.attributes && libraryState.attributes.playlists) {
-                return JSON.parse(JSON.stringify(libraryState.attributes.playlists));
-              }
-              return [];
+              return JSON.parse(JSON.stringify(libPlaylists));
             } catch (e) {
               return [];
             }
@@ -1340,7 +1364,16 @@ class CuboAICameraCard extends HTMLElement {
               if (this._repeatMode === 'off') newMode = 'all';
               else if (this._repeatMode === 'all') newMode = 'one';
               else newMode = 'off';
-              
+
+              // Optimistic update so the chip flips instantly; the entity
+              // round-trip (repeat_set → state → updateMusicStatus) confirms.
+              // The entity is the live cross-device authority for repeat and
+              // now survives restarts (RestoreEntity on the speaker), so
+              // localStorage is only the pre-connect fallback.
+              this._repeatMode = newMode;
+              localStorage.setItem(`cuboai_repeat_${deviceId}`, newMode);
+              try { renderSongs(); } catch (e) {}
+
               if (this._hass && this._speakerEntityId) {
                 this._hass.callService('media_player', 'repeat_set', {
                   entity_id: this._speakerEntityId,
@@ -1407,6 +1440,56 @@ class CuboAICameraCard extends HTMLElement {
             const audio = root.querySelector('audio');
             const volumeIcon = root.querySelector('.volume');
 
+            // Keep the speaker button ALWAYS visible. webrtc-camera creates it
+            // display:none and only reveals it after audio is detected on each
+            // (re)connect — that's the "button blinks out / missing for a
+            // second" on MSE. Our CSS override (injected once) pins it.
+            if (!this._cuboVolumeStyleDone && root.querySelector('.controls')) {
+              this._cuboVolumeStyleDone = true;
+              const st = document.createElement('style');
+              st.textContent = '.controls .volume { display: block !important; }';
+              (root.querySelector('.card') || this.content).appendChild(st);
+            }
+            // video-rtc force-mutes on ANY play() rejection (its autoplay
+            // fallback) — including harmless AbortErrors from MSE source
+            // reloads. That's the "starts unmuted, flips to mute after a few
+            // seconds" bug. If the video got muted and neither we nor the
+            // user asked for it, undo it. Retries are capped: when the
+            // browser GENUINELY blocks sound, unmuting pauses playback, so
+            // after 3 failed attempts we accept muted and wait for the first
+            // user interaction instead of fighting a losing battle.
+            if (video && video.muted && !this.isMuted && !this._userMutedThisSession
+                && !this._soundNeedsGesture) {
+              if (!video.paused && (this._reUnmuteAttempts || 0) < 3) {
+                this._reUnmuteAttempts = (this._reUnmuteAttempts || 0) + 1;
+                video.muted = false;
+                // Chrome punishes a gesture-less unmute by PAUSING the video
+                // ("Unmuting failed and the element was paused instead").
+                // Detect that right away, revert to muted playback so the
+                // stream doesn't freeze, and stop attempting until a gesture.
+                setTimeout(() => {
+                  if (video.paused) {
+                    this._soundNeedsGesture = true;
+                    this.isMuted = true;
+                    video.muted = true;
+                    video.play().catch(() => {});
+                    if (this._armGestureUnmute) this._armGestureUnmute();
+                  }
+                }, 80);
+              } else {
+                this.isMuted = true; // browser insists — wait for a gesture
+                if (this._armGestureUnmute) this._armGestureUnmute();
+              }
+            } else if (video && !video.muted) {
+              this._reUnmuteAttempts = 0;
+            }
+            // Keep the icon truthful (mute state can change before the
+            // player's own volumechange listener is wired up).
+            if (video && volumeIcon) {
+              const wantIcon = video.muted ? 'mdi:volume-mute' : 'mdi:volume-high';
+              if (volumeIcon.icon !== wantIcon) volumeIcon.icon = wantIcon;
+            }
+
             if (!this.micButton.isConnected || (player && !player.contains(this.micButton))) {
               if (player) player.appendChild(this.micButton);
               else root.appendChild(this.micButton);
@@ -1426,6 +1509,72 @@ class CuboAICameraCard extends HTMLElement {
               // Ensure the media matches our memory when it first loads
               if (video && !video.dataset.cuboInit) {
                 video.dataset.cuboInit = "true";
+
+                // Show the full camera frame instead of cropping/zooming in.
+                // The inner <video> otherwise crops the (near-square) CuboAI
+                // frame to the card's aspect ratio and looks "zoomed in".
+                video.style.setProperty('object-fit', 'contain', 'important');
+
+                // Apply the desired audio state to this (possibly re-created)
+                // video. When the setting wants sound we TRY unmuted playback
+                // first — browsers allow unmuted autoplay on frequently-visited
+                // sites — and only fall back to muted + unmute-on-first-
+                // interaction when the browser blocks it. An explicit mute by
+                // the user always wins (_userMutedThisSession).
+                const armGestureUnmute = () => {
+                  if (this._autoUnmuteArmed) return;
+                  this._autoUnmuteArmed = true;
+                  const doAutoUnmute = (e) => {
+                    window.removeEventListener('pointerdown', doAutoUnmute, true);
+                    this._autoUnmuteArmed = false;
+                    if (this._userMutedThisSession) return;
+                    // Let a click on the player's own volume button be handled
+                    // by it alone — no double-toggle.
+                    const path = (e && e.composedPath) ? e.composedPath() : [];
+                    if (path.some(el => el && el.classList && el.classList.contains('volume'))) return;
+                    const r = this.content?.shadowRoot || this.content;
+                    const vv = r?.querySelector('video');
+                    const aa = r?.querySelector('audio');
+                    this.isMuted = false;
+                    this._reUnmuteAttempts = 0; // gesture given — watchdog may guard again
+                    this._soundNeedsGesture = false;
+                    if (vv) {
+                      vv.muted = false;
+                      // Chrome may have PAUSED the video when a gesture-less
+                      // unmute was attempted — resume it now that we have one.
+                      if (vv.paused) vv.play().catch(() => {});
+                    }
+                    if (aa) aa.muted = false;
+                  };
+                  window.addEventListener('pointerdown', doAutoUnmute, true);
+                };
+                // Expose to the watchdog interval (it gives up re-unmuting
+                // after repeated browser blocks and needs to arm this).
+                this._armGestureUnmute = armGestureUnmute;
+
+                if (this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture) {
+                  video.muted = false;
+                  this.isMuted = false;
+                  const p = video.play();
+                  if (p && p.catch) {
+                    p.catch((err) => {
+                      // Only a real autoplay-policy block means "the browser
+                      // refuses sound". MSE reloads reject pending play()
+                      // calls with AbortError ("interrupted by a new load
+                      // request") — muting on those would silence the card a
+                      // few seconds after it correctly started unmuted.
+                      if (err && err.name !== 'NotAllowedError') return;
+                      this._soundNeedsGesture = true;
+                      this.isMuted = true;
+                      video.muted = true;
+                      video.play().catch(() => {});
+                      armGestureUnmute();
+                    });
+                  }
+                } else {
+                  video.muted = this.isMuted;
+                }
+                this._reUnmuteAttempts = 0;
 
                 // Apple devices (iOS/Safari) use strict native media players and break if patched.
                 // We reliably detect Apple engines by checking the vendor string.
@@ -1635,6 +1784,10 @@ class CuboAICameraCard extends HTMLElement {
                 volumeIcon.addEventListener('click', () => {
                   setTimeout(() => {
                     this.isMuted = video ? video.muted : (audio ? audio.muted : false);
+                    // The user's explicit choice wins: once they mute, stop
+                    // auto-unmuting for the rest of this page view (and resume
+                    // if they unmute again themselves).
+                    this._userMutedThisSession = this.isMuted;
                     if (audio) audio.muted = this.isMuted;
                     localStorage.setItem(`cuboai_muted_${deviceId}`, this.isMuted ? 'true' : 'false');
                     // Sync mute across devices (respected only in 'remember' mode)
@@ -1662,7 +1815,7 @@ class CuboAICameraCard extends HTMLElement {
       
       if (this._speakerEntityId) {
           const nameParts = this._speakerEntityId.replace('media_player.', '').replace('_speaker', '').split('_');
-          babyName = nameParts[nameParts.length - 1]; // e.g. "suwon"
+          babyName = nameParts[nameParts.length - 1]; // e.g. "nursery"
       }
 
       for (const entity_id in hass.states) {
@@ -1739,6 +1892,9 @@ class CuboAICameraCard extends HTMLElement {
             const shared = (currentLibraryStateObj.attributes.settings || {})[this._deviceId] || {};
             if (shared.shuffle !== undefined) {
               this._shuffleMode = !!shared.shuffle;
+              // Keep the pre-sync fallback fresh so a cold page load (before
+              // the library sensor arrives) starts from the synced value.
+              try { localStorage.setItem(`cuboai_shuffle_${this._deviceId}`, this._shuffleMode); } catch (e) {}
             }
             // Adopt a mute change from another device (only in 'remember' mode).
             if (shared.muted !== undefined && (this._config?.default_mute_state || 'remember') === 'remember') {
@@ -1804,7 +1960,7 @@ class CuboAICameraCard extends HTMLElement {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
              url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: 'webrtc,mse',
+             mode: this.micEnabled ? 'webrtc' : 'mse',
              ui: true,
              muted: this.isMuted,
              poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
@@ -1842,7 +1998,7 @@ class CuboAICameraCard extends HTMLElement {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
                  url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: 'webrtc,mse',
+                 mode: this.micEnabled ? 'webrtc' : 'mse',
                  ui: true,
                  muted: this.isMuted,
                  poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,
@@ -1928,8 +2084,12 @@ class CuboAICameraCard extends HTMLElement {
                 customSongs = libraryState.attributes.custom_songs;
               }
               if (customSongs.length === 0) {
-                const deviceId = speakerEntityId.split('_')[2];
-                customSongs = JSON.parse(localStorage.getItem(`cuboai_custom_songs_${deviceId}`)) || [];
+                // device_id comes from the speaker's attributes — parsing the
+                // entity_id ("...".split('_')[2]) just returns "speaker".
+                const deviceId = (speakerState.attributes || {}).device_id;
+                if (deviceId) {
+                  customSongs = JSON.parse(localStorage.getItem(`cuboai_custom_songs_${deviceId}`)) || [];
+                }
               }
             } catch(e) {}
             const song = customSongs.find(s => {
@@ -1950,6 +2110,7 @@ class CuboAICameraCard extends HTMLElement {
               return activeUrl.includes(s.url) || s.url.includes(activeUrl);
             });
             if (song) title = song.name;
+            else if (activeAttributes.media_title && activeAttributes.media_title !== activeAttributes.media_content_id) title = activeAttributes.media_title;
             else title = activeUrl;
           } else {
             title = activeAttributes.media_title || 'Unknown Song';
