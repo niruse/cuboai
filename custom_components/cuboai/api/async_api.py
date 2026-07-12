@@ -183,7 +183,14 @@ async def get_camera_profiles(
                 )
             except Exception:
                 continue
-        return cameras
+        # One camera per device: the API returns one profile per BABY profile,
+        # so a renamed/re-created baby yields the same device_id twice and every
+        # platform then collides on its unique_ids (issue #84). The newest
+        # profile (last in the list) wins.
+        deduped: dict = {}
+        for cam in cameras:
+            deduped[cam["device_id"]] = cam
+        return list(deduped.values())
     finally:
         if close_session:
             await session.close()

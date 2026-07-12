@@ -261,6 +261,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:
         _LOGGER.warning("Failed to clean up deselected camera devices: %s", e)
 
+    # Heal entries that already persisted duplicate camera profiles (issue #84):
+    # a duplicated device_id makes every platform register colliding unique_ids
+    # ("Platform cuboai does not generate unique IDs" across sensor/camera/...).
+    stored_cameras = entry.data.get("cameras", [])
+    unique_cameras = list({c.get("device_id", id(c)): c for c in stored_cameras}.values())
+    if len(unique_cameras) != len(stored_cameras):
+        _LOGGER.warning(
+            "Removed %d duplicate camera profile(s) from the config entry",
+            len(stored_cameras) - len(unique_cameras),
+        )
+        hass.config_entries.async_update_entry(entry, data={**entry.data, "cameras": unique_cameras})
+
     _LOGGER.debug("Cameras fetched. Setting up coordinator...")
     from .coordinator import CuboAICoordinator
 

@@ -502,10 +502,12 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
             auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
 
+        # Like rtsp_port above, the API port self-heals on conflicts (issue #84)
+        api_port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
         attrs = {
-            "go2rtc_server": "http://127.0.0.1:1985",
+            "go2rtc_server": f"http://127.0.0.1:{api_port}",
             "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_{self._device_id}",
-            "web_player_url": f"http://127.0.0.1:1985/stream.html?src=cuboai_{self._device_id}",
+            "web_player_url": f"http://127.0.0.1:{api_port}/stream.html?src=cuboai_{self._device_id}",
             "stream_id": f"cuboai_{self._device_id}",
         }
 

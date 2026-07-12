@@ -236,6 +236,23 @@ If you are experiencing issues (such as sensors showing as "Unknown" or the conf
 
 *Note: Logs are capped at 2MB per file to prevent disk space issues.*
 
+### 🔌 Streaming ports & conflicts
+
+The integration runs its own internal go2rtc server for local streaming. It uses these TCP ports by default, and **self-heals automatically** when one is already taken (for example by Home Assistant's built-in go2rtc or the WebRTC Camera add-on):
+
+| Port | Purpose | If already in use |
+|------|---------|-------------------|
+| `8555` | RTSP listener (camera stream) | Hops to the next free port (usually `8557`) |
+| `1985` | go2rtc API (snapshots, card, WebRTC) | Hops to the next free port (usually `1986`) |
+| `8556` | WebRTC listener | Hops to the next free port |
+
+You never need to configure anything for this: the camera entity, sensors, and the custom card all discover the effective ports through the `rtsp_port` attribute and internal state. A log line like `go2rtc API port 1985 is already in use by another process — using port 1986 instead` is informational, not an error.
+
+Additional protections (since v2.4.4):
+
+- **Orphaned go2rtc cleanup**: if a previous go2rtc process survived a hard Home Assistant crash and still holds the ports, the integration detects it (by its `cuboai_*` streams) and terminates it on startup, reclaiming the standard ports.
+- **No retry storms**: if the internal go2rtc could not start at all, camera entities stop offering stream sources and live snapshots instead of hammering a port that may belong to another process (which previously caused an endless `Using native library` loop and resource exhaustion — see issue [#84](https://github.com/niruse/cuboai/issues/84)).
+
 ---
 
 ## 📝 Changelog

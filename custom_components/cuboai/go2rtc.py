@@ -83,21 +83,121 @@ class Go2RTCManager:
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the go2rtc subprocess is alive. Camera entities consult
+        this before talking to the API port: when go2rtc failed to start,
+        that port may belong to a FOREIGN process, and blindly firing
+        frame/stream requests at it can spawn TUTK producers in an orphaned
+        instance in an endless loop (issue #84)."""
+        return self.process is not None and self.process.returncode is None
+
+    async def _reclaim_stale_instance(self, api_port: int) -> None:
+        """Terminate an orphaned go2rtc from a previous HA run.
+
+        A go2rtc child can outlive a hard-crashed HA process and keep holding
+        our ports. Because it still serves the cuboai_* streams from its old
+        config, every camera snapshot/stream request respawns TUTK exec
+        producers inside the ORPHAN — the endless 'Using native library'
+        loop that piles up processes until the host locks up (issue #84).
+
+        Only a holder that (a) answers the go2rtc API and (b) serves
+        cuboai_* streams is touched, and processes are matched by our exact
+        binary path — a foreign go2rtc is left alone (the port fallback in
+        _resolve_ports handles it instead).
+        """
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        if await self.hass.async_add_executor_job(_port_bindable, api_port):
+            return  # port is free — nothing is squatting on it
+        try:
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"http://127.0.0.1:{api_port}/api/streams",
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                if resp.status != 200:
+                    return
+                streams = await resp.json(content_type=None)
+        except Exception:
+            return  # not a go2rtc API — leave the holder alone
+        if not isinstance(streams, dict) or not any(str(s).startswith("cuboai_") for s in streams):
+            return  # a foreign go2rtc — the API port fallback covers it
+
+        killed = await self.hass.async_add_executor_job(self._terminate_stale_processes)
+        if killed:
+            _LOGGER.warning(
+                "Terminated %d orphaned CuboAI go2rtc process(es) from a previous "
+                "Home Assistant run that were still holding port %s.",
+                killed,
+                api_port,
+            )
+
+    def _terminate_stale_processes(self) -> int:
+        """SIGTERM (then SIGKILL) every process running our go2rtc binary.
+
+        Runs in an executor. Linux /proc only — on other platforms there is
+        nothing to reclaim because HAOS/container is the deployment target.
+        """
+        import signal
+        import time
+
+        def _pids() -> list[int]:
+            pids = []
+            try:
+                entries = os.listdir("/proc")
+            except OSError:
+                return pids
+            for name in entries:
+                if not name.isdigit():
+                    continue
+                pid = int(name)
+                if self.process and self.process.pid == pid:
+                    continue
+                try:
+                    with open(f"/proc/{pid}/cmdline", "rb") as f:
+                        argv0 = f.read().split(b"\0", 1)[0].decode(errors="replace")
+                except OSError:
+                    continue
+                if argv0 == self._binary_path:
+                    pids.append(pid)
+            return pids
+
+        stale = _pids()
+        for pid in stale:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        if stale:
+            time.sleep(1.0)
+            for pid in _pids():  # anything that ignored SIGTERM
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        return len(stale)
+
     async def _resolve_ports(self):
         """Resolve the ports go2rtc will ACTUALLY be able to bind.
 
         On Home Assistant OS the built-in go2rtc already occupies TCP 8555
         (its WebRTC listener), so our RTSP listener silently failed to bind
         while the API kept answering — every RTSP consumer then got
-        'connection reset by peer' (issue #80). Verify the configured ports
-        are free BEFORE starting and self-heal to nearby free ones, then
-        publish the effective RTSP port so the camera/sensor attributes (and
-        therefore the card) all point at the right place.
+        'connection reset by peer' (issue #80). The API port needs the same
+        treatment: with :1985 taken, go2rtc's whole streaming API is dead and
+        the frame/WebRTC requests land on a stranger's socket (issue #84).
+        Verify the configured ports are free BEFORE starting and self-heal to
+        nearby free ones, then publish the effective ports so the
+        camera/sensor attributes (and therefore the card) all point at the
+        right place.
         """
         from .utils import find_available_port
 
         desired_rtsp = int(self._options.get("rtsp_port", 8555))
         desired_webrtc = 8556
+        desired_api = 1985
 
         def _resolve():
             rtsp = desired_rtsp
@@ -106,10 +206,12 @@ class Go2RTCManager:
             webrtc = desired_webrtc
             if webrtc == rtsp or not _port_bindable(webrtc):
                 webrtc = find_available_port(start_port=desired_webrtc + 2)
-            api_ok = _port_bindable(1985)
-            return rtsp, webrtc, api_ok
+            api = desired_api
+            if not _port_bindable(api):
+                api = find_available_port(start_port=desired_api + 1, max_port=desired_api + 100)
+            return rtsp, webrtc, api
 
-        rtsp_port, webrtc_port, api_ok = await self.hass.async_add_executor_job(_resolve)
+        rtsp_port, webrtc_port, api_port = await self.hass.async_add_executor_job(_resolve)
 
         if rtsp_port != desired_rtsp:
             _LOGGER.warning(
@@ -119,29 +221,35 @@ class Go2RTCManager:
                 desired_rtsp,
                 rtsp_port,
             )
-        if not api_ok:
-            _LOGGER.error(
-                "go2rtc API port 1985 is already in use by another process — "
-                "CuboAI streaming will not work until it is freed."
+        if api_port != desired_api:
+            _LOGGER.warning(
+                "go2rtc API port %s is already in use by another process — using "
+                "port %s instead. The camera, sensors and card follow automatically.",
+                desired_api,
+                api_port,
             )
 
         self._rtsp_port = rtsp_port
         self._webrtc_port = webrtc_port
-        # Single source of truth for every rtsp_port consumer (camera
-        # stream_source, entity attributes, and through them the card).
-        self.hass.data.setdefault(DOMAIN, {})["rtsp_port_effective"] = rtsp_port
+        self._api_port = api_port
+        # Single source of truth for every port consumer (camera
+        # stream_source/snapshots, entity attributes, and through them the card).
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        domain_data["rtsp_port_effective"] = rtsp_port
+        domain_data["api_port_effective"] = api_port
         return rtsp_port, webrtc_port
 
     async def _generate_config(self):
         """Generate the go2rtc.yaml file."""
         rtsp_port = getattr(self, "_rtsp_port", None) or self._options.get("rtsp_port", 8555)
         webrtc_port = getattr(self, "_webrtc_port", 8556)
+        api_port = getattr(self, "_api_port", 1985)
         config = {
             "api": {
                 # All interfaces: the frontend card / webrtc integration reach this
                 # API via the HA host's LAN IP, so it cannot be localhost-only.
                 # Alternate port avoids conflict with the HA go2rtc add-on.
-                "listen": ":1985",
+                "listen": f":{api_port}",
             },
             "rtsp": {
                 "listen": f":{rtsp_port}",
@@ -193,6 +301,10 @@ class Go2RTCManager:
         # mistake our own listeners for a conflict and hop ports on reload.
         if self.process:
             await self.stop()
+
+        # Reclaim ports from an orphaned go2rtc of a previous HA run before
+        # probing, so we bind our usual ports instead of hopping (issue #84).
+        await self._reclaim_stale_instance(1985)
 
         await self._resolve_ports()
         await self._resolve_codecs()

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.4]
+
+### Fixed
+- **go2rtc API port conflict caused an infinite retry loop and resource exhaustion (issue #84)**: when TCP 1985 was held by another process, the integration logged an error but started anyway — camera snapshot/stream/WebRTC requests then landed on the stranger's socket. If that stranger was an *orphaned CuboAI go2rtc* surviving a hard HA crash (it still serves the `cuboai_*` streams from its old config), every request respawned a TUTK producer inside the orphan — an endless `Using native library: libIOTCAPIs_ALL.so` loop that piled up processes until the host locked up. Three layers of fix: (1) the API port now self-heals to a free port exactly like the RTSP port already did (8555→8557), and every consumer — camera snapshots, stream pre-warm, WebRTC offers, sensor attributes — follows the effective port; (2) an orphaned CuboAI go2rtc holding the port is detected (by its `cuboai_*` streams) and terminated on startup, reclaiming the standard ports; (3) if go2rtc could not start at all, camera entities return no stream source and skip live snapshots instead of hammering a port they don't own.
+- **Duplicate entity registrations — "Platform cuboai does not generate unique IDs" (issue #84)**: the cloud API returns one entry per *baby profile*, so a renamed or re-created baby profile produced the same camera device twice and every platform collided on its unique IDs. Camera profiles are now deduplicated by device id (newest profile wins), and config entries that already persisted duplicates are healed on startup.
+
+### Added
+- README: "Streaming ports & conflicts" troubleshooting section documenting the default ports, the automatic fallback behaviour, and the orphaned-go2rtc cleanup.
+
 ## [2.4.3]
 
 ### Added

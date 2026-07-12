@@ -51,6 +51,24 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
         )
 
+    def _go2rtc_api_base(self) -> str:
+        """Base URL of OUR go2rtc API, using the port it actually bound
+        (it self-heals to a free port when 1985 is taken, issue #84)."""
+        port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
+        return f"http://127.0.0.1:{port}"
+
+    def _go2rtc_ready(self) -> bool:
+        """Whether OUR go2rtc subprocess is alive.
+
+        Every live-stream/snapshot request must be gated on this: if our
+        go2rtc never started, the API port may belong to a foreign or
+        orphaned go2rtc, and each request would spawn a fresh TUTK producer
+        there — the endless 'Using native library' loop of issue #84.
+        """
+        entry_id = self.coordinator.config_entry.entry_id
+        manager = self.hass.data.get(DOMAIN, {}).get(entry_id, {}).get("go2rtc")
+        return manager is not None and manager.is_running
+
     @property
     def extra_state_attributes(self):
         return {"device_id": self._device_id, "uid": self._device_id, "rtsp_port": self._effective_rtsp_port()}
@@ -76,21 +94,23 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return a still image response from the camera."""
-        # 1. Try to get a LIVE snapshot from go2rtc API
-        import aiohttp
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        # 1. Try to get a LIVE snapshot from go2rtc API — only when OUR go2rtc
+        # is actually running (otherwise the port may be a stranger's, #84)
+        if self._go2rtc_ready():
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        url = f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_{self._device_id}"
-        try:
-            session = async_get_clientsession(self.hass)
-            # 5 second timeout so we don't hang HA if camera is offline
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    image_bytes = await resp.read()
-                    if len(image_bytes) > 1000:  # Ensure it's a real image, not an empty file
-                        return image_bytes
-        except Exception as e:
-            _LOGGER.debug(f"Failed to get live snapshot from go2rtc: {e}")
+            url = f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_{self._device_id}"
+            try:
+                session = async_get_clientsession(self.hass)
+                # 5 second timeout so we don't hang HA if camera is offline
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        image_bytes = await resp.read()
+                        if len(image_bytes) > 1000:  # Ensure it's a real image, not an empty file
+                            return image_bytes
+            except Exception as e:
+                _LOGGER.debug(f"Failed to get live snapshot from go2rtc: {e}")
 
         # 2. Fall back to the last alert image if live stream is unavailable
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
@@ -116,6 +136,15 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     async def stream_source(self) -> str | None:
         """Return the stream source."""
+        # go2rtc failed to start (port conflict, missing binary, ...): report
+        # "no stream source" once instead of letting the stream worker hammer
+        # ports that may belong to another process (issue #84).
+        if not self._go2rtc_ready():
+            _LOGGER.warning(
+                "CuboAI go2rtc is not running — no stream source for %s", self._device_id
+            )
+            return None
+
         # This connects to our internal go2rtc instance via RTSP
         # We use the combined stream to support two-way audio (microphone)
         rtsp_port = self._effective_rtsp_port()
@@ -140,7 +169,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             session = async_get_clientsession(self.hass)
             async with session.get(
-                f"http://127.0.0.1:1985/api/frame.jpeg?src=cuboai_combined_{self._device_id}",
+                f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_combined_{self._device_id}",
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 await resp.read()
@@ -188,8 +217,12 @@ class CuboLocalCameraWebRTC(CuboLocalCamera):
         """POST the WebRTC offer to the internal go2rtc and return the answer SDP."""
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+        if not self._go2rtc_ready():
+            _LOGGER.error("CuboAI go2rtc is not running — cannot answer the WebRTC offer")
+            return None
+
         # We use the combined stream to enable the WebRTC native two-way audio mic button
-        url = f"http://127.0.0.1:1985/api/webrtc?src=cuboai_combined_{self._device_id}"
+        url = f"{self._go2rtc_api_base()}/api/webrtc?src=cuboai_combined_{self._device_id}"
         try:
             session = async_get_clientsession(self.hass)
             async with session.post(url, data=offer_sdp, headers={"Content-Type": "application/sdp"}) as resp:
