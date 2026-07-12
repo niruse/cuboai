@@ -37,8 +37,8 @@ class CuboMediaLibrary:
         # (this is how the library was wiped on 2026-07-10).
         if not songs and len(old) > 1:
             _LOGGER.warning(
-                "Refusing to replace %d custom songs with an empty list "
-                "(possible stale client state). Ignoring save.", len(old)
+                "Refusing to replace %d custom songs with an empty list (possible stale client state). Ignoring save.",
+                len(old),
             )
             return
         self._data["custom_songs"] = songs
@@ -49,8 +49,8 @@ class CuboMediaLibrary:
         old = self._data.get("playlists", []) or []
         if not playlists and len(old) > 1:
             _LOGGER.warning(
-                "Refusing to replace %d playlists with an empty list "
-                "(possible stale client state). Ignoring save.", len(old)
+                "Refusing to replace %d playlists with an empty list (possible stale client state). Ignoring save.",
+                len(old),
             )
             return
         self._data["playlists"] = playlists

@@ -140,9 +140,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # "no stream source" once instead of letting the stream worker hammer
         # ports that may belong to another process (issue #84).
         if not self._go2rtc_ready():
-            _LOGGER.warning(
-                "CuboAI go2rtc is not running — no stream source for %s", self._device_id
-            )
+            _LOGGER.warning("CuboAI go2rtc is not running — no stream source for %s", self._device_id)
             return None
 
         # This connects to our internal go2rtc instance via RTSP
