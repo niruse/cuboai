@@ -228,13 +228,25 @@ Once the card is on your dashboard, you have full control over the camera direct
 
 ## 🛠️ Troubleshooting
 
-If you are experiencing issues (such as sensors showing as "Unknown" or the configuration flow hanging), you can easily capture diagnostic logs:
-1. Go to **Settings > Devices & Services > CuboAI > Configure**
-2. Check the **"Enable Debug Logging to File"** box.
-3. Wait 30-60 seconds for the integration to attempt a connection.
-4. Open your Home Assistant `config` folder and look for `cuboai_debug.log`. This file will contain all the necessary traces and error messages.
+### Debug logs
 
-*Note: Logs are capped at 2MB per file to prevent disk space issues.*
+If you are experiencing issues (stream not playing, HomeKit "No Response", sensors showing as "Unknown", the configuration flow hanging), one toggle collects everything needed for a report:
+
+1. Go to **Settings > Devices & Services > CuboAI > Configure**
+2. Check **"Enable debug logs"** and submit, then restart Home Assistant.
+3. Reproduce the problem once (open the stream, wait for a sensor update, ...).
+4. Collect the files below and attach the relevant ones to your issue.
+
+| Log file | Location | What it contains |
+|---|---|---|
+| `cuboai_debug.log` | HA `config` folder | Every debug/info/error message from the whole integration (sensors, camera, media player, coordinator) |
+| `go2rtc.log` | `config/custom_components/cuboai/bin/` | Streaming diagnostics (since v2.4.5): detected video codec (`[mpegts] muxing ...`), per-frame codec census of the first 300 frames (`FICENSUS`), fps/bitrate/loss health line every 10 s, GOP sync events, RTSP session negotiation |
+| `cuboai_last_alert_debug.log` | HA `config` folder | Alert polling / image download trace |
+| Home Assistant log | **Settings > System > Logs** | The integration's debug messages also appear here automatically — no `logger:` changes in `configuration.yaml` needed |
+
+> ⚠️ **Redact before sharing:** `go2rtc.log` (like `go2rtc.yaml`) contains your cameras' `CUBOAI_UID`, `CUBOAI_ACCOUNT` and `CUBOAI_PASSWORD` values on the exec command lines — replace them with `XXX` before attaching anything to a GitHub issue.
+
+Log files are capped at 2 MB with rotation to protect disk space. Turning the toggle off restores the quiet defaults.
 
 ### 🔌 Streaming ports & conflicts
 
