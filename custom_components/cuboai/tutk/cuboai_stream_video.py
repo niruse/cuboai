@@ -189,8 +189,9 @@ def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log
     tap/audio_tap, if given, are called per muxed video/audio AU with (pts_90k, keyframe, pts_ms);
     the live path passes None so a 24/7 stream retains no per-AU state. Returns the PTSClock stats.
     """
-    from cuboai_pts import AVTimeline
     from cuboai_mpegts import TSMuxer
+    from cuboai_pts import AVTimeline
+    from cuboai_pure import detect_video_codec
 
     def _nal_kf(au):
         return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
@@ -221,7 +222,19 @@ def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log
         if kind != 'video':
             continue
         if mux is None:
-            codec = (fi or {}).get('codec', 'hevc')
+            # The PMT stream_type is written once, from the FIRST video AU — a wrong guess
+            # poisons the whole producer: an H264 stream declared as HEVC parses to no
+            # parameter sets, so go2rtc registers NO video track at all and every video
+            # consumer dies ("codecs not matched: audio:AAC, audio:OPUS" on frame.jpeg,
+            # "finding first packet" timeout on the RTSP leg — issue #85). When this AU has
+            # no FRAMEINFO (mid-GOP join / incomplete), sniff the codec from its NAL
+            # headers; if even that is indecisive (P-frame-only AU), WAIT for the next
+            # video AU instead of defaulting.
+            codec = (fi or {}).get('codec') or detect_video_codec(data, default=None)
+            if not codec:
+                continue
+            if not fi:
+                log(f"[mpegts] first video AU has no FRAMEINFO — codec sniffed from NAL headers: {codec}")
             mux = TSMuxer(codec=codec, audio_codec=('aac' if mux_audio else None))
             log(f"[mpegts] muxing {codec}{'+aac' if mux_audio else ''} → MPEG-TS with FRAMEINFO PTS "
                 f"(stream_type=0x{mux.stream_type:02x})")

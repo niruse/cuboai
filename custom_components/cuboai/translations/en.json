@@ -31,7 +31,8 @@
           "alerts_count": "Number of alerts to retain in state attributes",
           "max_saved_photos": "Maximum number of downloaded photos to keep",
           "hours_back": "Time window to check for alerts (hours)",
-          "update_interval": "Update interval (seconds)"
+          "update_interval": "Update interval (seconds)",
+          "enable_debug_logs": "Enable debug logs (turn on when reporting an issue - writes stream diagnostics to custom_components/cuboai/bin/go2rtc.log)"
         }
       }
     },
@@ -66,10 +67,10 @@
           "alerts_count": "Number of alerts to retain in state attributes",
           "max_saved_photos": "Maximum number of downloaded photos to keep",
           "hours_back": "Time window to check for alerts (hours)",
-          "update_interval": "Update interval (seconds)"
+          "update_interval": "Update interval (seconds)",
+          "enable_debug_logs": "Enable debug logs (turn on when reporting an issue - writes stream diagnostics to custom_components/cuboai/bin/go2rtc.log)"
         }
       }
     }
   }
 }
-

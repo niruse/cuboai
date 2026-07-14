@@ -1813,6 +1813,11 @@ class TUTKDirectSession:
         # channel. The block is fully behind the flag and touches nothing emitted, so the
         # OFF path is byte-identical.
         self._log_frameinfo = os.environ.get("CUBOAI_LOG_FRAMEINFO", "0") != "0"
+        # CUBOAI_LOG_FRAMEINFO_MAX (default 0 = unlimited): stop the census after N AUs.
+        # The enable_debug_logs option runs producers with the census on permanently, so a
+        # cap keeps go2rtc.log bounded while still covering the whole startup window
+        # (connect → first keyframe → mux) where an unknown model diverges (issue #85).
+        self._log_frameinfo_max = int(os.environ.get("CUBOAI_LOG_FRAMEINFO_MAX", "") or "0")
         self._ficensus_n = 0            # census line counter (diagnostic only)
         # ── una C-lag (gated CUBOAI_UNA_LAG, default 0=off) ────────────────────────
         # Native keeps its reported una C a STEADY ~11 frags BEHIND the high-water D. Pure
@@ -3067,7 +3072,8 @@ class TUTKDirectSession:
             # gated codec/FRAMEINFO census, emitted at the EARLIEST
             # point a full AU exists — before audio-truncation, video-FRAMEINFO-strip, or the
             # consumer's kind filter. One stderr line per AU. Gated (default OFF) => byte-identical.
-            if self._log_frameinfo:
+            if self._log_frameinfo and (not self._log_frameinfo_max
+                                        or self._ficensus_n < self._log_frameinfo_max):
                 _tail = unit[-_FRAMEINFO_LEN:] if len(unit) >= _FRAMEINFO_LEN else unit
                 _cid = struct.unpack_from('<H', _tail, 0)[0] if len(_tail) >= 2 else -1
                 _kfb = _tail[2] if len(_tail) >= 3 else -1
@@ -3078,6 +3084,9 @@ class TUTKDirectSession:
                       f"kind={_kc or 'sys'} head={unit[:8].hex()} codec_id=0x{_cid:04x} "
                       f"codec={_frameinfo_codec_name(_cid)} kf={_kfb} b8_12={_b8} "
                       f"tail24={_tail.hex()}", file=sys.stderr, flush=True)
+                if self._ficensus_n == self._log_frameinfo_max:
+                    print(f"FICENSUS capped after {self._ficensus_n} AUs "
+                          f"(CUBOAI_LOG_FRAMEINFO_MAX)", file=sys.stderr, flush=True)
             if self._au_log is not None:
                 self._au_log.append(('emit', m, comp, len(fm), unit[:4] == b"\x00\x00\x00\x01", lag))
                 if ks and unit[:4] == b"\x00\x00\x00\x01":   # video: log emit-time + interior holes

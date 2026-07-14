@@ -28,6 +28,15 @@ def set_debug_logs_enabled(enabled: bool):
     """Enable or disable debug file logging dynamically."""
     global DEBUG_LOGS_ENABLED, _TRACE_LISTENER, _TRACE_QUEUE_HANDLER
     DEBUG_LOGS_ENABLED = enabled
+    # One toggle for everything: raise the whole integration to DEBUG in
+    # home-assistant.log so users reporting an issue never have to edit the
+    # logger: section of configuration.yaml. NOTSET restores the inherited
+    # level (an explicit logger: config in configuration.yaml still wins,
+    # since HA re-applies it on top of this at startup).
+    try:
+        logging.getLogger("custom_components.cuboai").setLevel(logging.DEBUG if enabled else logging.NOTSET)
+    except Exception:
+        pass
     if enabled and _TRACE_LISTENER is None:
         try:
             file_handler = logging.handlers.RotatingFileHandler(

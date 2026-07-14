@@ -43,6 +43,7 @@ class Go2RTCManager:
         """Resolve video codecs for all cameras asynchronously."""
         script_dir = os.path.join(os.path.dirname(__file__), "tutk")
         video_script = os.path.join(script_dir, "cuboai_stream_video.py")
+        debug_logs = bool(self._options.get("enable_debug_logs"))
 
         for cam in self._cameras:
             dev_id = cam.get("device_id")
@@ -55,6 +56,15 @@ class Go2RTCManager:
             env_vars = f"env CUBOAI_UID={uid} CUBOAI_ACCOUNT={account} CUBOAI_PASSWORD={pwd} CUBOAI_MUX_AUDIO=1 "
             if camera_ip:
                 env_vars += f"CUBOAI_CAMERA_IP={camera_ip} "
+            if debug_logs:
+                # Stream-engine diagnostics on the producers' stderr, which go2rtc
+                # forwards into go2rtc.log at exec:debug (enabled in _generate_config):
+                # VERBOSE = a [health] line every 10s (fps/bitrate/loss/recovery/keyframe
+                # completeness); LOG_FRAMEINFO = one FICENSUS line per assembled AU
+                # (codec_id, kind, keyframe flag, trailer bytes) capped at the first 300
+                # AUs — enough to see the whole startup of an unknown camera model
+                # (issue #85) without growing the log forever.
+                env_vars += "CUBOAI_VERBOSE=1 CUBOAI_VERBOSE_INTERVAL=10 CUBOAI_LOG_FRAMEINFO=1 CUBOAI_LOG_FRAMEINFO_MAX=300 "
 
             backchannel_script = os.path.join(script_dir, "cuboai_stream_backchannel.py")
 
@@ -258,6 +268,22 @@ class Go2RTCManager:
                 "listen": f":{webrtc_port}",
             },
         }
+
+        if self._options.get("enable_debug_logs"):
+            # exec:debug is the load-bearing one — go2rtc logs each stderr line of an
+            # exec producer at debug level on the exec module, so the Python stream
+            # engine's diagnostics ([mpegts] codec line, [clean_gop] desync/resync,
+            # [health] metrics, FICENSUS, connection errors) all land in go2rtc.log.
+            # rtsp/streams at debug show consumer negotiation, producer start/stop and
+            # probe results. NOTE: exec:debug also logs the producer command lines,
+            # which contain the camera's TUTK credentials (same as this yaml file) —
+            # users must redact go2rtc.log before sharing, see the issue template.
+            config["log"] = {
+                "level": "info",
+                "exec": "debug",
+                "rtsp": "debug",
+                "streams": "debug",
+            }
 
         # NVR mode: protect the RTSP listener with credentials so external
         # recorders (HiLook/Hikvision, Synology, Frigate, ...) can consume the

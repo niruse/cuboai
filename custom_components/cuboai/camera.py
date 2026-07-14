@@ -161,6 +161,9 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # which then logs "Error demuxing stream (Operation timed out)" and
         # retries. Requesting a frame first blocks until the producer is live,
         # so the RTSP consumer gets packets immediately. Best-effort only.
+        import time
+
+        t0 = time.monotonic()
         try:
             import aiohttp
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -171,8 +174,32 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 await resp.read()
+                if resp.status == 200:
+                    _LOGGER.debug(
+                        "Stream pre-warm for %s ready in %.1fs", self._device_id, time.monotonic() - t0
+                    )
+                else:
+                    # A failed pre-warm is the precursor of the stream worker's
+                    # "Error demuxing stream while finding first packet" timeout —
+                    # surface it at warning so the sequence shows without debug logging.
+                    _LOGGER.warning(
+                        "Stream pre-warm for %s returned HTTP %s after %.1fs — the producer "
+                        "delivered no frame; the RTSP consumer will likely time out. Turn on "
+                        "'Enable debug logs' in the CuboAI options and check "
+                        "custom_components/cuboai/bin/go2rtc.log.",
+                        self._device_id,
+                        resp.status,
+                        time.monotonic() - t0,
+                    )
         except Exception as e:
-            _LOGGER.debug("Stream pre-warm failed (continuing anyway): %s", e)
+            _LOGGER.warning(
+                "Stream pre-warm for %s failed after %.1fs (%s) — the producer delivered no "
+                "frame; the RTSP consumer will likely time out. Turn on 'Enable debug logs' "
+                "in the CuboAI options and check custom_components/cuboai/bin/go2rtc.log.",
+                self._device_id,
+                time.monotonic() - t0,
+                e,
+            )
 
         return f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 

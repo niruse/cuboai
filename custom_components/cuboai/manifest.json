@@ -1,13 +1,20 @@
 {
     "domain": "cuboai",
     "name": "CuboAi",
-    "codeowners": ["@niruse"],
+    "codeowners": [
+        "@niruse"
+    ],
     "config_flow": true,
-    "dependencies": ["http", "frontend"],
+    "dependencies": [
+        "http",
+        "frontend"
+    ],
     "documentation": "https://github.com/niruse/cuboai",
     "iot_class": "local_polling",
     "issue_tracker": "https://github.com/niruse/cuboai/issues",
-    "loggers": ["custom_components.cuboai"],
+    "loggers": [
+        "custom_components.cuboai"
+    ],
     "requirements": [
         "aiofiles>=23.0.0",
         "av>=10.0.0",
@@ -15,5 +22,5 @@
         "pycognito>=2024.5.1",
         "yt-dlp>=2024.12.13"
     ],
-    "version": "2.4.4"
+    "version": "2.4.5"
 }
