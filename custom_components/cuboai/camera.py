@@ -175,9 +175,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             ) as resp:
                 await resp.read()
                 if resp.status == 200:
-                    _LOGGER.debug(
-                        "Stream pre-warm for %s ready in %.1fs", self._device_id, time.monotonic() - t0
-                    )
+                    _LOGGER.debug("Stream pre-warm for %s ready in %.1fs", self._device_id, time.monotonic() - t0)
                 else:
                     # A failed pre-warm is the precursor of the stream worker's
                     # "Error demuxing stream while finding first packet" timeout —

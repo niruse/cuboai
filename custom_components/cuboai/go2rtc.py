@@ -64,7 +64,9 @@ class Go2RTCManager:
                 # (codec_id, kind, keyframe flag, trailer bytes) capped at the first 300
                 # AUs — enough to see the whole startup of an unknown camera model
                 # (issue #85) without growing the log forever.
-                env_vars += "CUBOAI_VERBOSE=1 CUBOAI_VERBOSE_INTERVAL=10 CUBOAI_LOG_FRAMEINFO=1 CUBOAI_LOG_FRAMEINFO_MAX=300 "
+                env_vars += (
+                    "CUBOAI_VERBOSE=1 CUBOAI_VERBOSE_INTERVAL=10 CUBOAI_LOG_FRAMEINFO=1 CUBOAI_LOG_FRAMEINFO_MAX=300 "
+                )
 
             backchannel_script = os.path.join(script_dir, "cuboai_stream_backchannel.py")
 
