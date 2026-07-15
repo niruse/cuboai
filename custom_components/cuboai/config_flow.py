@@ -28,6 +28,10 @@ AUTH_SCHEMA = vol.Schema(
 
 MFA_SCHEMA = vol.Schema({vol.Required("mfa_code"): str})
 
+# Injected into the enable_debug_logs helper text via description_placeholders —
+# hassfest forbids raw URLs inside strings.json/translations.
+DOCS_DEBUG_URL = "https://github.com/niruse/cuboai#debug-logs"
+
 CLIENT_ID = "1gvbkmngl920rtp6hlbp6057ue"
 CLIENT_SECRET = "1ot7h8m3t83g0g4b7ais7ilcf12o44cvr9cbgad0t90kcpno56jr"
 POOL_ID = "us-east-1_Wr7vffd5Y"
@@ -314,6 +318,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="config",
             data_schema=vol.Schema(schema),
+            description_placeholders={"docs_url": DOCS_DEBUG_URL},
         )
 
     @staticmethod
@@ -479,4 +484,5 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(schema),
             errors=errors,
+            description_placeholders={"docs_url": DOCS_DEBUG_URL},
         )

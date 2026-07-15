@@ -34,7 +34,7 @@
           "enable_debug_logs": "Enable debug logs"
         },
         "data_description": {
-          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide](https://github.com/niruse/cuboai#debug-logs)."
+          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url})."
         }
       }
     },
@@ -72,7 +72,7 @@
           "enable_debug_logs": "Enable debug logs"
         },
         "data_description": {
-          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide](https://github.com/niruse/cuboai#debug-logs)."
+          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url})."
         }
       }
     }
