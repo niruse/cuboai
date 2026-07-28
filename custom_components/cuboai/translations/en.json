@@ -68,12 +68,13 @@
           "nvr_password": "NVR stream password (leave EMPTY for no password — most compatible with Hikvision/HiLook)",
           "download_images": "Download alert images locally",
           "alerts_count": "Number of alerts to retain in state attributes",
-          "max_saved_photos": "Maximum number of downloaded photos to keep",
           "hours_back": "Time window to check for alerts (hours)",
           "update_interval": "Update interval (seconds)",
-          "enable_debug_logs": "Enable debug logs"
+          "enable_debug_logs": "Enable debug logs",
+          "h264_cameras": "Transcode these cameras to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)"
         },
         "data_description": {
+          "h264_cameras": "Check a camera only if it is H.265/HEVC (e.g. Cubo 3 / SW05) and fails in HomeKit or the HA stream view with a 'demuxing timed out' error. Leave native-H.264 cameras (Cubo 2 / CB02) unchecked — transcoding uses extra CPU.",
           "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url})."
         }
       }

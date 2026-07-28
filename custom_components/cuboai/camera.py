@@ -71,7 +71,15 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     @property
     def extra_state_attributes(self):
-        return {"device_id": self._device_id, "uid": self._device_id, "rtsp_port": self._effective_rtsp_port()}
+        # h264_transcode lets the card editor reflect/toggle the per-camera
+        # H.264 transcode option (issue #85).
+        h264 = self._device_id in (self.coordinator.config_entry.options.get("h264_cameras") or [])
+        return {
+            "device_id": self._device_id,
+            "uid": self._device_id,
+            "rtsp_port": self._effective_rtsp_port(),
+            "h264_transcode": h264,
+        }
 
     @property
     def supported_features(self) -> int:

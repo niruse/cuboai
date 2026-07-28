@@ -74,11 +74,20 @@ class Go2RTCManager:
             # system interpreter on venv installs, which lacks av/yt-dlp and fails imports.
             py = sys.executable or "python3"
 
+            # H.265/HEVC cameras (e.g. Cubo 3 / SW05) can't be consumed by HomeKit
+            # or HA's stream/HLS path — both are H.264-only, so the passthrough
+            # 'video=copy' stream fails with 'demuxing ... timed out' / HomeKit
+            # 'No Response' (#85). When the per-camera 'force_h264' option is on,
+            # go2rtc transcodes the video to H.264. Default off keeps the
+            # efficient passthrough for native-H.264 cameras (Cubo 2 / CB02).
+            force_h264 = dev_id in (self._options.get("h264_cameras") or [])
+            video_codec = "h264" if force_h264 else "copy"
+
             # The 1st stream runs the pure-python engine which outputs native A/V MPEG-TS.
             # The 2nd stream uses ffmpeg to seamlessly transcode the AAC audio to Opus for WebRTC compatibility.
             self._streams[f"cuboai_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_{dev_id}#video=copy#audio=opus",
+                f"ffmpeg:cuboai_{dev_id}#video={video_codec}#audio=opus",
             ]
 
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
@@ -89,9 +98,14 @@ class Go2RTCManager:
             # The combined stream: video from the main camera stream + backchannel for two-way audio.
             # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
             # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
+            # A second audio codec (AAC) is offered alongside Opus so the HLS/HomeKit
+            # consumer (which needs H.264 + AAC) gets a fully compatible stream when
+            # force_h264 is on, while WebRTC still gets Opus. go2rtc takes multiple
+            # audio codecs as REPEATED params (#audio=opus#audio=aac), NOT a comma.
+            combined_audio = "#audio=opus#audio=aac" if force_h264 else "#audio=opus"
             self._streams[f"cuboai_combined_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_combined_{dev_id}#video=copy#audio=opus",
+                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{combined_audio}",
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 

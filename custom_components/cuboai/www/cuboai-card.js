@@ -1,19 +1,12 @@
-// Global patch to prevent badly written third-party cards (like searchable-list-card) from crashing the entire HA dashboard
-if (!window._cuboai_registry_patched) {
-  window._cuboai_registry_patched = true;
-  const originalDefine = customElements.define;
-  customElements.define = function(name, constructor, options) {
-    if (!customElements.get(name)) {
-      try {
-        originalDefine.call(this, name, constructor, options);
-      } catch (e) {
-        console.warn(`[CuboAI Patch] Suppressed error registering custom element ${name}:`, e);
-      }
-    } else {
-      console.warn(`[CuboAI Patch] Prevented duplicate registration of custom element: ${name}`);
-    }
-  };
-}
+// NOTE: This card must NEVER globally override customElements.define.
+// A previous version wrapped it to swallow "duplicate registration" errors,
+// but that intercepted EVERY custom element on the page — including Home
+// Assistant's own core UI shell (home-assistant-main, ha-panel-config,
+// ha-init-page, …). It raced HA's frontend bootstrap and blocked those core
+// registrations as "duplicates", producing an intermittent blank white screen
+// that needed many refreshes to load (issue #86). Our own two elements are
+// each guarded individually with customElements.get() at their define() sites
+// below, which is all that is needed.
 
 class CuboAICameraCardEditor extends HTMLElement {
   setConfig(config) {
@@ -96,6 +89,17 @@ class CuboAICameraCardEditor extends HTMLElement {
         </select>
 
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
+          <label style="display: block; font-weight: 500; margin-bottom: 8px;">Video Compatibility:</label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="h264-toggle">
+            <span>Transcode this camera to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)</span>
+          </label>
+          <p id="h264-help" style="color: var(--secondary-text-color); font-size: 12px; margin-top: 8px;">
+            Only enable for H.265/HEVC cameras that fail in HomeKit or the HA stream view. Uses extra CPU; leave off for native-H.264 cameras (Cubo 2). Applies to the whole integration, not just this card.
+          </p>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
           <label style="display: block; font-weight: 500; margin-bottom: 8px;">Song Cache:</label>
           <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer;">
             <input type="checkbox" id="cache-toggle">
@@ -160,6 +164,40 @@ class CuboAICameraCardEditor extends HTMLElement {
         });
       } else {
         cacheToggle.disabled = true;
+      }
+    }
+
+    // Per-camera H.264 transcode. This is an INTEGRATION option (it fixes
+    // HomeKit/HLS, which use the camera entity, not the card) — the toggle
+    // reflects the camera entity's h264_transcode attribute and writes it via
+    // the cuboai.set_h264_transcode service, which reloads the integration.
+    const findCameraEntity = () => {
+      if (!this._hass) return null;
+      const devId = this._config && this._config.device_id;
+      for (const id in this._hass.states) {
+        if (id.startsWith('camera.cuboai_') && id.endsWith('_local_camera')) {
+          const attrs = this._hass.states[id].attributes || {};
+          if (!devId || attrs.device_id === devId) return this._hass.states[id];
+        }
+      }
+      return null;
+    };
+    const h264Toggle = this.querySelector('#h264-toggle');
+    if (h264Toggle) {
+      const camEnt = findCameraEntity();
+      const camDevId = camEnt && camEnt.attributes && camEnt.attributes.device_id;
+      if (camDevId) {
+        h264Toggle.checked = !!camEnt.attributes.h264_transcode;
+        h264Toggle.addEventListener('change', () => {
+          this._hass.callService('cuboai', 'set_h264_transcode', {
+            device_id: camDevId,
+            enabled: h264Toggle.checked,
+          });
+          const help = this.querySelector('#h264-help');
+          if (help) help.textContent = 'Saved — reloading the integration to apply the stream change…';
+        });
+      } else {
+        h264Toggle.disabled = true;
       }
     }
 
@@ -1594,6 +1632,14 @@ class CuboAICameraCard extends HTMLElement {
                 // We reliably detect Apple engines by checking the vendor string.
                 const isAppleWebKit = navigator.vendor && navigator.vendor.includes('Apple');
 
+                // Android Chrome hardware-decodes the WebRTC/MSE video, and hardware
+                // frames can't be read back into a <canvas> — so the canvas-overlay PiP
+                // technique below produces a black/empty picture and requestPictureInPicture
+                // rejects ("open video minimized not working", issue #87). On Android we
+                // therefore skip the canvas patch and let the browser's NATIVE PiP run on
+                // the real video element (it works; it just lacks the drawn BPM/temp overlays).
+                const isAndroid = /android/i.test(navigator.userAgent || '');
+
                 // Fullscreen Patch: redirect video fullscreen to the player container
                 if (!isAppleWebKit) {
                     const originalFs = video.requestFullscreen || video.webkitRequestFullscreen;
@@ -1608,8 +1654,10 @@ class CuboAICameraCard extends HTMLElement {
                 }
 
 
-                // PiP Patch: Canvas stream overlay technique
-                if (!isAppleWebKit) {
+                // PiP Patch: Canvas stream overlay technique (desktop Chrome only —
+                // Apple uses native PiP, and Android can't read HW-decoded frames into
+                // a canvas so it also uses native PiP; see isAndroid note above, #87).
+                if (!isAppleWebKit && !isAndroid) {
                     const originalPip = video.requestPictureInPicture;
                     if (originalPip) {
                        video.crossOrigin = "anonymous";

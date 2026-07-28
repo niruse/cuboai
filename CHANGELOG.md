@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.6]
+
+### Fixed
+- **Intermittent blank white screen across all of Home Assistant (issue #86)**: the card globally overrode `customElements.define` to swallow "duplicate registration" errors, which intercepted **every** custom element on the page — including HA's own core UI shell (`home-assistant-main`, `ha-panel-config`, `ha-init-page`, …). It raced HA's frontend bootstrap and blocked those core registrations as "duplicates", producing a blank page that needed many refreshes to load. The global patch is removed; the card's own two elements remain individually guarded with `customElements.get()`, which is all that was ever needed.
+- **Android: minimizing the video (Picture-in-Picture) did nothing (issue #87)**: the card renders PiP through a `<canvas>` overlay technique (to keep the BPM/temperature overlays in the floating window). Android Chrome hardware-decodes the video and can't read those frames back into a canvas, so PiP showed black / rejected. Android now uses the browser's **native** PiP (like Apple already did) — it works, without the drawn overlays. Desktop Chrome keeps the overlay technique.
+
+### Added
+- **Per-camera H.264 transcoding for HomeKit / HLS (issue #85)**: H.265/HEVC cameras (e.g. Cubo 3 / SW05) can't be consumed by HomeKit or HA's stream pipeline, which are H.264-only — the passthrough stream failed with "demuxing … timed out" / HomeKit "No Response". A new per-camera toggle (in Settings → CuboAI → Configure, in the card's config editor, and via the `cuboai.set_h264_transcode` service) makes go2rtc transcode that camera's video to H.264 (plus AAC audio for HLS, keeping Opus for WebRTC). Default off, so native-H.264 cameras (Cubo 2 / CB02) keep the efficient passthrough with no extra CPU. The camera entity exposes an `h264_transcode` attribute.
+
+## [2.4.5]
+
+### Fixed
+- **Combined-stream codec misdetection (issue #85)**: the TS muxer chose its PMT codec from the first video access unit with a blind `hevc` fallback when the FRAMEINFO trailer was missing (mid-GOP join). A wrong PMT poisoned the go2rtc producer — H.264 declared as H.265 yields no parameter sets, go2rtc registers no video track, and every video consumer fails (frame.jpeg "codecs not matched", RTSP resets, HA stream "finding first packet" timeout / HomeKit "No Response"). Now: FRAMEINFO codec when present, else a decisive NAL-header sniff, else wait for the next access unit instead of guessing.
+- **One-toggle debug logging**: `enable_debug_logs` now also switches go2rtc into `log: {exec/rtsp/streams: debug}` and runs the stream producers with a verbose FRAMEINFO census (first 300 frames), capturing full streaming diagnostics into `go2rtc.log` for issue reports.
+
 ## [2.4.4]
 
 ### Fixed

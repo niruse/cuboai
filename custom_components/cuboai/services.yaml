@@ -13,3 +13,22 @@ save_settings:
 clear_youtube_cache:
   name: Clear YouTube cache
   description: Delete all locally cached YouTube audio files (www/cuboai_cache)
+
+set_h264_transcode:
+  name: Set H.264 transcode
+  description: Enable or disable H.264 transcoding for a camera (needed for HomeKit/HLS with H.265 cameras like Cubo 3). Reloads the integration.
+  fields:
+    device_id:
+      name: Device ID
+      description: The camera's device_id (from the camera entity attributes).
+      required: true
+      example: SW05XXXXXXXX
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Whether to transcode this camera to H.264.
+      required: true
+      example: true
+      selector:
+        boolean:

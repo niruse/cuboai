@@ -125,6 +125,39 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     hass.services.async_register(DOMAIN, "clear_youtube_cache", handle_clear_youtube_cache)
 
+    async def handle_set_h264_transcode(call):
+        """Enable/disable H.264 transcoding for a camera (issue #85).
+
+        Lets the CuboAI card's config editor flip the same per-camera option
+        that Settings -> CuboAI -> Configure exposes. Updating the entry's
+        options triggers a reload, so go2rtc regenerates the stream with (or
+        without) the H.264 transcode.
+        """
+        device_id = call.data.get("device_id")
+        enabled = bool(call.data.get("enabled"))
+        if not device_id:
+            return
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            cams = entry.data.get("all_cameras") or entry.data.get("cameras", [])
+            if not any(c.get("device_id") == device_id for c in cams):
+                continue
+            current = list(entry.options.get("h264_cameras", []))
+            changed = False
+            if enabled and device_id not in current:
+                current.append(device_id)
+                changed = True
+            elif not enabled and device_id in current:
+                current.remove(device_id)
+                changed = True
+            if changed:
+                new_options = dict(entry.options)
+                new_options["h264_cameras"] = current
+                hass.config_entries.async_update_entry(entry, options=new_options)
+                _LOGGER.info("Set H.264 transcode=%s for camera %s", enabled, device_id)
+            break
+
+    hass.services.async_register(DOMAIN, "set_h264_transcode", handle_set_h264_transcode)
+
     return True
 
 

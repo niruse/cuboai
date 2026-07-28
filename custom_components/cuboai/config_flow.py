@@ -480,6 +480,16 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             key = f"camera_ip_{dev_id}"
             schema[vol.Optional(key, description={"suggested_value": self.config_entry.options.get(key, "")})] = str
 
+        # H.265/HEVC cameras (e.g. Cubo 3 / SW05) can't be consumed by HomeKit or
+        # HA's stream/HLS path — both are H.264-only, so their passthrough stream
+        # fails with 'demuxing timed out' / HomeKit 'No Response' (#85). Checking
+        # a camera here makes go2rtc transcode it to H.264. Leave native-H.264
+        # cameras (Cubo 2 / CB02) unchecked to avoid needless CPU-heavy transcoding.
+        h264_options = {c["device_id"]: f"{c.get('baby_name', 'Camera')} ({c['device_id']})" for c in cameras}
+        schema[vol.Optional("h264_cameras", default=self.config_entry.options.get("h264_cameras", []))] = (
+            cv.multi_select(h264_options)
+        )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),
