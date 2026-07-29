@@ -62,6 +62,40 @@ def _setup_component_logger(hass: HomeAssistant, enable: bool):
             _FILE_HANDLER = None
 
 
+async def _refresh_stale_card_resource(hass: HomeAssistant, mtime: int) -> None:
+    """Re-point a manual `cuboai-card.js` Lovelace resource at the current mtime.
+
+    Some setups registered the card as a dashboard resource with a FIXED
+    cache-buster (e.g. `/local/cuboai-card.js?v=111`). The browser caches that
+    URL forever, so card updates never reach it and old code keeps running
+    (issue #86's removed patch was still executing from such a cached copy).
+    Updating the resource URL to the live file mtime forces a fresh fetch on
+    every update. Best-effort — silently skipped in YAML-resource mode or if the
+    Lovelace resource API differs.
+    """
+    try:
+        lovelace = hass.data.get("lovelace")
+        resources = getattr(lovelace, "resources", None)
+        if resources is None and isinstance(lovelace, dict):
+            resources = lovelace.get("resources")
+        # StorageCollection supports async_update_item; YAMLResourceCollection does not.
+        if resources is None or not hasattr(resources, "async_update_item"):
+            return
+        if hasattr(resources, "async_load"):
+            try:
+                await resources.async_load()
+            except Exception:
+                pass
+        target = f"/local/cuboai-card.js?v={mtime}"
+        for item in list(resources.async_items()):
+            url = (item or {}).get("url", "")
+            if "cuboai-card.js" in url and url != target:
+                await resources.async_update_item(item["id"], {"url": target})
+                _LOGGER.info("Refreshed stale CuboAI card dashboard resource: %s -> %s", url, target)
+    except Exception as e:
+        _LOGGER.debug("CuboAI card resource refresh skipped (non-fatal): %s", e)
+
+
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.CAMERA,
@@ -102,6 +136,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         mtime = await hass.async_add_executor_job(_copy_frontend_card)
         add_extra_js_url(hass, f"/local/cuboai-card.js?v={mtime}")
+
+        # Self-heal a stale MANUAL dashboard resource. Some setups added the card
+        # as a Lovelace resource with a FIXED version (e.g. `?v=111`), which the
+        # browser then caches forever — so a card update never reaches it and old
+        # code keeps running (e.g. the removed customElements.define patch, #86).
+        # Re-point any such resource at the current mtime so it always refreshes.
+        # Runs at HA-start so the Lovelace resource collection is fully loaded;
+        # best-effort: silently skipped in YAML-resource mode or on API changes.
+        from homeassistant.helpers.start import async_at_start
+
+        async def _heal_card_resource(_hass):
+            await _refresh_stale_card_resource(_hass, mtime)
+
+        async_at_start(hass, _heal_card_resource)
     except Exception as e:
         _LOGGER.error(f"Failed to register CuboAI frontend card: {e}")
         try:

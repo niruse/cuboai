@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.8]
+
+### Fixed
+- **Old card kept running from a stale manual dashboard resource (follow-up to #86)**: setups that added the card as a Lovelace resource with a *fixed* cache-buster (e.g. `/local/cuboai-card.js?v=111`) had that URL cached by the browser forever, so card updates never reached it — the removed `customElements.define` patch kept executing from the cached copy (`[CuboAI Patch] Prevented duplicate registration…` in the console). On start-up the integration now re-points any such `cuboai-card.js` resource at the live file mtime, forcing a fresh fetch on every update. Best-effort (skipped in YAML-resource mode). If you still see it, delete the manual `cuboai-card.js` resource under Settings → Dashboards → Resources — the integration loads the card automatically.
+
 ## [2.4.7]
 
 ### Changed
