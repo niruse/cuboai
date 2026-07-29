@@ -468,21 +468,45 @@ class CuboAICoordinator(DataUpdateCoordinator):
             elif state_data:
                 cam_data["camera_state"] = state_data
 
+            # local_data is a BaseException (timeout/crash) OR a dict that is empty
+            # on failure (the executor fn swallows most errors and returns {}). Treat
+            # "usable" as a truthy, non-exception dict so BOTH failure modes are caught.
+            local_ok = bool(local_data) and not isinstance(local_data, BaseException)
             if isinstance(local_data, BaseException):
                 log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
-            elif local_data:
-                if local_data:
-                    old_local_merged = old_local.copy()
-                    old_local_merged.update(local_data)
-                    cam_data["local"] = old_local_merged
+            elif local_ok:
+                old_local_merged = old_local.copy()
+                old_local_merged.update(local_data)
+                cam_data["local"] = old_local_merged
+                # Connection is working again — re-arm the no-IP warning
+                self.hass.data.get(DOMAIN, {}).get("_ip_warned", set()).discard(device_id)
 
-                    fetched_ip = local_data.get("wifi_ip")
-                    current_ip = self._entry.options.get(f"camera_ip_{device_id}")
-                    if fetched_ip and not current_ip:
-                        new_options = dict(self._entry.options)
-                        new_options[f"camera_ip_{device_id}"] = fetched_ip
-                        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
-                        _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
+                # Auto-learn and persist the camera's LAN IP now that we can reach it,
+                # so future restarts connect directly without broadcast discovery.
+                fetched_ip = local_data.get("wifi_ip")
+                current_ip = self._entry.options.get(f"camera_ip_{device_id}")
+                if fetched_ip and not current_ip:
+                    new_options = dict(self._entry.options)
+                    new_options[f"camera_ip_{device_id}"] = fetched_ip
+                    self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+                    _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
+
+            if not local_ok and not camera_ip:
+                # The pure-Python transport reaches the camera with a UNICAST probe to
+                # its LAN IP — there is no broadcast auto-discovery, so with no IP set
+                # the handshake fails ("no 0x2041") and local sensors + the stream stay
+                # unavailable (issue #83). It is chicken-and-egg: the IP can only be
+                # auto-learned AFTER a successful connection. Warn once per device.
+                warned = self.hass.data.setdefault(DOMAIN, {}).setdefault("_ip_warned", set())
+                if device_id not in warned:
+                    warned.add(device_id)
+                    _LOGGER.warning(
+                        "CuboAI %s: local connection failed and no camera IP is set. Local sensors "
+                        "and the camera stream need it. Set the camera's LAN IP under Settings -> "
+                        "Devices & Services -> CuboAI -> Configure (the camera_ip field for this "
+                        "camera) — find the address in your router's client list.",
+                        device_id,
+                    )
 
             # 3. Alerts Processing
             if isinstance(alerts_data, BaseException):

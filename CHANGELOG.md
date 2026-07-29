@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.7]
+
+### Changed
+- **Clear guidance when no camera IP is set (issue #83)**: the pure-Python transport reaches the camera with a unicast probe to its LAN IP (no broadcast auto-discovery), so with no IP set the handshake fails with a cryptic "no 0x2041" and local sensors + the stream stay unavailable. The coordinator now logs one actionable warning per camera — telling you to set the camera's LAN IP under Settings → Devices & Services → CuboAI → Configure — instead of only the low-level error. The warning re-arms if the connection later recovers, and covers both failure modes (timeout and empty result).
+
 ## [2.4.6]
 
 ### Fixed
