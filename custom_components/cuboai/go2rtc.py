@@ -83,6 +83,18 @@ class Go2RTCManager:
             force_h264 = dev_id in (self._options.get("h264_cameras") or [])
             video_codec = "h264" if force_h264 else "copy"
 
+            # One line that answers "is the H.264 toggle actually applied to
+            # THIS camera?" (#85: 'the combined stream is not being converted').
+            # INFO with debug logs on so it shows without touching HA's logger
+            # config; DEBUG otherwise.
+            (_LOGGER.info if debug_logs else _LOGGER.debug)(
+                "go2rtc stream plan for %s: video=%s (h264_transcode %s, option h264_cameras=%s), audio=opus+aac",
+                dev_id,
+                video_codec,
+                "ON" if force_h264 else "off",
+                self._options.get("h264_cameras") or [],
+            )
+
             # Offer BOTH Opus and AAC audio on every playable stream. The card
             # listens over WebRTC (which negotiates Opus) with an MSE fallback,
             # and MSE — Safari/iOS especially — CANNOT decode Opus; it needs
@@ -318,6 +330,11 @@ class Go2RTCManager:
                 "exec": "debug",
                 "rtsp": "debug",
                 "streams": "debug",
+                # ffmpeg:debug logs the full ffmpeg command go2rtc spawns for the
+                # transcode producer — decisive for #85-type reports: it shows
+                # whether the H.264 transcode (libx264) is actually in the
+                # pipeline or the stream is a plain copy.
+                "ffmpeg": "debug",
             }
 
         # NVR mode: protect the RTSP listener with credentials so external

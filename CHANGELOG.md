@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.10]
+
+### Fixed
+- **Sound stopped a few seconds after minimizing the window**: the embedded WebRTC player intentionally disconnects the stream ~5s after the page is hidden (minimized window, background tab, app switch) to save resources — wrong for a baby monitor, and it also cut the stream feeding the Picture-in-Picture mini-window. The card now runs the player with `background: true`, keeping video and audio alive while hidden.
+
+### Added
+- **H.265/HomeKit stream diagnostics under "Enable debug logs" (issue #85)**: three new signals to pinpoint why a transcoded stream won't play. (1) On startup, a `go2rtc stream plan` line per camera showing whether the H.264 transcode is actually applied (`video=h264` vs `video=copy`) and the raw `h264_cameras` option. (2) go2rtc's `ffmpeg` module now logs at debug, capturing the full ffmpeg command line of the transcode producer in `go2rtc.log`. (3) When HA/HomeKit requests the stream, a `[stream diag]` line (and a second one 20s later) dumps go2rtc's live view: each producer/consumer's codec per track (`hevc` vs `h264`), packet counts, and byte counters — showing at a glance whether the transcode ran, delivered data, and whether the consumer received any. Credentials are redacted from the logged output.
+
 ## [2.4.9]
 
 ### Fixed

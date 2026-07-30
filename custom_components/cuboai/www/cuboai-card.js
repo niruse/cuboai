@@ -391,6 +391,10 @@ class CuboAICameraCard extends HTMLElement {
         ui: true,
         muted: this.isMuted,
         poster: poster,
+        // Baby monitor: keep the stream (and its audio) running when the
+        // window is minimized or the tab is hidden. Without this, video-rtc
+        // disconnects ~5s after the page hides and the sound stops.
+        background: true,
         media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
       };
 
@@ -2042,6 +2046,7 @@ class CuboAICameraCard extends HTMLElement {
              ui: true,
              muted: this.isMuted,
              poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
+             background: true,
              media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
            };
            customElements.whenDefined('webrtc-camera').then(() => {
@@ -2080,6 +2085,7 @@ class CuboAICameraCard extends HTMLElement {
                  ui: true,
                  muted: this.isMuted,
                  poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,
+                 background: true,
                  media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
                };
                customElements.whenDefined('webrtc-camera').then(() => {

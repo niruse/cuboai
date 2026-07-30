@@ -142,6 +142,61 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                     _LOGGER.error(f"Failed to read local camera thumbnail: {e}")
         return None
 
+    def _debug_logs_enabled(self) -> bool:
+        return bool(self.coordinator.config_entry.options.get("enable_debug_logs"))
+
+    async def _log_stream_diag(self, moment: str) -> None:
+        """Dump go2rtc's live view of the combined stream into the HA log.
+
+        Gated on 'Enable debug logs'. This is the decisive evidence for
+        #85-type reports (H.265 camera fails in HomeKit/HLS): it shows which
+        codec go2rtc actually offers on each producer track (HEVC vs H.264 —
+        i.e. whether the transcode is really applied), whether the producers
+        are delivering bytes at all, and whether the RTSP consumer (HA stream
+        worker / HomeKit) received anything or gave up empty-handed.
+        """
+        try:
+            import json
+            import re
+
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"{self._go2rtc_api_base()}/api/streams?src=cuboai_combined_{self._device_id}",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                raw = await resp.text()
+            # exec producer URLs embed the TUTK credentials — redact BEFORE logging
+            redacted = re.sub(r"(CUBOAI_(?:UID|ACCOUNT|PASSWORD)=)[^\s\"\\]+", r"\1XXX", raw)
+            try:
+                data = json.loads(redacted)
+
+                def _fmt(item):
+                    src = str(item.get("source") or item.get("url") or item.get("remote_addr") or "")[:80]
+                    medias = "; ".join(item.get("medias") or [])
+                    # per-track codec + packet counters — 'hevc:0pkts' vs
+                    # 'h264:2395pkts' is the whole diagnosis in one glance
+                    tracks = []
+                    for r in (item.get("receivers") or []) + (item.get("senders") or []):
+                        codec = (r.get("codec") or {}).get("codec_name")
+                        tracks.append(f"{codec}:{r.get('packets')}pkts")
+                    return (
+                        f"({item.get('format_name')} src={src!r} medias=[{medias}] "
+                        f"tracks=[{', '.join(tracks)}] recv={item.get('bytes_recv')} send={item.get('bytes_send')})"
+                    )
+
+                parts = [
+                    f"{kind[:-1]}{_fmt(item)}" for kind in ("producers", "consumers") for item in data.get(kind) or []
+                ]
+                summary = " | ".join(parts) if parts else redacted[:1500]
+            except ValueError:
+                summary = redacted[:1500]
+            _LOGGER.info("[stream diag %s] cuboai_combined_%s: %s", moment, self._device_id, summary)
+        except Exception as e:
+            _LOGGER.info("[stream diag %s] cuboai_combined_%s: probe failed: %s", moment, self._device_id, e)
+
     async def stream_source(self) -> str | None:
         """Return the stream source."""
         # go2rtc failed to start (port conflict, missing binary, ...): report
@@ -206,6 +261,21 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                 time.monotonic() - t0,
                 e,
             )
+
+        # With debug logs on, capture go2rtc's view of the stream right now
+        # (post-pre-warm: producer codecs — is the H.264 transcode applied?)
+        # and again 20s later (did the RTSP consumer actually receive data,
+        # or time out empty-handed?). See #85.
+        if self._debug_logs_enabled():
+            await self._log_stream_diag("at stream request")
+
+            from homeassistant.helpers.event import async_call_later
+
+            @callback
+            def _delayed_diag(_now):
+                self.hass.async_create_task(self._log_stream_diag("+20s"))
+
+            async_call_later(self.hass, 20, _delayed_diag)
 
         return f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
 
