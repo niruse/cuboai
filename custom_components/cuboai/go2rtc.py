@@ -83,11 +83,19 @@ class Go2RTCManager:
             force_h264 = dev_id in (self._options.get("h264_cameras") or [])
             video_codec = "h264" if force_h264 else "copy"
 
+            # Offer BOTH Opus and AAC audio on every playable stream. The card
+            # listens over WebRTC (which negotiates Opus) with an MSE fallback,
+            # and MSE — Safari/iOS especially — CANNOT decode Opus; it needs
+            # AAC. AAC also keeps HLS/HomeKit consumers working. go2rtc takes
+            # multiple audio codecs as REPEATED params (#audio=opus#audio=aac),
+            # NOT a comma.
+            audio_codecs = "#audio=opus#audio=aac"
+
             # The 1st stream runs the pure-python engine which outputs native A/V MPEG-TS.
-            # The 2nd stream uses ffmpeg to seamlessly transcode the AAC audio to Opus for WebRTC compatibility.
+            # The 2nd stream uses ffmpeg to transcode audio (Opus for WebRTC, AAC for MSE).
             self._streams[f"cuboai_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_{dev_id}#video={video_codec}#audio=opus",
+                f"ffmpeg:cuboai_{dev_id}#video={video_codec}{audio_codecs}",
             ]
 
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
@@ -98,14 +106,9 @@ class Go2RTCManager:
             # The combined stream: video from the main camera stream + backchannel for two-way audio.
             # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
             # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
-            # A second audio codec (AAC) is offered alongside Opus so the HLS/HomeKit
-            # consumer (which needs H.264 + AAC) gets a fully compatible stream when
-            # force_h264 is on, while WebRTC still gets Opus. go2rtc takes multiple
-            # audio codecs as REPEATED params (#audio=opus#audio=aac), NOT a comma.
-            combined_audio = "#audio=opus#audio=aac" if force_h264 else "#audio=opus"
             self._streams[f"cuboai_combined_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{combined_audio}",
+                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{audio_codecs}",
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
@@ -159,6 +162,22 @@ class Go2RTCManager:
                 killed,
                 api_port,
             )
+
+    async def _wait_for_port_free(self, port: int, timeout: float = 5.0) -> bool:
+        """Wait (up to timeout) for a TCP port to become bindable.
+
+        Returns True as soon as it is free (instantly if already free), False
+        if still held after the timeout — in which case _resolve_ports falls
+        back to another port (a genuinely foreign holder).
+        """
+        import asyncio
+
+        steps = max(1, int(timeout / 0.25))
+        for _ in range(steps):
+            if await self.hass.async_add_executor_job(_port_bindable, port):
+                return True
+            await asyncio.sleep(0.25)
+        return await self.hass.async_add_executor_job(_port_bindable, port)
 
     def _terminate_stale_processes(self) -> int:
         """SIGTERM (then SIGKILL) every process running our go2rtc binary.
@@ -347,6 +366,13 @@ class Go2RTCManager:
         # Reclaim ports from an orphaned go2rtc of a previous HA run before
         # probing, so we bind our usual ports instead of hopping (issue #84).
         await self._reclaim_stale_instance(1985)
+
+        # A just-terminated go2rtc (orphan kill, or our own stop() on reload)
+        # needs a moment for the OS to RELEASE port 1985 — probing immediately
+        # sees it still bound and hops to 1986, which strands the frontend and
+        # HomeKit on the old port ("Cannot connect to …:1985"). Wait briefly so
+        # we bind our standard port. Returns instantly when 1985 is already free.
+        await self._wait_for_port_free(1985)
 
         await self._resolve_ports()
         await self._resolve_codecs()

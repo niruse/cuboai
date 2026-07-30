@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.9]
+
+### Fixed
+- **No sound in the camera card (audio regression)**: the card listened over MSE on non-Apple browsers, but the streams offered Opus-only audio — and MSE cannot decode Opus, so the card was silent everywhere even when unmuted. Two-part fix: (1) every stream now offers **both** Opus and AAC audio (`#audio=opus#audio=aac`), and (2) the card listens over **WebRTC** (which negotiates Opus) with MSE as fallback. HLS/HomeKit consumers keep working via the AAC track.
+- **"Unmuting failed and the element was paused" console warning**: the card attempted to unmute before the user had interacted with the page, which Chrome's autoplay policy answers by pausing the video and logging the warning. The card now checks `navigator.userActivation` — with no interaction yet it starts muted (clean autoplay) and brings the sound up on the first tap.
+- **go2rtc hopped to port 1986 on reload/restart**: after terminating a previous go2rtc instance (orphan kill, or the integration's own stop on reload), the OS needs a moment to release port 1985 — probing immediately saw it still bound and hopped to 1986, stranding the frontend and HomeKit on the old port ("Cannot connect to …:1985"). Startup now waits briefly (up to 5s) for 1985 to free before resolving ports.
+
 ## [2.4.8]
 
 ### Fixed

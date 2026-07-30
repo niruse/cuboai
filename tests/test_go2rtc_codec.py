@@ -42,15 +42,17 @@ class TestH264Transcode:
         # the other camera stays passthrough
         assert "video=copy" in _combined_ffmpeg(streams, "CB02AAA")
 
-    def test_h264_camera_also_offers_aac_audio_for_homekit(self):
-        streams = _resolve({"h264_cameras": ["SW05BBB"]})
-        line = _combined_ffmpeg(streams, "SW05BBB")
-        # go2rtc multi-codec syntax is REPEATED params, not a comma
-        assert "#audio=opus#audio=aac" in line  # Opus for WebRTC, AAC for HLS/HomeKit
-        assert "audio=opus,aac" not in line
-        # passthrough camera keeps opus-only
-        assert "#audio=opus" in _combined_ffmpeg(streams, "CB02AAA")
-        assert "aac" not in _combined_ffmpeg(streams, "CB02AAA")
+    def test_all_streams_offer_opus_and_aac(self):
+        # Every playable stream must offer BOTH Opus (WebRTC) and AAC (MSE —
+        # Safari/iOS can't decode Opus, so Opus-only left the card silent).
+        # Applies regardless of the H.264 video toggle.
+        for options in ({}, {"h264_cameras": ["SW05BBB"]}):
+            streams = _resolve(options)
+            for dev in ("CB02AAA", "SW05BBB"):
+                line = _combined_ffmpeg(streams, dev)
+                # go2rtc multi-codec syntax is REPEATED params, not a comma
+                assert "#audio=opus#audio=aac" in line
+                assert "audio=opus,aac" not in line
 
     def test_main_stream_also_transcodes_when_selected(self):
         streams = _resolve({"h264_cameras": ["SW05BBB"]})

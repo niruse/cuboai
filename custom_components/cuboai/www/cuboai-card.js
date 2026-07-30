@@ -387,7 +387,7 @@ class CuboAICameraCard extends HTMLElement {
         type: 'custom:webrtc-camera',
         entity: webrtcEntity || '',
         url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
+        mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
         ui: true,
         muted: this.isMuted,
         poster: poster,
@@ -1604,24 +1604,40 @@ class CuboAICameraCard extends HTMLElement {
                 // after repeated browser blocks and needs to arm this).
                 this._armGestureUnmute = armGestureUnmute;
 
+                // Only attempt an immediate unmute if the user has ALREADY
+                // interacted with the page (userActivation). A gesture-less
+                // unmute makes Chrome pause the video and log "Unmuting failed
+                // and the element was paused" — so when there's been no
+                // interaction yet we simply stay muted and unmute on the first
+                // tap (armGestureUnmute), which is silent and clean.
+                const hasInteracted = !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
                 if (!isAppleAudio && this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture) {
-                  video.muted = false;
-                  this.isMuted = false;
-                  const p = video.play();
-                  if (p && p.catch) {
-                    p.catch((err) => {
-                      // Only a real autoplay-policy block means "the browser
-                      // refuses sound". MSE reloads reject pending play()
-                      // calls with AbortError ("interrupted by a new load
-                      // request") — muting on those would silence the card a
-                      // few seconds after it correctly started unmuted.
-                      if (err && err.name !== 'NotAllowedError') return;
-                      this._soundNeedsGesture = true;
-                      this.isMuted = true;
-                      video.muted = true;
-                      video.play().catch(() => {});
-                      armGestureUnmute();
-                    });
+                  if (hasInteracted) {
+                    video.muted = false;
+                    this.isMuted = false;
+                    const p = video.play();
+                    if (p && p.catch) {
+                      p.catch((err) => {
+                        // Only a real autoplay-policy block means "the browser
+                        // refuses sound". MSE reloads reject pending play()
+                        // calls with AbortError ("interrupted by a new load
+                        // request") — muting on those would silence the card a
+                        // few seconds after it correctly started unmuted.
+                        if (err && err.name !== 'NotAllowedError') return;
+                        this._soundNeedsGesture = true;
+                        this.isMuted = true;
+                        video.muted = true;
+                        video.play().catch(() => {});
+                        armGestureUnmute();
+                      });
+                    }
+                  } else {
+                    // No interaction yet — stay muted (clean autoplay) and wait
+                    // for the first gesture to bring the sound up.
+                    video.muted = true;
+                    this.isMuted = true;
+                    this._soundNeedsGesture = true;
+                    armGestureUnmute();
                   }
                 } else if (!isAppleAudio) {
                   video.muted = this.isMuted;
@@ -2022,7 +2038,7 @@ class CuboAICameraCard extends HTMLElement {
              type: 'custom:webrtc-camera',
              entity: wEntity || '',
              url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
+             mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
              ui: true,
              muted: this.isMuted,
              poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
@@ -2060,7 +2076,7 @@ class CuboAICameraCard extends HTMLElement {
                  type: 'custom:webrtc-camera',
                  entity: wEntity2 || '',
                  url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse'),
+                 mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
                  ui: true,
                  muted: this.isMuted,
                  poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,
