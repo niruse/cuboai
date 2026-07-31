@@ -30,6 +30,33 @@ sys.modules["custom_components.cuboai.utils"] = _mock_utils
 
 
 # =============================================================================
+# aiohttp >= 3.14 compatibility shim for aioresponses
+# =============================================================================
+# aiohttp 3.14 added a REQUIRED keyword-only 'stream_writer' argument to
+# ClientResponse.__init__, and (with writer=None, which aioresponses passes)
+# reads stream_writer.output_size from it. aioresponses <= 0.7.9 (the latest
+# release) doesn't pass it, so every mocked request dies with
+# "TypeError: ClientResponse.__init__() missing ... 'stream_writer'".
+# Make the argument optional with a zero-size stub. Remove once aioresponses
+# supports aiohttp >= 3.14.
+import inspect
+
+import aiohttp
+
+_resp_init = aiohttp.ClientResponse.__init__
+if "stream_writer" in inspect.signature(_resp_init).parameters:
+
+    class _StubStreamWriter:
+        output_size = 0
+
+    def _resp_init_compat(self, *args, **kwargs):
+        kwargs.setdefault("stream_writer", _StubStreamWriter())
+        return _resp_init(self, *args, **kwargs)
+
+    aiohttp.ClientResponse.__init__ = _resp_init_compat
+
+
+# =============================================================================
 # Fixtures
 # =============================================================================
 
