@@ -258,7 +258,9 @@ The integration runs its own internal go2rtc server for local streaming. It uses
 | `1985` | go2rtc API (snapshots, card, WebRTC) | Hops to the next free port (usually `1986`) |
 | `8556` | WebRTC listener | Hops to the next free port |
 
-You never need to configure anything for this: the camera entity, sensors, and the custom card all discover the effective ports through the `rtsp_port` attribute and internal state. A log line like `go2rtc API port 1985 is already in use by another process — using port 1986 instead` is informational, not an error.
+You never need to configure anything for this. The camera entity and sensors publish the effective port they resolved, and the custom card does not deal in ports at all — it finds its camera entity by the `device_id` attribute and lets that entity supply the stream source, so whatever port go2rtc actually bound is the port that gets used. A log line like `go2rtc API port 1985 is already in use by another process — using port 1986 instead` is informational, not an error.
+
+`8555` is normally already taken by Home Assistant's own built-in go2rtc (it is *its* WebRTC listener), so a default of `8557` in the RTSP port field is the expected outcome rather than a problem.
 
 Additional protections (since v2.4.4):
 

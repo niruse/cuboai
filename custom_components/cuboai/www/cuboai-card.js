@@ -8,6 +8,70 @@
 // each guarded individually with customElements.get() at their define() sites
 // below, which is all that is needed.
 
+// Find the CuboAI camera entity by the device_id ATTRIBUTE that camera.py
+// publishes — never by entity-id string surgery.
+//
+// The previous filter required the entity id to both start with
+// `camera.cuboai_` and end with `_local_camera`, and then to contain a
+// "babyName" token derived by string-slicing the speaker's entity id. None of
+// that is guaranteed. camera.py sets only _attr_name ("<baby> Local Camera")
+// and never _attr_has_entity_name, so the object id is whatever Home Assistant
+// composes from the device and entity names — `camera.cuboai_mia_mia_local_camera`
+// on one install, `camera.mia_local_camera` on another, depending on HA version,
+// device naming and any rename the user has made. HA's "_2" duplicate suffix
+// breaks the endsWith test outright, and the babyName token (the last
+// underscore-separated part of the speaker id) need not appear in the camera id
+// at all.
+//
+// When the match failed the card silently fell through to a hardcoded
+// rtsp://127.0.0.1:8555/... URL. On HA OS that port belongs to HA's own go2rtc
+// WebRTC listener, which accepts the connection then tears it down:
+// "connection reset by peer" (issue #89, same collision as #80).
+//
+// The device_id attribute is immune to all of it. Note the speaker matcher
+// below already worked this way — the camera was the odd one out.
+function cuboaiFindCameraState(hass, deviceId) {
+  if (!hass || !hass.states) return null;
+  const shaped = [];
+  for (const entityId in hass.states) {
+    if (!entityId.startsWith('camera.')) continue;
+    const state = hass.states[entityId];
+    const attrs = (state && state.attributes) || {};
+    // The attribute pair IS the CuboAI camera signature.
+    if (attrs.device_id === undefined || attrs.rtsp_port === undefined) continue;
+    if (deviceId && (attrs.device_id === deviceId || attrs.uid === deviceId)) {
+      return { entityId, state };
+    }
+    shaped.push({ entityId, state });
+  }
+  // Unpinned card, or a device_id matching nothing: only safe when there is
+  // exactly one CuboAI camera. The old code took the first arbitrary match,
+  // which shows the wrong baby on multi-camera setups.
+  return shaped.length === 1 ? shaped[0] : null;
+}
+
+// Single source of truth for the webrtc-camera child config. This object was
+// duplicated at three call sites, so flags added to one copy silently missed
+// the others. There is deliberately NO `url:` fallback — resolving through the
+// entity makes camera.stream_source() supply the healed RTSP port, the NVR
+// credentials, and the producer pre-warm, none of which a hand-built URL has.
+function cuboaiWebrtcConfig(found, micEnabled, isMuted) {
+  const attrs = (found && found.state && found.state.attributes) || {};
+  return {
+    type: 'custom:webrtc-camera',
+    entity: found.entityId,
+    mode: micEnabled ? 'webrtc' : 'webrtc,mse',
+    ui: true,
+    muted: isMuted,
+    poster: attrs.entity_picture || undefined,
+    // Baby monitor: keep the stream (and its audio) running when the window is
+    // minimized or the tab is hidden. Without this, video-rtc disconnects ~5s
+    // after the page hides and the sound stops.
+    background: true,
+    media: micEnabled ? 'video,audio,microphone' : 'video,audio',
+  };
+}
+
 class CuboAICameraCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config;
@@ -171,16 +235,12 @@ class CuboAICameraCardEditor extends HTMLElement {
     // HomeKit/HLS, which use the camera entity, not the card) — the toggle
     // reflects the camera entity's h264_transcode attribute and writes it via
     // the cuboai.set_h264_transcode service, which reloads the integration.
+    // Was a `camera.cuboai_*` entity-id filter that never matched, so camEnt was
+    // always null and the H.264 toggle below was permanently disabled (#89).
     const findCameraEntity = () => {
-      if (!this._hass) return null;
-      const devId = this._config && this._config.device_id;
-      for (const id in this._hass.states) {
-        if (id.startsWith('camera.cuboai_') && id.endsWith('_local_camera')) {
-          const attrs = this._hass.states[id].attributes || {};
-          if (!devId || attrs.device_id === devId) return this._hass.states[id];
-        }
-      }
-      return null;
+      const found = cuboaiFindCameraState(
+        this._hass, this._config && this._config.device_id);
+      return found ? found.state : null;
     };
     const h264Toggle = this.querySelector('#h264-toggle');
     if (h264Toggle) {
@@ -358,45 +418,34 @@ class CuboAICameraCard extends HTMLElement {
       this.isMuted = true;
       this._wantUnmuted = wantUnmuted;
 
-      let babyName = null;
-      if (this._speakerEntityId) {
-          const nameParts = this._speakerEntityId.replace('media_player.', '').replace('_speaker', '').split('_');
-          babyName = nameParts[nameParts.length - 1]; // e.g. "nursery"
+      // Resolve the camera by attribute (#89). Bail out visibly rather than
+      // streaming from a fabricated URL: if no CuboAI camera entity exists the
+      // camera platform did not load, so nothing is listening on any port.
+      // `set hass` re-runs on every state update, so this self-heals as soon as
+      // the entity appears (HA startup race).
+      const found = cuboaiFindCameraState(hass, deviceId);
+      if (!found) {
+        if (!this._noCamEl) {
+          this._noCamEl = document.createElement('div');
+          this._noCamEl.style.cssText = 'background: #fee; border: 1px solid #fcc; color: #c00; padding: 15px; border-radius: 8px;';
+          this.appendChild(this._noCamEl);
+        }
+        this._noCamEl.innerHTML =
+          `<h3>CuboAI camera unavailable</h3>` +
+          `<p>No camera entity was found${deviceId ? ` for device <code>${deviceId}</code>` : ''}.</p>` +
+          `<p>Check Settings &rarr; Devices &amp; Services &rarr; CuboAI (the camera platform may have ` +
+          `failed to load), and the Home Assistant log for <code>CuboAI go2rtc is not running</code>.</p>`;
+        return;
       }
-      
-      let webrtcEntity = null;
-      let rtspPort = 8555;
-      for (const entity_id in hass.states) {
-          if (entity_id.startsWith('camera.cuboai_') && entity_id.endsWith('_local_camera')) {
-              if (babyName && !entity_id.includes(babyName)) continue;
-              webrtcEntity = entity_id;
-              if (hass.states[entity_id].attributes && hass.states[entity_id].attributes.rtsp_port) {
-                  rtspPort = hass.states[entity_id].attributes.rtsp_port;
-              }
-              break;
-          }
+      if (this._noCamEl) {
+        this._noCamEl.remove();
+        this._noCamEl = null;
       }
 
-      // Show the camera's last snapshot while (re)connecting instead of a black
-      // frame. entity_picture is an access-token URL served by HA, so it works
-      // from any device (mobile included).
-      const poster =
-        (webrtcEntity && hass.states[webrtcEntity]?.attributes?.entity_picture) || undefined;
-
-      const webrtcConfig = {
-        type: 'custom:webrtc-camera',
-        entity: webrtcEntity || '',
-        url: webrtcEntity ? undefined : `rtsp://127.0.0.1:${rtspPort}/cuboai_combined_${deviceId}`,
-        mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
-        ui: true,
-        muted: this.isMuted,
-        poster: poster,
-        // Baby monitor: keep the stream (and its audio) running when the
-        // window is minimized or the tab is hidden. Without this, video-rtc
-        // disconnects ~5s after the page hides and the sound stops.
-        background: true,
-        media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
-      };
+      // The poster (camera's last snapshot, shown while (re)connecting instead
+      // of a black frame) comes from the entity's entity_picture — an
+      // access-token URL served by HA, so it works from any device.
+      const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
 
       // Add the microphone overlay button
       if (!this.micButton) {
@@ -2025,69 +2074,36 @@ class CuboAICameraCard extends HTMLElement {
       if (this.config && this.config.device_id !== config.device_id) {
          // Config changed via editor, update child
          if (this.content && config.device_id) {
-           let wEntity = null;
-           let wRtspPort = 8555;
-           if (this._hass && this._hass.states) {
-               for (const e in this._hass.states) {
-                   if (e.startsWith('camera.cuboai_') && e.endsWith('_local_camera')) {
-                       wEntity = e;
-                       if (this._hass.states[e].attributes && this._hass.states[e].attributes.rtsp_port) {
-                           wRtspPort = this._hass.states[e].attributes.rtsp_port;
-                       }
-                       break;
-                   }
-               }
+           const found = cuboaiFindCameraState(this._hass, config.device_id);
+           if (found) {
+             const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
+             customElements.whenDefined('webrtc-camera').then(() => {
+               this.content.setConfig(webrtcConfig);
+             });
            }
-           const webrtcConfig = {
-             type: 'custom:webrtc-camera',
-             entity: wEntity || '',
-             url: wEntity ? undefined : `rtsp://127.0.0.1:${wRtspPort}/cuboai_combined_${config.device_id}`,
-             mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
-             ui: true,
-             muted: this.isMuted,
-             poster: (wEntity && this._hass?.states[wEntity]?.attributes?.entity_picture) || undefined,
-             background: true,
-             media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
-           };
-           customElements.whenDefined('webrtc-camera').then(() => {
-             this.content.setConfig(webrtcConfig);
-           });
          } else if (this.content && !config.device_id) {
-             // Fallback to auto-detect
+             // Fallback to auto-detect. The old scan looked for
+             // `media_player.cuboai_speaker_<id>`, but media_player.py names the
+             // entity "<baby> Speaker" so the id is `media_player.<baby>_speaker`
+             // — deviceId was therefore always null and this branch was dead
+             // code (#89). Use the same attribute scan the render path uses.
              let deviceId = null;
-             if (this._hass) {
+             if (this._hass && this._hass.states) {
                for (const entity_id in this._hass.states) {
-                 if (entity_id.startsWith('media_player.cuboai_speaker_')) {
-                   deviceId = entity_id.replace('media_player.cuboai_speaker_', '').toUpperCase();
-                   break;
+                 if (entity_id.startsWith('media_player.') && entity_id.endsWith('_speaker')) {
+                   const attrs = this._hass.states[entity_id].attributes || {};
+                   if (attrs.device_id) {
+                     deviceId = attrs.device_id;
+                     break;
+                   }
                  }
                }
              }
-             if (deviceId) {
-               let wEntity2 = null;
-               let wRtspPort2 = 8555;
-               if (this._hass && this._hass.states) {
-                   for (const e in this._hass.states) {
-                       if (e.startsWith('camera.cuboai_') && e.endsWith('_local_camera')) {
-                           wEntity2 = e;
-                           if (this._hass.states[e].attributes && this._hass.states[e].attributes.rtsp_port) {
-                               wRtspPort2 = this._hass.states[e].attributes.rtsp_port;
-                           }
-                           break;
-                       }
-                   }
-               }
-               const webrtcConfig = {
-                 type: 'custom:webrtc-camera',
-                 entity: wEntity2 || '',
-                 url: wEntity2 ? undefined : `rtsp://127.0.0.1:${wRtspPort2}/cuboai_combined_${deviceId}`,
-                 mode: this.micEnabled ? 'webrtc' : 'webrtc,mse',
-                 ui: true,
-                 muted: this.isMuted,
-                 poster: (wEntity2 && this._hass?.states[wEntity2]?.attributes?.entity_picture) || undefined,
-                 background: true,
-                 media: this.micEnabled ? 'video,audio,microphone' : 'video,audio'
-               };
+             // A null deviceId is fine — the matcher falls back to the sole
+             // CuboAI camera when there is exactly one.
+             const found = cuboaiFindCameraState(this._hass, deviceId);
+             if (found) {
+               const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
                customElements.whenDefined('webrtc-camera').then(() => {
                  this.content.setConfig(webrtcConfig);
                });

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.11]
+
+### Fixed
+- **Custom card showed "connection reset by peer" while the generic WebRTC card worked (issue #89)**: the card located its camera by pattern-matching the entity id — it had to start with `camera.cuboai_`, end with `_local_camera`, and contain a "baby name" token sliced out of the speaker's entity id. None of that is guaranteed. The camera entity is named "<baby> Local Camera", so its id is whatever Home Assistant composes from the device and entity names, which differs between installs, HA versions and any rename; HA's `_2` duplicate suffix breaks it outright; and the baby-name token need not appear in the camera id at all. Whenever the match failed, the card silently fell back to a hardcoded `rtsp://127.0.0.1:8555/...` URL — and on Home Assistant OS that port belongs to HA's *own* built-in go2rtc WebRTC listener, which accepts the connection then immediately tears it down. That is the reported error, and it is why the generic card (pointed straight at the entity) kept working. The card now finds its camera by the `device_id` attribute the entity publishes, which is immune to all of the above, and streams through the entity — so the port go2rtc actually bound is always the port used, along with the NVR credentials and stream pre-warm that the hand-built URL silently skipped. With no camera entity at all, the card now says so instead of connecting to a port that will reset.
+- **"Transcode this camera to H.264" was permanently greyed out**: the card editor located the camera with the same impossible entity-id filter, so the checkbox was disabled for everyone, silently defeating the H.265/HomeKit fix from 2.4.5.
+- **Auto-detect branch of the card was dead code**: it looked for `media_player.cuboai_speaker_<id>`, but the speaker entity is `media_player.<baby>_speaker`, so the device id was always empty and the branch never ran.
+
+### Changed
+- **The RTSP port setting finally has a label**: the field appeared in both setup and options with no translation, so Home Assistant rendered the raw key `rtsp_port`. It now has a name and an explanation that the port self-heals and that `8557` is the expected default because Home Assistant's built-in go2rtc normally holds 8555.
+
 ## [2.4.10]
 
 ### Fixed
