@@ -676,6 +676,8 @@ class CuboAICameraCard extends HTMLElement {
           // webrtc-camera `muted` config above.
           if (this.bpmOverlay) this.appendChild(this.bpmOverlay);
           if (this.envOverlay) this.appendChild(this.envOverlay);
+          // Re-appending moves it, so the scrub bar sits below the picture.
+          if (this.dvrBar) this.appendChild(this.dvrBar);
           
           
           // Add Music Player Bar & Song Library
@@ -2077,6 +2079,9 @@ class CuboAICameraCard extends HTMLElement {
       if (this.content.setConfig && this._hass) {
         this.content.hass = this._hass;
       }
+      // Built once, so a re-render that detached the bar would lose it
+      // permanently; put it back instead.
+      if (this.dvrBar && !this.dvrBar.isConnected) this.appendChild(this.dvrBar);
     }
 
       let tempState = null;
