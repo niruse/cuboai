@@ -16,8 +16,6 @@ from .api.cuboai_functions import (
     save_refresh_token,
     set_token_paths,
 )
-from homeassistant.exceptions import HomeAssistantError
-
 from .const import DOMAIN
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
@@ -216,6 +214,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         minute behind live back to its ~72h retention limit.
         """
         import datetime as dt
+
+        # Imported here rather than at module scope: the test harness stubs
+        # `homeassistant` as a plain module, so a top-level submodule import
+        # breaks collection for every test that touches this package.
+        from homeassistant.exceptions import HomeAssistantError
 
         device_id = call.data.get("device_id")
         seconds = int(call.data.get("duration", 60))
