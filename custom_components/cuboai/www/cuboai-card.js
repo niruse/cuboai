@@ -1722,6 +1722,45 @@ class CuboAICameraCard extends HTMLElement {
                     }
                 }
 
+                // HA Android companion app: the WebView defines
+                // video.requestPictureInPicture, so the player shows its minimize
+                // button — but web PiP is unsupported inside a WebView (companion
+                // app issue #3955, closed not-planned): the call never opens a
+                // window, so the button silently did nothing (#87). The app itself
+                // DOES have native PiP (since May 2026): it floats the whole
+                // activity when the user leaves the app while a fullscreen video is
+                // showing. So in the app, minimize = fullscreen the player + a hint
+                // to press Home. Android browsers (no window.externalApp) keep the
+                // browser's real native PiP.
+                if (isAndroid && window.externalApp) {
+                    const pipHost = player || video.parentElement;
+                    video.requestPictureInPicture = function() {
+                        // Hint FIRST, before anything that can fail — if the tap
+                        // produces no hint at all, the app is running a cached old
+                        // card; if the hint shows but nothing else happens, the
+                        // fullscreen/PiP path is what broke.
+                        const host = (pipHost && pipHost.requestFullscreen) ? pipHost : video;
+                        try {
+                            const hint = document.createElement('div');
+                            hint.textContent = 'Press Home — the video keeps playing in a floating window';
+                            hint.style.cssText = 'position:absolute;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.75);color:#fff;padding:8px 14px;border-radius:16px;font-size:13px;pointer-events:none;transition:opacity 0.5s;max-width:90%;text-align:center;';
+                            // Inside the fullscreen element so it stays visible after fs starts.
+                            (host === video ? (video.parentElement || document.body) : host).appendChild(hint);
+                            setTimeout(() => { hint.style.opacity = '0'; }, 4000);
+                            setTimeout(() => hint.remove(), 4600);
+                        } catch (e) { /* best-effort */ }
+                        try {
+                            if (host.requestFullscreen) host.requestFullscreen().catch(() => {
+                                // Element fullscreen refused: fall back to the video's
+                                // native fullscreen (always available in WebView).
+                                if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+                            });
+                            else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+                        } catch (e) { /* best-effort */ }
+                        return Promise.resolve();
+                    };
+                }
+
 
                 // PiP Patch: Canvas stream overlay technique (desktop Chrome only —
                 // Apple uses native PiP, and Android can't read HW-decoded frames into
