@@ -1808,7 +1808,31 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
                 and ((au[4] >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21))
     tl = cuboai_pts.AVTimeline()
-    mux = cuboai_mpegts.TSMuxer(codec='hevc', audio_codec='aac')
+
+    def _sniff_codec(au, info):
+        """Which video codec this recording actually is.
+
+        The muxer picks the MPEG-TS stream_type from this name, so guessing
+        wrong writes a PMT that disagrees with the payload — H.264 announced as
+        HEVC (0x24) makes go2rtc find no parameter sets and register a producer
+        with no video track, i.e. a stream that opens and then shows nothing.
+        Prefer what the camera told us in FRAMEINFO; otherwise sniff the NAL
+        type, which distinguishes the two unambiguously.
+        """
+        named = (info or {}).get('codec') if isinstance(info, dict) else None
+        if named in ('h264', 'hevc'):
+            return named
+        if len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01':
+            b = au[4]
+            # H.264: type = b & 0x1f, with 1/5 the common slice types.
+            # HEVC:  type = (b >> 1) & 0x3f, VPS/SPS/PPS are 32-34.
+            if ((b >> 1) & 0x3f) in (32, 33, 34):
+                return 'hevc'
+            if (b & 0x1f) in (1, 5, 7, 8):
+                return 'h264'
+        return None
+
+    mux = None                                          # built once the codec is known
     _log = log or (lambda *a: None)
     t0 = time.time(); last_au = t0; nv = na = 0; kf = 0
     v_ts_n = 0                                         # count of recorded video AUs carrying a ts_sec
@@ -1828,6 +1852,15 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         now = int(time.time() * 1000)
         try:
             if kind == 'video':
+                if mux is None:
+                    # Build the muxer from the first AU whose codec we can name,
+                    # rather than assuming. An AU we cannot classify is skipped
+                    # instead of being muxed under a guessed stream_type.
+                    codec = _sniff_codec(unit, info)
+                    if codec is None:
+                        continue
+                    _log(f"[mpegts] muxing {codec}+aac -> MPEG-TS")
+                    mux = cuboai_mpegts.TSMuxer(codec=codec, audio_codec='aac')
                 p = tl.video(info, nal_keyframe=_nal_kf(unit))
                 writer.write(mux.mux_au(unit, p['pts_90k'], keyframe=p['keyframe'], now_ms=now))
                 if raw_video_writer is not None:
@@ -1839,6 +1872,10 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
                     v_lo = ts if v_lo is None else min(v_lo, ts)
                     v_hi = ts if v_hi is None else max(v_hi, ts)
             elif kind == 'audio':
+                if mux is None:
+                    # Audio before the first classifiable video AU: hold it
+                    # rather than emit audio-only TS with no video track.
+                    continue
                 p = tl.audio(info)
                 writer.write(mux.mux_audio_au(unit, p['pts_90k'], now_ms=now))
                 na += 1

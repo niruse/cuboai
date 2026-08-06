@@ -360,9 +360,17 @@ class Go2RTCManager:
         if "streams" not in config:
             config["streams"] = {}
 
-        # Overwrite our streams, keeping any other streams (e.g. from user)
+        # Overwrite our streams, keeping any other streams (e.g. from user).
+        # Drop stale cuboai_* entries first: this file is merged into, not
+        # replaced, so a stream we no longer generate (or one an older version
+        # wrote into the wrong key) would otherwise linger and be served.
+        for key in [k for k in config["streams"] if str(k).startswith("cuboai_")]:
+            if key not in self._streams:
+                _LOGGER.debug("Dropping stale go2rtc stream %s", key)
+                del config["streams"][key]
         for k, v in self._streams.items():
             config["streams"][k] = v
+        _LOGGER.info("go2rtc config written with streams: %s", sorted(self._streams))
 
         def _write():
             os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
@@ -506,27 +514,28 @@ class Go2RTCManager:
                 json.dump(payload, handle)
 
         await self.hass.async_add_executor_job(_write)
-        await self.async_stop_playback(dev_id)
+        # Deliberately NOT deleting the stream here. go2rtc's DELETE removes the
+        # stream itself — not just its producer — and this one is declared in
+        # the config, so deleting it made every later request 404 until go2rtc
+        # restarted. go2rtc already starts a fresh producer, which reads the
+        # file just written, when the next viewer connects.
         _LOGGER.info("Playback requested for %s from %s (%ss)", dev_id, start_epoch, seconds)
         return self.playback_rtsp_url(dev_id)
 
     async def async_stop_playback(self, device_id: str) -> None:
-        """Stop a running DVR producer, if any.
+        """Clear a camera's playback request.
 
-        The stream itself stays declared — only its producer is torn down, by
-        asking go2rtc to drop the source. go2rtc spawns a fresh one (reading the
-        current state file) the next time somebody watches.
+        Note this does NOT call go2rtc's DELETE: that removes the declared
+        stream rather than just its producer, and it would then 404 until
+        go2rtc restarted. Removing the state file is enough — the producer
+        stops at end of footage, and without a request it refuses to start.
         """
-        import aiohttp
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        state_path = self.hass.config.path(f"cuboai_playback_{device_id}.json")
 
-        api_port = getattr(self, "_api_port", 1985)
-        session = async_get_clientsession(self.hass)
-        try:
-            await session.delete(
-                f"http://127.0.0.1:{api_port}/api/streams",
-                params={"src": self.playback_stream_name(device_id)},
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-        except Exception as err:  # noqa: BLE001 - nothing running is fine
-            _LOGGER.debug("No playback producer to stop: %s", err)
+        def _remove() -> None:
+            try:
+                os.remove(state_path)
+            except FileNotFoundError:
+                pass
+
+        await self.hass.async_add_executor_job(_remove)
