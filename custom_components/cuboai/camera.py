@@ -446,7 +446,7 @@ class CuboRecordingCamera(CoordinatorEntity, Camera):
 
         return {
             "playing_from": dt.datetime.fromtimestamp(
-                self._playing_from, dt.timezone.utc
+                self._playing_from, dt.UTC
             ).isoformat(),
         }
 

@@ -34,8 +34,8 @@ import datetime as _dt
 import os
 import signal
 import sys
-import time as _time
 import threading
+import time as _time
 
 # Playback needs a newer TUTK engine than the live path currently vendors: with
 # the older one the camera opens the playback channel but never delivers a
@@ -129,8 +129,8 @@ def main() -> int:
 
     apply_env_profile(False)
 
-    from cuboai_session import get_session
     import cuboai_playback as pb
+    from cuboai_session import get_session
 
     # Cheap gates only. Deliberately NOT a coverage/manifest pull first: the
     # 0x910 + RDT manifest fetch is flaky, and its timeout path disconnects the
@@ -138,7 +138,7 @@ def main() -> int:
     # delivers no frames. Playback does not need the manifest; 0x31a serves
     # footage right up to ~a minute behind live, including the current hour
     # whose manifest the camera won't serve at all.
-    now = int(_dt.datetime.now(_dt.timezone.utc).timestamp())
+    now = int(_dt.datetime.now(_dt.UTC).timestamp())
     if start_epoch > now - _RECENCY_FLOOR_S:
         _log(f"too recent — the last ~{_RECENCY_FLOOR_S}s is still being written")
         return 2
@@ -155,7 +155,7 @@ def main() -> int:
         transport = sess
         inner = getattr(transport, "_inner", transport)
 
-        began = _dt.datetime.fromtimestamp(start_epoch, _dt.timezone.utc)
+        began = _dt.datetime.fromtimestamp(start_epoch, _dt.UTC)
         pbsess = pb.PlaybackSession(transport, log=_log)
         try:
             # Revive the socket if anything upstream dropped it, or start()
@@ -176,7 +176,7 @@ def main() -> int:
                     if back:
                         _log(f"requested moment refused; served {back}s earlier instead")
                         start_epoch -= back
-                        began = _dt.datetime.fromtimestamp(start_epoch, _dt.timezone.utc)
+                        began = _dt.datetime.fromtimestamp(start_epoch, _dt.UTC)
                     break
                 except RuntimeError as err:
                     if "rejected" in str(err).lower() and back < 120:

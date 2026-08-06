@@ -248,7 +248,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.info(
                 "Playing recording for %s from %s for %ss",
                 device_id,
-                dt.datetime.fromtimestamp(start_epoch, dt.timezone.utc).isoformat(),
+                dt.datetime.fromtimestamp(start_epoch, dt.UTC).isoformat(),
                 seconds,
             )
             return
@@ -271,7 +271,7 @@ def _parse_start_time(raw: str):
 
     if not raw:
         return None
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     rel = re.fullmatch(r"-?(\d+(?:\.\d+)?)\s*([smhd])", raw.lower())
     if rel:
         amount = float(rel.group(1))
