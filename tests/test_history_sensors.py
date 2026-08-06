@@ -13,8 +13,6 @@ import sys
 import types
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parent.parent
 TUTK = REPO / "custom_components" / "cuboai" / "tutk"
 
@@ -51,7 +49,7 @@ class _Reading:
 class _Hist:
     def __init__(self, **fields):
         self.stale = fields.pop("stale", False)
-        self.fetched_at = dt.datetime(2026, 8, 6, 12, 0, 0, tzinfo=dt.timezone.utc)
+        self.fetched_at = dt.datetime(2026, 8, 6, 12, 0, 0, tzinfo=dt.UTC)
         for name in ("baby_present", "noise", "motion", "wellbeing",
                      "baby_event", "privacy", "temperature_c", "humidity_pct"):
             setattr(self, name, fields.get(name, _Reading(None, None, available=False)))
@@ -60,7 +58,7 @@ class _Hist:
 def test_payload_keeps_age_and_staleness_with_every_value():
     payload = _load_history_payload()(
         _Hist(baby_present=_Reading(1, 62.0, note="in crib",
-                                    ts=dt.datetime(2026, 8, 6, 11, 59, tzinfo=dt.timezone.utc)))
+                                    ts=dt.datetime(2026, 8, 6, 11, 59, tzinfo=dt.UTC)))
     )
     bp = payload["baby_present"]
     # The value must never travel alone.
@@ -86,7 +84,7 @@ class _FakeCoordinator:
         self.history_sensors_enabled = True
 
 
-def _make_sensor(history, monkeypatch):
+def _make_sensor(history, monkeypatch, field="baby_present", labelled=True):
     """Build CuboHistorySensor with HA's CoordinatorEntity stubbed out."""
     import importlib
 
@@ -134,7 +132,7 @@ def _make_sensor(history, monkeypatch):
     monkeypatch.setitem(sys.modules, "cuboai_pkg.sensor", module)
     spec.loader.exec_module(module)
     return module.CuboHistorySensor(
-        _FakeCoordinator(history), "DEV1", "Mia", "baby_present", "Baby Present", None
+        _FakeCoordinator(history), "DEV1", "Mia", field, "Baby Present", None, labelled
     )
 
 
@@ -184,9 +182,35 @@ def test_missing_history_block_does_not_raise(monkeypatch):
 def test_opaque_fields_are_not_exposed_as_entities(monkeypatch):
     """`wellbeing`/`baby_event` are documented upstream as an opaque UI-tint bit
     and an effectively-never-firing flag — exposing them would invent meaning."""
-    import importlib
 
-    s = _make_sensor({}, monkeypatch)
+    _make_sensor({}, monkeypatch)
     module = sys.modules["cuboai_pkg.sensor"]
-    fields = {f for f, _, _ in module.HISTORY_SENSORS}
+    fields = {f for f, _, _, _ in module.HISTORY_SENSORS}
     assert fields == {"baby_present", "noise", "motion", "privacy"}
+
+
+def test_unlabelled_baby_present_reads_unknown_not_zero(monkeypatch):
+    """Observed on a real camera: bp=0, which upstream maps to no phrase.
+
+    A "Baby Present" sensor showing `0` reads as "no baby"; it actually means
+    the camera gave no interpretable answer. It must be unknown instead.
+    """
+    s = _make_sensor(
+        {"baby_present": {"value": 0, "age_s": 55.0, "available": True,
+                          "stale": False, "note": None, "ts_utc": None}},
+        monkeypatch,
+    )
+    assert s.available is True          # the reading is fresh and real
+    assert s.native_value is None       # but it is not interpretable
+    assert s.extra_state_attributes["raw_value"] == 0   # still visible for debugging
+
+
+def test_numeric_field_still_shows_its_number(monkeypatch):
+    """Noise is a 0-100 measurement: the number IS the meaning, so no phrase
+    is expected and the value must not be suppressed."""
+    s = _make_sensor(
+        {"noise": {"value": 25, "age_s": 55.0, "available": True,
+                   "stale": False, "note": None, "ts_utc": None}},
+        monkeypatch, field="noise", labelled=False,
+    )
+    assert s.native_value == 25

@@ -70,8 +70,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         # slower poll (see coordinator.history_sensors_enabled).
         if coordinator.history_sensors_enabled:
             sensors.extend(
-                CuboHistorySensor(coordinator, device_id, baby_name, field, label, unit)
-                for field, label, unit in HISTORY_SENSORS
+                CuboHistorySensor(coordinator, device_id, baby_name, field, label, unit, labelled)
+                for field, label, unit, labelled in HISTORY_SENSORS
             )
 
     sensors.append(CuboSubscriptionSensor(coordinator, entry.entry_id))
@@ -1148,16 +1148,24 @@ class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
         }
 
 
-#: DVR-history sensors: (payload field, display label, unit).
+#: DVR-history sensors: (payload field, display label, unit, labelled).
 #: `wellbeing` and `baby_event` are deliberately omitted — upstream documents
 #: the first as an opaque firmware bit the app only uses for a UI tint, and the
 #: second as effectively never firing. Exposing either would invent meaning the
 #: data does not carry.
+#:
+#: `labelled` marks a field whose raw number means nothing on its own: the
+#: library maps it to a phrase ('in crib', 'still', 'recording'). If a value
+#: arrives that it has no phrase for, the reading is not interpretable and the
+#: sensor says unknown rather than showing the bare number — a "Baby Present"
+#: reading of `0` looks like "no baby" when it actually means "no answer".
+#: (Observed live: the camera does emit bp=0, which upstream maps to nothing —
+#: it documents only 1='in crib' and 2='not in crib'.)
 HISTORY_SENSORS = (
-    ("baby_present", "Baby Present", None),
-    ("noise", "Noise Level", None),
-    ("motion", "Motion", None),
-    ("privacy", "Privacy Mode", None),
+    ("baby_present", "Baby Present", None, True),
+    ("noise", "Noise Level", None, False),
+    ("motion", "Motion", None, True),
+    ("privacy", "Privacy Mode", None, True),
 )
 
 
@@ -1174,11 +1182,12 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
     #: Beyond this the reading is too old to represent "now" for a baby monitor.
     MAX_AGE_S = 15 * 60
 
-    def __init__(self, coordinator, device_id, baby_name, field, label, unit):
+    def __init__(self, coordinator, device_id, baby_name, field, label, unit, labelled=False):
         super().__init__(coordinator)
         self._device_id = device_id
         self._baby_name = baby_name
         self._field = field
+        self._labelled = labelled
         self._attr_name = f"CuboAI {label} {baby_name}"
         self._attr_unique_id = f"cuboai_history_{field}_{device_id}"
         if unit:
@@ -1204,10 +1213,18 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        # Prefer the human-readable note the API derives ('in crib' /
-        # 'not in crib', 'still' / 'moving'); fall back to the raw value.
+        # The human-readable note the library derives ('in crib' / 'not in
+        # crib', 'still' / 'moving', 'recording').
         reading = self._reading
-        return reading.get("note") or reading.get("value")
+        note = reading.get("note")
+        if note:
+            return note
+        if self._labelled:
+            # No phrase for this value: the raw number is not self-describing,
+            # so report unknown instead of a digit that reads like an answer.
+            # The number is still in `raw_value` for anyone debugging.
+            return None
+        return reading.get("value")
 
     @property
     def extra_state_attributes(self):
