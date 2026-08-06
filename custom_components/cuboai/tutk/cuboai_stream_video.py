@@ -57,6 +57,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cuboai_session import get_session   # auto: PureSession (no --lib) or TUTKSession
 
+def _env_float(name: str, default: float) -> float:
+    """Parse a CUBOAI_* env var as float, falling back to `default` on empty or
+    non-numeric input (a bare float(os.environ[...]) raises on garbage).
+
+    Vendored alongside cuboai_sensors.py, which imports it from this module.
+    """
+    try:
+        raw = os.environ.get(name, '')
+        return float(raw) if raw else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 
 # ── Production env profile ─────────────────────────────────────────────────
 # The proven streaming stack — MPEG-TS container + FRAMEINFO strip + selective-repeat loss

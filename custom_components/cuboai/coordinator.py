@@ -21,7 +21,49 @@ from .utils import log_to_file
 _LOGGER = logging.getLogger(__name__)
 
 
-def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False):
+#: Fields of HistorySensors worth surfacing, and the unit each carries.
+_HISTORY_FIELDS = (
+    "baby_present",
+    "noise",
+    "motion",
+    "wellbeing",
+    "baby_event",
+    "privacy",
+    "temperature_c",
+    "humidity_pct",
+)
+
+
+def _history_payload(hist) -> dict:
+    """Flatten a HistorySensors into plain data the entities can read.
+
+    Every field keeps its own `age_s`, `stale` and `available` alongside the
+    value. That is deliberate: this is a baby monitor, and a 40-minute-old
+    "baby present" rendered as if it were live is the exact failure this API is
+    built to prevent — so the age travels with the value rather than being
+    dropped here.
+    """
+    out: dict = {"stale": bool(getattr(hist, "stale", False))}
+    fetched = getattr(hist, "fetched_at", None)
+    out["fetched_at"] = fetched.isoformat() if fetched else None
+    for name in _HISTORY_FIELDS:
+        reading = getattr(hist, name, None)
+        if reading is None:
+            continue
+        out[name] = {
+            "value": reading.value,
+            "age_s": reading.age_s,
+            "available": reading.available,
+            "stale": reading.stale,
+            "note": reading.note,
+            "unit": reading.unit,
+            "ts_utc": reading.ts_utc.isoformat() if reading.ts_utc else None,
+        }
+    return out
+
+
+def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False,
+                      history_sensors=False):
     """Synchronous function to fetch local data via TUTK."""
     from .utils import log_to_file
 
@@ -188,6 +230,20 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
 
                         log_to_file(f"Failed to get lullaby status: {e}\n{traceback.format_exc()}")
 
+                    # The camera's own DVR history (s_log): baby-present, noise,
+                    # motion, privacy. This is a different data source from
+                    # everything above — an RDT pull rather than an instant GET —
+                    # so it is opt-in, and a failure here must never cost us the
+                    # rest of the poll.
+                    if history_sensors:
+                        try:
+                            from .tutk import cuboai_sensors as _sensors
+
+                            hist = _sensors.get_history_sensors(sess)
+                            data["history"] = _history_payload(hist)
+                        except Exception as e:
+                            log_to_file(f"Failed to get history sensors: {e}")
+
                     return data
             except Exception as conn_e:
                 log_to_file(f"Connection attempt {attempt + 1} failed: {conn_e}")
@@ -221,7 +277,8 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                         except Exception as gerr2:
                             log_to_file(f"Failed to load libgcompat.so: {gerr2}")
 
-                    return _fetch_local_data(uid, account, password, camera_ip, fetch_extras, is_retry=True)
+                    return _fetch_local_data(uid, account, password, camera_ip, fetch_extras,
+                                             is_retry=True, history_sensors=history_sensors)
                 except Exception as retry_e:
                     log_to_file(f"Alpine retry failed: {retry_e}\n{traceback.format_exc()}")
         log_to_file(f"Failed to connect to camera via TUTK for local polling: {e}\n{traceback.format_exc()}")
@@ -282,6 +339,20 @@ class CuboAICoordinator(DataUpdateCoordinator):
     @property
     def download_images(self) -> bool:
         return self._entry.options.get("download_images", self._entry.data.get("download_images", True))
+
+    @property
+    def history_sensors_enabled(self) -> bool:
+        """Whether to pull the camera's DVR history on each poll.
+
+        Off by default: it is an RDT read rather than an instant GET, so it
+        makes the local poll noticeably slower and is only worth paying for if
+        the baby-present / noise / motion sensors are actually wanted.
+        """
+        return bool(
+            self._entry.options.get(
+                "history_sensors", self._entry.data.get("history_sensors", False)
+            )
+        )
 
     @property
     def hours_back(self) -> int:
@@ -447,11 +518,16 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     ),
                     asyncio.wait_for(
                         self.hass.async_add_executor_job(
-                            _fetch_local_data, uid, account, password, camera_ip, fetch_extras
+                            _fetch_local_data, uid, account, password, camera_ip, fetch_extras,
+                            False, self.history_sensors_enabled,
                         )
                         if uid
                         else _dummy_async(),
-                        timeout=20.0,
+                        # The DVR history pull rides RDT and is slower than the
+                        # instant GETs, so give the poll more room when it is on
+                        # — otherwise a timeout would throw away every other
+                        # local sensor in the same call.
+                        timeout=40.0 if self.history_sensors_enabled else 20.0,
                     ),
                     return_exceptions=True,
                 )

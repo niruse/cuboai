@@ -431,6 +431,10 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 "enable_debug_logs",
                 default=self.config_entry.options.get("enable_debug_logs", False),
             ): bool,
+            vol.Optional(
+                "history_sensors",
+                default=self.config_entry.options.get("history_sensors", False),
+            ): bool,
             vol.Required(
                 "rtsp_port",
                 default=default_port,
