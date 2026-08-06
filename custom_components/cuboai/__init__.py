@@ -16,6 +16,8 @@ from .api.cuboai_functions import (
     save_refresh_token,
     set_token_paths,
 )
+from homeassistant.exceptions import HomeAssistantError
+
 from .const import DOMAIN
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
@@ -206,7 +208,80 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     hass.services.async_register(DOMAIN, "set_h264_transcode", handle_set_h264_transcode)
 
+    async def handle_play_recording(call):
+        """Play footage from the camera's own DVR on its Recording camera.
+
+        `start_time` accepts an absolute time or a relative amount ("10m",
+        "2h") meaning that long ago. The camera serves footage from about a
+        minute behind live back to its ~72h retention limit.
+        """
+        import datetime as dt
+
+        device_id = call.data.get("device_id")
+        seconds = int(call.data.get("duration", 60))
+        raw = str(call.data.get("start_time", "")).strip()
+
+        start_epoch = _parse_start_time(raw)
+        if start_epoch is None:
+            raise HomeAssistantError(
+                f"Could not read start_time {raw!r} — use '10m', '2h', or a date/time"
+            )
+
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            cams = entry.data.get("all_cameras") or entry.data.get("cameras", [])
+            cam = next((c for c in cams if c.get("device_id") == device_id), None)
+            if cam is None:
+                continue
+            store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+            manager = store.get("go2rtc")
+            if manager is None or not manager.is_running:
+                raise HomeAssistantError("The streaming engine is not running")
+            url = await manager.async_start_playback(cam, start_epoch, seconds)
+
+            # Point the Recording camera at the freshly published stream.
+            for entity in store.get("recording_cameras", []):
+                if entity.unique_id == f"cuboai_recording_camera_{device_id}":
+                    entity.set_playback(url, start_epoch)
+            _LOGGER.info(
+                "Playing recording for %s from %s for %ss",
+                device_id,
+                dt.datetime.fromtimestamp(start_epoch, dt.timezone.utc).isoformat(),
+                seconds,
+            )
+            return
+        raise HomeAssistantError(f"No CuboAI camera with device_id {device_id!r}")
+
+    hass.services.async_register(DOMAIN, "play_recording", handle_play_recording)
+
     return True
+
+
+def _parse_start_time(raw: str):
+    """Read a start time as epoch seconds, or None if it cannot be read.
+
+    Accepts a relative amount ago — "90s", "10m", "2h" — which is how people
+    actually think about rewinding ("show me ten minutes ago"), or an absolute
+    date/time, which Home Assistant hands over as a string.
+    """
+    import datetime as dt
+    import re
+
+    if not raw:
+        return None
+    now = dt.datetime.now(dt.timezone.utc)
+    rel = re.fullmatch(r"-?(\d+(?:\.\d+)?)\s*([smhd])", raw.lower())
+    if rel:
+        amount = float(rel.group(1))
+        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}[rel.group(2)]
+        return int((now - dt.timedelta(seconds=amount * unit)).timestamp())
+    from homeassistant.util import dt as dt_util
+
+    parsed = dt_util.parse_datetime(raw)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return int(parsed.timestamp())
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

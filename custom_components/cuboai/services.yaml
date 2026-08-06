@@ -32,3 +32,38 @@ set_h264_transcode:
       example: true
       selector:
         boolean:
+
+play_recording:
+  name: Play a recording
+  description: >-
+    Play footage from the camera's own on-board DVR on its Recording camera
+    entity. No cloud subscription needed. The camera keeps roughly the last 72
+    hours and serves up to about a minute behind live.
+  fields:
+    device_id:
+      name: Camera
+      description: The camera's device id.
+      required: true
+      example: CB02XXXXXXXXXXXX
+      selector:
+        text:
+    start_time:
+      name: Start from
+      description: >-
+        How far back to start — "10m", "2h", "90s" — or an absolute date and
+        time.
+      required: true
+      example: 10m
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: Seconds of footage to play.
+      required: false
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 900
+          unit_of_measurement: s
+          mode: box
