@@ -308,6 +308,15 @@ if (!customElements.get('cuboai-camera-card-editor')) {
 
 
 class CuboAICameraCard extends HTMLElement {
+  disconnectedCallback() {
+    // The DVR timeline keeps a repaint interval and a ResizeObserver alive;
+    // drop both when the card leaves the DOM so a dashboard that is opened and
+    // closed repeatedly does not accumulate timers.
+    if (this._dvrTick) { clearInterval(this._dvrTick); this._dvrTick = null; }
+    if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
+    if (super.disconnectedCallback) super.disconnectedCallback();
+  }
+
   
   static getConfigElement() {
     return document.createElement("cuboai-camera-card-editor");
@@ -513,6 +522,137 @@ class CuboAICameraCard extends HTMLElement {
         this.appendChild(this.bpmOverlay);
       }
       
+      // ── DVR timeline ────────────────────────────────────────────────
+      // A scrub bar over the camera's own recording: hour ticks, a draggable
+      // playhead, and the moment under it shown above. Releasing the playhead
+      // asks cuboai.play_recording for that moment, and the Recording camera
+      // entity plays it. Hidden unless the integration exposes that entity, so
+      // older installs are unaffected.
+      if (!this.dvrBar && this._config && this._config.show_timeline !== false) {
+        const HOURS = Number(this._config.timeline_hours) || 12;   // span shown
+        const PLAY_SECONDS = Number(this._config.timeline_play_seconds) || 60;
+        // The freshest minute is still being written and will not play, so the
+        // right-hand edge stops short of "now" rather than offering a moment
+        // the camera will refuse.
+        const EDGE_LAG_S = 120;
+
+        const bar = document.createElement('div');
+        bar.className = 'cuboai-dvr';
+        bar.style.cssText = 'position:relative;width:100%;background:#000;color:#fff;' +
+          'padding:6px 0 10px;font-family:inherit;user-select:none;touch-action:none;';
+
+        const stamp = document.createElement('div');
+        stamp.style.cssText = 'font-size:13px;padding:0 12px 6px;opacity:.9;';
+        bar.appendChild(stamp);
+
+        const track = document.createElement('div');
+        track.style.cssText = 'position:relative;height:46px;margin:0 12px;cursor:ew-resize;';
+        bar.appendChild(track);
+
+        const ruler = document.createElement('canvas');
+        ruler.style.cssText = 'width:100%;height:46px;display:block;';
+        track.appendChild(ruler);
+
+        const head = document.createElement('div');
+        head.style.cssText = 'position:absolute;top:0;bottom:0;width:2px;background:#03dac6;' +
+          'pointer-events:none;';
+        const knob = document.createElement('div');
+        knob.style.cssText = 'position:absolute;top:-6px;left:50%;transform:translateX(-50%);' +
+          'width:14px;height:14px;border-radius:50%;background:#03dac6;';
+        head.appendChild(knob);
+        track.appendChild(head);
+
+        // frac 0..1 across the visible span; 1 = the recent edge.
+        let frac = 1;
+        const spanMs = HOURS * 3600 * 1000;
+        const edgeAt = () => Date.now() - EDGE_LAG_S * 1000;
+        const timeAt = (f) => new Date(edgeAt() - (1 - f) * spanMs);
+
+        const drawRuler = () => {
+          const w = track.clientWidth || 300;
+          const dpr = window.devicePixelRatio || 1;
+          ruler.width = w * dpr; ruler.height = 46 * dpr;
+          const g = ruler.getContext('2d');
+          g.setTransform(dpr, 0, 0, dpr, 0, 0);
+          g.clearRect(0, 0, w, 46);
+          const end = edgeAt(), start = end - spanMs;
+          // A tick every 15 min, taller and labelled on the hour.
+          const step = 15 * 60 * 1000;
+          const first = Math.ceil(start / step) * step;
+          g.textAlign = 'center';
+          g.font = '10px system-ui, sans-serif';
+          for (let t = first; t <= end; t += step) {
+            const x = ((t - start) / spanMs) * w;
+            const onHour = new Date(t).getMinutes() === 0;
+            g.strokeStyle = onHour ? 'rgba(255,255,255,.85)' : 'rgba(255,255,255,.35)';
+            g.beginPath();
+            g.moveTo(x, onHour ? 22 : 30); g.lineTo(x, 44); g.stroke();
+            if (onHour) {
+              g.fillStyle = 'rgba(255,255,255,.85)';
+              g.fillText(new Date(t).toLocaleTimeString([], { hour: '2-digit' }), x, 14);
+            }
+          }
+        };
+
+        const paint = () => {
+          const w = track.clientWidth || 300;
+          head.style.left = (frac * w) + 'px';
+          const at = timeAt(frac);
+          const live = frac > 0.999;
+          stamp.textContent = live
+            ? 'Live'
+            : at.toLocaleString([], { month: '2-digit', day: '2-digit',
+                                      hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        };
+
+        const seek = (clientX) => {
+          const r = track.getBoundingClientRect();
+          frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+          paint();
+        };
+
+        const commit = () => {
+          if (frac > 0.999) return;               // dropped back on "live"
+          const at = timeAt(frac);
+          const dev = (this._config && this._config.device_id) || '';
+          if (!dev || !this._hass) return;
+          // The service takes an absolute time as well as "10m"-style offsets.
+          this._hass.callService('cuboai', 'play_recording', {
+            device_id: dev,
+            start_time: at.toISOString(),
+            duration: PLAY_SECONDS,
+          });
+          stamp.textContent = 'Playing from ' +
+            at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        };
+
+        let dragging = false;
+        track.addEventListener('pointerdown', (e) => {
+          dragging = true; track.setPointerCapture(e.pointerId); seek(e.clientX);
+        });
+        track.addEventListener('pointermove', (e) => { if (dragging) seek(e.clientX); });
+        const endDrag = (e) => {
+          if (!dragging) return;
+          dragging = false;
+          try { track.releasePointerCapture(e.pointerId); } catch (_) {}
+          commit();
+        };
+        track.addEventListener('pointerup', endDrag);
+        track.addEventListener('pointercancel', endDrag);
+
+        // Keep the ruler honest as time passes and on resize; while the user is
+        // dragging, leave the playhead alone.
+        this._dvrTick = setInterval(() => { if (!dragging) { drawRuler(); paint(); } }, 30000);
+        if (window.ResizeObserver) {
+          this._dvrResize = new ResizeObserver(() => { drawRuler(); paint(); });
+          this._dvrResize.observe(track);
+        }
+        requestAnimationFrame(() => { drawRuler(); paint(); });
+
+        this.dvrBar = bar;
+        this.appendChild(bar);
+      }
+
       if (!this.envOverlay) {
         this.envOverlay = document.createElement('div');
         this.envOverlay.style.cssText = 'position: absolute !important; bottom: 60px !important; left: 16px !important; z-index: 2147483647 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; display: flex !important; gap: 10px !important; align-items: center;';
