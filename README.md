@@ -397,21 +397,22 @@ Two things it is careful about, both learned the hard way:
 
 ---
 
-### Screenshots
+### What it looks like
+
+![CuboAI dashboard — Live and Nighttime tabs](docs/images/dashboard-sample.svg)
+
+*An illustration, drawn from the card's own layout and colours — not a photograph
+of anyone's nursery.* The left panel is the **Live** tab: the camera with the DVR
+scrub bar, the time field and the seconds buttons under it. The right is
+**Nighttime**: the window it covers, the four figures, and the swimlane timeline
+with each lane's share of the window in the legend.
 
 <!--
-  TODO: drop the PNGs into docs/images/ and uncomment the block below.
-  These have to be taken on a running install; they are not in the repo yet.
-    dashboard-live.png      Live tab: camera + scrub bar + time picker + nudges
-    dashboard-night.png     Nighttime tab: the four figures + the timeline
-    dashboard-summary.png   Summary tab: week figures + coverage + 7-day chart
-    dashboard-alerts.png    Alerts tab: latest alert + thumbnails
-  Taken on a phone at ~390px wide, since that is where the layout matters most.
-
-![Live tab](docs/images/dashboard-live.png)
-![Nighttime tab](docs/images/dashboard-night.png)
-![Summary tab](docs/images/dashboard-summary.png)
-![Alerts tab](docs/images/dashboard-alerts.png)
+  Replace with real screenshots when convenient — drop PNGs into docs/images/
+  and swap the link above. Taken at phone width, where the layout matters most:
+    dashboard-live.png  dashboard-night.png  dashboard-summary.png  dashboard-alerts.png
+  Check them for the baby's name and real entity ids before committing: this
+  repository is public.
 -->
 
 ## 🗂️ Installing the full dashboard

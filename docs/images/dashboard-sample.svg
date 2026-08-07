@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 560" width="860" height="560" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>CuboAI dashboard — Live and Nighttime tabs</title>
+  <desc>Illustration of the example dashboard: the Live tab with the DVR scrub bar, and the Nighttime tab with its figures and swimlane timeline.</desc>
+
+  <rect width="860" height="560" fill="#101014"/>
+  <text x="20" y="28" fill="#8b8b93" font-size="13">Illustration — drawn from the card, not a screenshot of a real nursery.</text>
+
+  <!-- ══════════ LIVE TAB ══════════ -->
+  <g transform="translate(20,46)">
+    <rect width="390" height="494" rx="16" fill="#17171b" stroke="#2a2a31"/>
+
+    <!-- tab bar -->
+    <g font-size="12">
+      <text x="18" y="26" fill="#03dac6">Live</text>
+      <text x="62" y="26" fill="#6c6c76">Nighttime</text>
+      <text x="132" y="26" fill="#6c6c76">Daytime</text>
+      <text x="194" y="26" fill="#6c6c76">Summary</text>
+      <text x="258" y="26" fill="#6c6c76">Alerts</text>
+      <rect x="14" y="32" width="30" height="2" fill="#03dac6"/>
+    </g>
+
+    <!-- camera picture -->
+    <rect x="14" y="46" width="362" height="176" rx="10" fill="#22262b"/>
+    <g opacity=".5" stroke="#3d444d" stroke-width="2" fill="none">
+      <rect x="70" y="80" width="250" height="112" rx="8"/>
+      <path d="M110 192 v-40 h170 v40"/>
+      <ellipse cx="195" cy="132" rx="52" ry="30"/>
+    </g>
+    <text x="196" y="216" fill="#5b616a" font-size="11" text-anchor="middle">live view</text>
+    <circle cx="34" cy="66" r="5" fill="#ff453a"/>
+    <text x="46" y="70" fill="#e6e6ea" font-size="11">LIVE</text>
+    <g transform="translate(300,58)" font-size="10" fill="#cfd3d8">
+      <rect width="62" height="18" rx="9" fill="#000" opacity=".45"/>
+      <text x="8" y="13">24°C 51%</text>
+    </g>
+
+    <!-- DVR bar -->
+    <text x="14" y="244" fill="#e6e6ea" font-size="12">Live</text>
+    <g transform="translate(316,232)">
+      <rect width="60" height="18" rx="9" fill="none" stroke="#03dac6"/>
+      <text x="30" y="13" fill="#03dac6" font-size="10" text-anchor="middle">● LIVE</text>
+    </g>
+
+    <rect x="14" y="252" width="362" height="40" rx="4" fill="#0c0c0f"/>
+    <g stroke="#3a3a42">
+      <path d="M74 252v40M134 252v40M194 252v40M254 252v40M314 252v40"/>
+    </g>
+    <g fill="#6c6c76" font-size="9" text-anchor="middle">
+      <text x="74" y="304">Wed 18</text><text x="134" y="304">Thu 00</text>
+      <text x="194" y="304">Thu 06</text><text x="254" y="304">Thu 12</text>
+      <text x="314" y="304">Thu 18</text>
+    </g>
+    <g>
+      <rect x="223" y="250" width="2" height="44" fill="#03dac6"/>
+      <circle cx="224" cy="250" r="6" fill="#03dac6"/>
+    </g>
+
+    <!-- time picker + nudges -->
+    <rect x="14" y="312" width="290" height="26" rx="6" fill="#1c1c22" stroke="#3a3a42"/>
+    <text x="24" y="329" fill="#d6d6dc" font-size="11">06/08/2026 02:00:00</text>
+    <rect x="310" y="312" width="66" height="26" rx="6" fill="#03dac6"/>
+    <text x="343" y="329" fill="#04120f" font-size="11" text-anchor="middle">Go</text>
+    <g font-size="11" text-anchor="middle">
+      <g fill="#d6d6dc">
+        <rect x="14" y="346" width="84" height="26" rx="6" fill="none" stroke="#3a3a42"/><text x="56" y="363">−1m</text>
+        <rect x="106" y="346" width="84" height="26" rx="6" fill="none" stroke="#3a3a42"/><text x="148" y="363">−10s</text>
+        <rect x="198" y="346" width="84" height="26" rx="6" fill="none" stroke="#3a3a42"/><text x="240" y="363">+10s</text>
+        <rect x="290" y="346" width="86" height="26" rx="6" fill="none" stroke="#3a3a42"/><text x="333" y="363">+1m</text>
+      </g>
+    </g>
+
+    <!-- controls -->
+    <text x="14" y="398" fill="#8b8b93" font-size="11">Controls</text>
+    <g font-size="11" fill="#d6d6dc">
+      <rect x="14" y="406" width="362" height="30" rx="8" fill="#1c1c22"/>
+      <circle cx="32" cy="421" r="8" fill="#f5c344" opacity=".85"/>
+      <text x="50" y="425">Night light</text>
+      <rect x="300" y="414" width="62" height="14" rx="7" fill="#2b2b33"/>
+      <rect x="300" y="414" width="40" height="14" rx="7" fill="#f5c344" opacity=".8"/>
+      <rect x="14" y="442" width="362" height="30" rx="8" fill="#1c1c22"/>
+      <circle cx="32" cy="457" r="8" fill="#5e5ce6" opacity=".85"/>
+      <text x="50" y="461">Lullaby</text>
+      <text x="352" y="461" fill="#6c6c76" text-anchor="end">idle</text>
+    </g>
+  </g>
+
+  <!-- ══════════ NIGHTTIME TAB ══════════ -->
+  <g transform="translate(450,46)">
+    <rect width="390" height="494" rx="16" fill="#17171b" stroke="#2a2a31"/>
+
+    <g font-size="12">
+      <text x="18" y="26" fill="#6c6c76">Live</text>
+      <text x="62" y="26" fill="#03dac6">Nighttime</text>
+      <text x="132" y="26" fill="#6c6c76">Daytime</text>
+      <text x="194" y="26" fill="#6c6c76">Summary</text>
+      <text x="258" y="26" fill="#6c6c76">Alerts</text>
+      <rect x="58" y="32" width="62" height="2" fill="#03dac6"/>
+    </g>
+
+    <text x="14" y="58" fill="#8b8b93" font-size="11">Last night · 19:00–07:00</text>
+
+    <!-- headline figure -->
+    <rect x="14" y="68" width="362" height="52" rx="10" fill="#1c1c22"/>
+    <circle cx="40" cy="94" r="13" fill="#5e5ce6" opacity=".9"/>
+    <text x="64" y="90" fill="#e6e6ea" font-size="12">In crib</text>
+    <text x="64" y="106" fill="#6c6c76" font-size="10">time in the crib</text>
+    <text x="362" y="100" fill="#e6e6ea" font-size="18" text-anchor="end">9.7 h</text>
+
+    <!-- two figures -->
+    <g>
+      <rect x="14" y="128" width="177" height="52" rx="10" fill="#1c1c22"/>
+      <text x="102" y="150" fill="#6c6c76" font-size="10" text-anchor="middle">Not in crib</text>
+      <text x="102" y="170" fill="#e6e6ea" font-size="15" text-anchor="middle">1.4 h</text>
+      <rect x="199" y="128" width="177" height="52" rx="10" fill="#1c1c22"/>
+      <text x="287" y="150" fill="#6c6c76" font-size="10" text-anchor="middle">Sleeps</text>
+      <text x="287" y="170" fill="#e6e6ea" font-size="15" text-anchor="middle">3</text>
+    </g>
+
+    <!-- timeline card -->
+    <rect x="14" y="192" width="362" height="220" rx="10" fill="#1c1c22"/>
+    <text x="28" y="212" fill="#e6e6ea" font-size="12">Last night</text>
+    <text x="28" y="228" fill="#6c6c76" font-size="10">Thu 19:00 – Fri 07:00 · 12h</text>
+
+    <g>
+      <!-- lanes: icon bubble + track -->
+      <g transform="translate(28,236)">
+        <!-- gridlines repeat inside every track: that alignment is the point -->
+        <g id="lane-grid" stroke="#3a3a42" stroke-width="1"/>
+
+        <!-- 1 In crib -->
+        <circle cx="10" cy="12" r="10" fill="#2a9d8f"/>
+        <rect x="28" y="3" width="306" height="18" rx="4" fill="#26262d"/>
+        <g stroke="#3a3a42"><path d="M89 3v18M150 3v18M211 3v18M272 3v18"/></g>
+        <rect x="55" y="6" width="120" height="12" rx="3" fill="#2a9d8f"/>
+        <rect x="190" y="6" width="132" height="12" rx="3" fill="#2a9d8f"/>
+
+        <!-- 2 Not in crib -->
+        <circle cx="10" cy="42" r="10" fill="#e9c46a"/>
+        <rect x="28" y="33" width="306" height="18" rx="4" fill="#26262d"/>
+        <g stroke="#3a3a42"><path d="M89 33v18M150 33v18M211 33v18M272 33v18"/></g>
+        <rect x="28" y="36" width="26" height="12" rx="3" fill="#e9c46a"/>
+        <rect x="176" y="36" width="13" height="12" rx="3" fill="#e9c46a"/>
+
+        <!-- 3 Moving -->
+        <circle cx="10" cy="72" r="10" fill="#f4a261"/>
+        <rect x="28" y="63" width="306" height="18" rx="4" fill="#26262d"/>
+        <g stroke="#3a3a42"><path d="M89 63v18M150 63v18M211 63v18M272 63v18"/></g>
+        <g fill="#f4a261">
+          <rect x="60" y="66" width="5" height="12" rx="2"/><rect x="118" y="66" width="4" height="12" rx="2"/>
+          <rect x="188" y="66" width="6" height="12" rx="2"/><rect x="243" y="66" width="4" height="12" rx="2"/>
+        </g>
+
+        <!-- 4 Noise -->
+        <circle cx="10" cy="102" r="10" fill="#5e5ce6"/>
+        <rect x="28" y="93" width="306" height="18" rx="4" fill="#26262d"/>
+        <g stroke="#3a3a42"><path d="M89 93v18M150 93v18M211 93v18M272 93v18"/></g>
+        <g fill="#5e5ce6">
+          <rect x="36" y="96" width="7" height="12" rx="2"/><rect x="52" y="96" width="4" height="12" rx="2"/>
+          <rect x="76" y="96" width="9" height="12" rx="2"/><rect x="104" y="96" width="5" height="12" rx="2"/>
+          <rect x="130" y="96" width="6" height="12" rx="2"/><rect x="163" y="96" width="8" height="12" rx="2"/>
+          <rect x="205" y="96" width="5" height="12" rx="2"/><rect x="238" y="96" width="7" height="12" rx="2"/>
+          <rect x="279" y="96" width="6" height="12" rx="2"/><rect x="305" y="96" width="5" height="12" rx="2"/>
+        </g>
+
+        <!-- 5 Camera online -->
+        <circle cx="10" cy="132" r="10" fill="#30d158"/>
+        <rect x="28" y="123" width="306" height="18" rx="4" fill="#26262d"/>
+        <g stroke="#3a3a42"><path d="M89 123v18M150 123v18M211 123v18M272 123v18"/></g>
+        <rect x="28" y="126" width="306" height="12" rx="3" fill="#30d158"/>
+
+        <!-- hour axis -->
+        <g fill="#6c6c76" font-size="9" text-anchor="middle">
+          <text x="89" y="158">21</text><text x="150" y="158">00</text>
+          <text x="211" y="158">03</text><text x="272" y="158">06</text>
+        </g>
+
+        <!-- legend with each lane's share of the window -->
+        <g font-size="9">
+          <rect x="28" y="166" width="8" height="8" rx="2" fill="#2a9d8f"/>
+          <text x="40" y="174" fill="#8b8b93">In crib <tspan fill="#e6e6ea">81%</tspan></text>
+          <rect x="112" y="166" width="8" height="8" rx="2" fill="#e9c46a"/>
+          <text x="124" y="174" fill="#8b8b93">Not in crib <tspan fill="#e6e6ea">12%</tspan></text>
+          <rect x="215" y="166" width="8" height="8" rx="2" fill="#f4a261"/>
+          <text x="227" y="174" fill="#8b8b93">Moving <tspan fill="#e6e6ea">4%</tspan></text>
+          <rect x="28" y="182" width="8" height="8" rx="2" fill="#5e5ce6"/>
+          <text x="40" y="190" fill="#8b8b93">Noise over 26 <tspan fill="#e6e6ea">52%</tspan></text>
+          <rect x="140" y="182" width="8" height="8" rx="2" fill="#30d158"/>
+          <text x="152" y="190" fill="#8b8b93">Camera online <tspan fill="#e6e6ea">100%</tspan></text>
+        </g>
+      </g>
+    </g>
+
+    <!-- tap detail -->
+    <text x="28" y="432" fill="#e6e6ea" font-size="10">In crib · 21:04–01:58 · 4h 54m</text>
+    <text x="28" y="450" fill="#6c6c76" font-size="9">Tap a bar for its times, or an icon for the sensor.</text>
+
+    <rect x="14" y="460" width="362" height="24" rx="8" fill="#2a2118"/>
+    <text x="28" y="476" fill="#e0a44a" font-size="9">⚠ Camera unreachable 0.3 h of this window.</text>
+  </g>
+</svg>
