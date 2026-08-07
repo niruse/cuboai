@@ -50,6 +50,29 @@ function cuboaiFindCameraState(hass, deviceId) {
   return shaped.length === 1 ? shaped[0] : null;
 }
 
+// The playback entity that belongs to the same camera as the live one.
+//
+// Matched on attributes, never on the entity id: `dvr` marks it and
+// `device_id` pairs it. Issue #89 was this exact mistake made the other way
+// round -- a card that tested `entityId.startsWith('camera.cuboai_')` matched
+// nothing on any install, because the backend never sets
+// `_attr_has_entity_name`, so the id is `camera.<baby>_recording`.
+function cuboaiFindRecordingState(hass, deviceId) {
+  if (!hass || !hass.states) return null;
+  const shaped = [];
+  for (const entityId in hass.states) {
+    if (!entityId.startsWith('camera.')) continue;
+    const state = hass.states[entityId];
+    const attrs = (state && state.attributes) || {};
+    if (attrs.dvr !== true) continue;
+    if (deviceId && attrs.device_id === deviceId) return { entityId, state };
+    shaped.push({ entityId, state });
+  }
+  // Same rule as the live camera: an unpinned card is only safe to guess for
+  // when there is exactly one, or it shows the wrong baby.
+  return shaped.length === 1 ? shaped[0] : null;
+}
+
 // Single source of truth for the webrtc-camera child config. This object was
 // duplicated at three call sites, so flags added to one copy silently missed
 // the others. There is deliberately NO `url:` fallback — resolving through the
@@ -313,6 +336,7 @@ class CuboAICameraCard extends HTMLElement {
     // drop both when the card leaves the DOM so a dashboard that is opened and
     // closed repeatedly does not accumulate timers.
     if (this._dvrTick) { clearInterval(this._dvrTick); this._dvrTick = null; }
+    if (this._dvrWait) { clearInterval(this._dvrWait); this._dvrWait = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
@@ -508,6 +532,10 @@ class CuboAICameraCard extends HTMLElement {
           webrtcConfig.media = this.micEnabled ? 'video,audio,microphone' : 'video,audio';
           webrtcConfig.muted = this.isMuted;
           if (this.content && this.content.setConfig) {
+            // Mid-playback the picture is the recording, not the live camera.
+            // Re-applying the live config here would snap the user back to now
+            // just for tapping mute.
+            if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
             this.content.setConfig(webrtcConfig);
             if (this.content.nextStream) {
               this.content.nextStream(true);
@@ -529,8 +557,13 @@ class CuboAICameraCard extends HTMLElement {
       // entity plays it. Hidden unless the integration exposes that entity, so
       // older installs are unaffected.
       if (!this.dvrBar && this._config && this._config.show_timeline !== false) {
-        const HOURS = Number(this._config.timeline_hours) || 12;   // span shown
-        const PLAY_SECONDS = Number(this._config.timeline_play_seconds) || 60;
+        // The camera keeps about 72 hours. Showing 12 of them made five sixths
+        // of the recording unreachable from the bar, which was the only way in.
+        const HOURS = Number(this._config.timeline_hours) || 72;   // span shown
+        // A minute of footage then silence looked like playback had failed.
+        // Fifteen minutes is long enough to watch something; the bar restarts
+        // it wherever you drop the playhead next.
+        const PLAY_SECONDS = Number(this._config.timeline_play_seconds) || 900;
         // The freshest minute is still being written and will not play, so the
         // right-hand edge stops short of "now" rather than offering a moment
         // the camera will refuse.
@@ -541,9 +574,21 @@ class CuboAICameraCard extends HTMLElement {
         bar.style.cssText = 'position:relative;width:100%;background:#000;color:#fff;' +
           'padding:6px 0 10px;font-family:inherit;user-select:none;touch-action:none;';
 
+        const head0 = document.createElement('div');
+        head0.style.cssText = 'display:flex;align-items:center;gap:10px;padding:0 12px 6px;';
         const stamp = document.createElement('div');
-        stamp.style.cssText = 'font-size:13px;padding:0 12px 6px;opacity:.9;';
-        bar.appendChild(stamp);
+        stamp.style.cssText = 'font-size:13px;opacity:.9;flex:1 1 auto;';
+        // Returning to live needs its own control. Dragging the playhead back
+        // to the right-hand edge is fiddly on a phone and impossible to hit
+        // exactly, so there was no reliable way out of playback.
+        const liveBtn = document.createElement('button');
+        liveBtn.textContent = '● LIVE';
+        liveBtn.style.cssText = 'flex:0 0 auto;background:none;border:1px solid #03dac6;' +
+          'color:#03dac6;border-radius:12px;padding:3px 10px;font:inherit;font-size:12px;' +
+          'cursor:pointer;';
+        head0.appendChild(stamp);
+        head0.appendChild(liveBtn);
+        bar.appendChild(head0);
 
         const track = document.createElement('div');
         track.style.cssText = 'position:relative;height:46px;margin:0 12px;cursor:ew-resize;';
@@ -576,20 +621,37 @@ class CuboAICameraCard extends HTMLElement {
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, 46);
           const end = edgeAt(), start = end - spanMs;
-          // A tick every 15 min, taller and labelled on the hour.
-          const step = 15 * 60 * 1000;
+          // Tick spacing has to follow the span. Fifteen minutes was right for
+          // a 12-hour bar and is 288 unreadable ticks across three days, so
+          // pick the finest step that still leaves ticks ~8px apart, and label
+          // roughly every sixth one.
+          const MIN_PX = 8;
+          const STEPS = [5, 15, 30, 60, 120, 180, 360, 720, 1440].map((m) => m * 60000);
+          const step = STEPS.find((s) => (s / spanMs) * w >= MIN_PX) || STEPS[STEPS.length - 1];
+          const labelEvery = Math.max(1, Math.round((w / 6) / ((step / spanMs) * w)));
+          const overADay = spanMs > 26 * 3600 * 1000;
+
           const first = Math.ceil(start / step) * step;
           g.textAlign = 'center';
           g.font = '10px system-ui, sans-serif';
-          for (let t = first; t <= end; t += step) {
+          let i = 0;
+          for (let t = first; t <= end; t += step, i++) {
             const x = ((t - start) / spanMs) * w;
-            const onHour = new Date(t).getMinutes() === 0;
-            g.strokeStyle = onHour ? 'rgba(255,255,255,.85)' : 'rgba(255,255,255,.35)';
+            const at = new Date(t);
+            const major = i % labelEvery === 0;
+            g.strokeStyle = major ? 'rgba(255,255,255,.85)' : 'rgba(255,255,255,.35)';
             g.beginPath();
-            g.moveTo(x, onHour ? 22 : 30); g.lineTo(x, 44); g.stroke();
-            if (onHour) {
+            g.moveTo(x, major ? 22 : 30); g.lineTo(x, 44); g.stroke();
+            if (major) {
               g.fillStyle = 'rgba(255,255,255,.85)';
-              g.fillText(new Date(t).toLocaleTimeString([], { hour: '2-digit' }), x, 14);
+              // Across more than a day, an hour alone is ambiguous: 03:00 today
+              // and 03:00 yesterday look identical on the same bar.
+              g.fillText(
+                overADay
+                  ? at.toLocaleString([], { weekday: 'short', hour: '2-digit' })
+                  : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                x, 14
+              );
             }
           }
         };
@@ -611,19 +673,79 @@ class CuboAICameraCard extends HTMLElement {
           paint();
         };
 
+        // Point the picture that is already on screen at an entity. Swapping
+        // the child's config is what keeps playback inside THIS card: the
+        // alternative -- and what this did before -- was to leave the recording
+        // playing on a separate entity you had to add a second card for.
+        const showEntity = (entityId, muted) => {
+          if (!this.content || !this.content.setConfig) return false;
+          const found = { entityId, state: (this._hass.states || {})[entityId] };
+          const cfg = cuboaiWebrtcConfig(found, false, muted);
+          this._dvrEntity = entityId;
+          this.content.setConfig(cfg);
+          this.content.hass = this._hass;
+          return true;
+        };
+
+        const goLive = () => {
+          frac = 1;
+          this._dvrPlaying = false;
+          clearInterval(this._dvrWait); this._dvrWait = null;
+          const live = cuboaiFindCameraState(this._hass, (this._config || {}).device_id);
+          if (live) showEntity(live.entityId, this.isMuted);
+          this._dvrEntity = null;
+          liveBtn.style.opacity = '.45';
+          paint();
+        };
+        liveBtn.addEventListener('click', goLive);
+        liveBtn.style.opacity = '.45';
+
         const commit = () => {
-          if (frac > 0.999) return;               // dropped back on "live"
+          if (frac > 0.999) return goLive();      // dropped back on "live"
           const at = timeAt(frac);
           const dev = (this._config && this._config.device_id) || '';
-          if (!dev || !this._hass) return;
+          if (!this._hass) return;
           // The service takes an absolute time as well as "10m"-style offsets.
           this._hass.callService('cuboai', 'play_recording', {
             device_id: dev,
             start_time: at.toISOString(),
             duration: PLAY_SECONDS,
           });
-          stamp.textContent = 'Playing from ' +
-            at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          this._dvrPlaying = true;
+          liveBtn.style.opacity = '1';
+          stamp.textContent = 'Loading ' +
+            at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '…';
+
+          // The producer has to connect to the camera and seek before the
+          // entity has a stream, so the swap waits for it to become available
+          // rather than showing an unavailable picture for several seconds.
+          const rec = cuboaiFindRecordingState(this._hass, dev);
+          if (!rec) {
+            stamp.textContent = 'No recording entity — reload the integration';
+            return;
+          }
+          let waited = 0;
+          clearInterval(this._dvrWait);
+          this._dvrWait = setInterval(() => {
+            waited += 500;
+            const st = (this._hass.states || {})[rec.entityId];
+            // Readiness is `playing_from`, not the entity state. The entity is
+            // always available -- it has to be, or its attributes never reach
+            // the frontend and this card cannot find it at all -- so its state
+            // says nothing about whether the producer has seeked yet.
+            const ready = st && st.attributes && st.attributes.playing_from;
+            if (ready) {
+              clearInterval(this._dvrWait);
+              this._dvrWait = null;
+              showEntity(rec.entityId, false);   // recorded audio, not the mic
+              stamp.textContent = 'Playing ' +
+                at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } else if (waited >= 30000) {
+              clearInterval(this._dvrWait);
+              this._dvrWait = null;
+              stamp.textContent = 'Nothing recorded at that moment';
+            }
+          }, 500);
         };
 
         let dragging = false;
@@ -664,6 +786,10 @@ class CuboAICameraCard extends HTMLElement {
         if (!this.content) {
           this.content = document.createElement('webrtc-camera');
           if (this.content.setConfig) {
+            // Rebuilt picture (dashboard navigation, a re-render that dropped
+            // the child) while a recording is playing: restore what the scrub
+            // bar says is on screen, not live.
+            if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
             this.content.setConfig(webrtcConfig);
           }
           this.content.hass = this._hass;
@@ -2223,7 +2349,9 @@ class CuboAICameraCard extends HTMLElement {
            if (found) {
              const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
              customElements.whenDefined('webrtc-camera').then(() => {
-               this.content.setConfig(webrtcConfig);
+               // Not while a recording is playing: this fires on any config
+               // touch and would drop the user back to live mid-scrub.
+               if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
              });
            }
          } else if (this.content && !config.device_id) {
@@ -2250,7 +2378,9 @@ class CuboAICameraCard extends HTMLElement {
              if (found) {
                const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
                customElements.whenDefined('webrtc-camera').then(() => {
-                 this.content.setConfig(webrtcConfig);
+                 // Not while a recording is playing: this fires on any config
+                 // touch and would drop the user back to live mid-scrub.
+                 if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
                });
              }
          }

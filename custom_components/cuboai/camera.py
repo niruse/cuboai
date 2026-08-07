@@ -436,19 +436,43 @@ class CuboRecordingCamera(CoordinatorEntity, Camera):
 
     @property
     def available(self) -> bool:
-        return self._source is not None
+        """Always available, even with nothing loaded.
+
+        Reporting unavailable until a moment is requested reads well and is
+        unusable: Home Assistant does not publish state attributes for an
+        unavailable entity, so `device_id` and `dvr` never reached the
+        frontend, and the card could not find the entity it needs in order to
+        start the playback that would have made it available. The state is
+        `idle` with no picture until `play_recording` points it somewhere,
+        which is what a DVR does anyway.
+        """
+        return True
 
     @property
     def extra_state_attributes(self):
-        if self._playing_from is None:
-            return {"playing_from": None}
-        import datetime as dt
+        """Carries `device_id` for the same reason the live camera does.
 
-        return {
-            "playing_from": dt.datetime.fromtimestamp(
-                self._playing_from, dt.UTC
-            ).isoformat(),
+        The card has to pair this entity with the live one it is already
+        showing, and issue #89 was precisely what happens when a card matches a
+        camera by guessing at its entity id: `_attr_has_entity_name` is not set
+        here either, so this entity is `camera.<baby>_recording` with no
+        `cuboai_` in it, and any prefix test would match nothing on every
+        install. `dvr` marks it as the playback entity so the pairing survives
+        a rename.
+        """
+        attrs = {
+            "device_id": self._device_id,
+            "uid": self._device_id,
+            "dvr": True,
+            "playing_from": None,
         }
+        if self._playing_from is not None:
+            import datetime as dt
+
+            attrs["playing_from"] = dt.datetime.fromtimestamp(
+                self._playing_from, dt.UTC
+            ).isoformat()
+        return attrs
 
     def set_playback(self, source: str | None, start_epoch: int | None) -> None:
         """Point this entity at a published playback stream (or clear it)."""
