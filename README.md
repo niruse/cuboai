@@ -114,7 +114,11 @@ You can adjust:
 
 ### ❌ Missing / Unsupported Features
 While we provide a massive suite of entities, some native CuboAI app features cannot be implemented in Home Assistant currently:
-- **Past Video Playback (Timeline):** Home Assistant cannot fetch or stream the historical 18-hour video timeline from the camera. Only live streaming is supported.
+
+> **Past video playback is no longer on this list.** It moved to a supported feature in **2.5.0** — see [Recorded Playback](#-recorded-playback-on-camera-dvr). Retention is roughly two days rather than the 18 hours previously stated here; measured on a real camera, 48 h back returns footage and 56 h does not, and it varies with the SD card and how much motion there was.
+
+- **Sleep reports (Total Sleep, Wake-ups, Longest Sleep, the routine chart):** CuboAI keeps these behind its paid tier — the app itself renders them as *"Report Preview — Activate Ultimate to see more"* — so the integration cannot fetch them either. The dashboard in this repo computes comparable figures locally from the camera's own DVR history instead.
+- **Body temperature history:** only available while a compatible thermometer is paired and reporting.
 - **Native Two-Way Audio (Without Custom Card):** Home Assistant's default WebRTC implementation does not natively support microphone backchannel audio without using our provided `cuboai-card.js` Custom Lovelace card.
 - **Pan / Tilt:** The CuboAI camera is fixed and does not physically support PTZ (Pan-Tilt-Zoom).
 
@@ -392,6 +396,23 @@ Two things it is careful about, both learned the hard way:
   toward it.
 
 ---
+
+### Screenshots
+
+<!--
+  TODO: drop the PNGs into docs/images/ and uncomment the block below.
+  These have to be taken on a running install; they are not in the repo yet.
+    dashboard-live.png      Live tab: camera + scrub bar + time picker + nudges
+    dashboard-night.png     Nighttime tab: the four figures + the timeline
+    dashboard-summary.png   Summary tab: week figures + coverage + 7-day chart
+    dashboard-alerts.png    Alerts tab: latest alert + thumbnails
+  Taken on a phone at ~390px wide, since that is where the layout matters most.
+
+![Live tab](docs/images/dashboard-live.png)
+![Nighttime tab](docs/images/dashboard-night.png)
+![Summary tab](docs/images/dashboard-summary.png)
+![Alerts tab](docs/images/dashboard-alerts.png)
+-->
 
 ## 🗂️ Installing the full dashboard
 
