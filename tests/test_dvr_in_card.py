@@ -177,12 +177,40 @@ class TestCardKeepsPlaybackInPlace:
         assert "const goLive" in code
         assert "liveBtn.addEventListener('click', goLive)" in code
 
-    def test_the_bar_covers_the_whole_retention(self):
-        """The camera keeps ~72h. A 12h bar left five sixths of the recording
-        unreachable, and the bar is the only way in."""
+    def test_the_bar_matches_what_the_camera_actually_keeps(self):
+        """Measured, not taken from the docs.
+
+        Probed against a real camera on 2026-08-07, one request an hour: 48h
+        back returns frames, 56h does not. The service description claims
+        "about 72 hours", and a 72h bar is a third dead space that fails
+        silently when you scrub into it -- while a 12h bar, which is what this
+        started as, hid three quarters of what is there.
+        """
         code = _card_code()
         hours = re.search(r"Number\(this\._config\.timeline_hours\) \|\| (\d+)", code)
-        assert hours and int(hours.group(1)) >= 72, hours and hours.group(1)
+        assert hours, "the span default is gone"
+        span = int(hours.group(1))
+        assert 24 <= span <= 48, f"span is {span}h; 48h is the measured edge"
+
+    def test_a_moment_can_be_typed_not_only_aimed_at(self):
+        """At phone width the bar is ~366px across two days -- about eight
+        minutes per pixel, which cannot express "02:14"."""
+        code = _card_code()
+        assert "datetime-local" in code
+        assert "const goToPicked" in code
+        # Wired up, not merely declared: deleting the listener left a Go button
+        # that did nothing and every other assertion here still passed.
+        assert "go.addEventListener('click', goToPicked)" in code
+        # Bounded by what the camera still holds, or it offers moments that
+        # seek into nothing and time out after 30 seconds.
+        assert "when.min = asLocalInput" in code and "when.max = asLocalInput" in code
+        assert "Older than the camera still holds" in code
+
+    def test_the_picker_and_the_playhead_share_one_path(self):
+        """Two ways in must not become two implementations of playback."""
+        code = _card_code()
+        assert "const playFrom" in code
+        assert code.count("play_recording'") == 1, "playback is requested from more than one place"
 
         seconds = re.search(r"Number\(this\._config\.timeline_play_seconds\) \|\| (\d+)", code)
         assert seconds and int(seconds.group(1)) >= 600, seconds and seconds.group(1)

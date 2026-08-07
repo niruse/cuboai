@@ -557,9 +557,12 @@ class CuboAICameraCard extends HTMLElement {
       // entity plays it. Hidden unless the integration exposes that entity, so
       // older installs are unaffected.
       if (!this.dvrBar && this._config && this._config.show_timeline !== false) {
-        // The camera keeps about 72 hours. Showing 12 of them made five sixths
-        // of the recording unreachable from the bar, which was the only way in.
-        const HOURS = Number(this._config.timeline_hours) || 72;   // span shown
+        // Measured against a real camera on 2026-08-07, one probe an hour: 48h
+        // back returns frames, 56h does not. The service description's "about
+        // 72 hours" is optimistic, and a bar that wide is a third dead space
+        // that fails silently when you scrub into it. Retention depends on the
+        // card and how much motion there was, so this is a default, not a fact.
+        const HOURS = Number(this._config.timeline_hours) || 48;   // span shown
         // A minute of footage then silence looked like playback had failed.
         // Fifteen minutes is long enough to watch something; the bar restarts
         // it wherever you drop the playhead next.
@@ -661,6 +664,11 @@ class CuboAICameraCard extends HTMLElement {
           head.style.left = (frac * w) + 'px';
           const at = timeAt(frac);
           const live = frac > 0.999;
+          // Bound the picker to what the camera still holds, and keep it in
+          // step with the playhead so the two controls never disagree.
+          when.min = asLocalInput(new Date(edgeAt() - spanMs));
+          when.max = asLocalInput(new Date(edgeAt()));
+          if (!live) when.value = asLocalInput(at);
           stamp.textContent = live
             ? 'Live'
             : at.toLocaleString([], { month: '2-digit', day: '2-digit',
@@ -700,9 +708,7 @@ class CuboAICameraCard extends HTMLElement {
         liveBtn.addEventListener('click', goLive);
         liveBtn.style.opacity = '.45';
 
-        const commit = () => {
-          if (frac > 0.999) return goLive();      // dropped back on "live"
-          const at = timeAt(frac);
+        const playFrom = (at) => {
           const dev = (this._config && this._config.device_id) || '';
           if (!this._hass) return;
           // The service takes an absolute time as well as "10m"-style offsets.
@@ -747,6 +753,52 @@ class CuboAICameraCard extends HTMLElement {
             }
           }, 500);
         };
+
+        const commit = () => {
+          if (frac > 0.999) return goLive();      // dropped back on "live"
+          playFrom(timeAt(frac));
+        };
+
+        // Pick a moment instead of aiming at it. At phone width the bar is
+        // ~366px across two days, so one pixel is about eight minutes -- fine
+        // for "last night", useless for "02:14".
+        const picker = document.createElement('div');
+        picker.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px 0;';
+        const when = document.createElement('input');
+        when.type = 'datetime-local';
+        when.step = '1';
+        when.style.cssText = 'flex:1 1 auto;min-width:0;background:#1c1c1e;color:#fff;' +
+          'border:1px solid #444;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;' +
+          'color-scheme:dark;';
+        const go = document.createElement('button');
+        go.textContent = 'Go';
+        go.style.cssText = 'flex:0 0 auto;background:#03dac6;color:#000;border:none;' +
+          'border-radius:6px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer;';
+        picker.appendChild(when);
+        picker.appendChild(go);
+        bar.appendChild(picker);
+
+        // Local time, no timezone suffix -- what datetime-local speaks.
+        const asLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+          .toISOString().slice(0, 19);
+
+        const goToPicked = () => {
+          if (!when.value) return;
+          const at = new Date(when.value);        // parsed as local time
+          if (isNaN(at)) return;
+          const end = edgeAt(), start = end - spanMs;
+          if (at.getTime() >= end) return goLive();
+          if (at.getTime() < start) {
+            // Say so rather than seek into nothing and time out after 30s.
+            stamp.textContent = 'Older than the camera still holds';
+            return;
+          }
+          frac = 1 - (end - at.getTime()) / spanMs;
+          paint();
+          playFrom(at);
+        };
+        go.addEventListener('click', goToPicked);
+        when.addEventListener('keydown', (e) => { if (e.key === 'Enter') goToPicked(); });
 
         let dragging = false;
         track.addEventListener('pointerdown', (e) => {
