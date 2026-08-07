@@ -1,0 +1,182 @@
+# CuboAI sleep windows — the Nighttime / Daytime / Summary figures.
+#
+# The app's own versions of these are behind its paid tier (it renders them as
+# "Report Preview — Activate Ultimate to see more", and the subscription sensor
+# reads `inactive`), so none of them can be fetched. These are computed instead
+# from the one reading the camera does give away for free: the DVR history's
+# baby_present field, recorded by Home Assistant.
+#
+# THE SAME FOUR METRICS FOR EVERY WINDOW. The three tabs differ only in the
+# period they cover, so they must not differ in what they measure — Night used
+# to count spells out of the crib while Day counted naps and the week counted
+# neither, which made the tabs impossible to compare with each other. Anything
+# added below should be added to all three.
+#
+#   in crib      time the camera reported the baby in the crib
+#   out of crib  time it reported anything else it was sure of (see below)
+#   sleeps       how many separate spells in the crib
+#   no reading   time the sensor was unavailable or unknown
+#
+# The states matched are the sensor's STATE STRINGS, not the raw numbers. The
+# sensor reports the library's phrase whenever it has one, so 1 surfaces as
+# "in crib" and 2 as "not in crib"; an unmapped value stays a bare number.
+# Matching on "1" here would silently measure nothing.
+#
+# What 0 means is NOT documented upstream -- the library maps only 1 and 2. It
+# is treated as "not in the crib", on the evidence that the field sat at 0
+# continuously across a period when the house was empty and the baby was
+# demonstrably not in the crib. Matching only 2 reported 0h through an entire
+# day out.
+#
+# It is deliberately NOT treated as "the camera said nothing". Readings carrying
+# 0 arrive fresh and available, so the camera is answering. Genuine blindness is
+# `unavailable`/`unknown` and is measured separately -- conflating the two was a
+# real error here once: it reported an empty room as camera downtime and warned
+# about it on screen. Note that a Home Assistant restart also makes every entity
+# unavailable, so restarts count toward it.
+#
+# Windows are fixed and predictable rather than derived from when the baby
+# actually settled: night is 19:00 to 07:00, day is 07:00 to 19:00. After 19:00
+# "last night" still means the night that has already finished.
+
+sensor:
+  # ── Nighttime: 19:00 yesterday → 07:00 today ────────────────────────────
+  - platform: history_stats
+    name: Mia night in crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: time
+    start: "{{ today_at('19:00') - timedelta(days=1) }}"
+    end: "{{ today_at('07:00') }}"
+
+  - platform: history_stats
+    name: Mia night out of crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "not in crib"
+      - "0"
+    type: time
+    start: "{{ today_at('19:00') - timedelta(days=1) }}"
+    end: "{{ today_at('07:00') }}"
+
+  - platform: history_stats
+    name: Mia night sleeps
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: count
+    start: "{{ today_at('19:00') - timedelta(days=1) }}"
+    end: "{{ today_at('07:00') }}"
+
+  - platform: history_stats
+    name: Mia night no reading
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "unavailable"
+      - "unknown"
+    type: time
+    start: "{{ today_at('19:00') - timedelta(days=1) }}"
+    end: "{{ today_at('07:00') }}"
+
+  # ── Daytime: 07:00 → 19:00 today ────────────────────────────────────────
+  - platform: history_stats
+    name: Mia day in crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: time
+    start: "{{ today_at('07:00') }}"
+    end: "{{ today_at('19:00') }}"
+
+  - platform: history_stats
+    name: Mia day out of crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "not in crib"
+      - "0"
+    type: time
+    start: "{{ today_at('07:00') }}"
+    end: "{{ today_at('19:00') }}"
+
+  - platform: history_stats
+    name: Mia day sleeps
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: count
+    start: "{{ today_at('07:00') }}"
+    end: "{{ today_at('19:00') }}"
+
+  - platform: history_stats
+    name: Mia day no reading
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "unavailable"
+      - "unknown"
+    type: time
+    start: "{{ today_at('07:00') }}"
+    end: "{{ today_at('19:00') }}"
+
+  # ── Summary: the last 7 days ────────────────────────────────────────────
+  - platform: history_stats
+    name: Mia week in crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Mia week out of crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "not in crib"
+      - "0"
+    type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Mia week sleeps
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: count
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Mia week no reading
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "unavailable"
+      - "unknown"
+    type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+template:
+  - sensor:
+      - name: Mia average day in crib
+        unique_id: cuboai_mia_avg_day_in_crib
+        unit_of_measurement: h
+        state_class: measurement
+        # Divided by seven days, not by the number of days that happen to hold
+        # data: a week with two days of camera downtime should read low, not
+        # flatter itself by averaging over the days that worked.
+        state: >
+          {% set wk = states('sensor.mia_week_in_crib') | float(0) %}
+          {{ (wk / 7) | round(2) }}
+        availability: >
+          {{ states('sensor.mia_week_in_crib') not in
+             ['unknown', 'unavailable', 'none', ''] }}
+
+      # A confidence figure for everything above. Time in crib is only as
+      # trustworthy as the proportion of the window the camera was actually
+      # answering, and that proportion is not otherwise visible anywhere.
+      - name: Mia week coverage
+        unique_id: cuboai_mia_week_coverage
+        unit_of_measurement: "%"
+        state_class: measurement
+        state: >
+          {% set blind = states('sensor.mia_week_no_reading') | float(0) %}
+          {{ (100 * (1 - (blind / (7 * 24)))) | round(1) }}
+        availability: >
+          {{ states('sensor.mia_week_no_reading') not in
+             ['unknown', 'unavailable', 'none', ''] }}

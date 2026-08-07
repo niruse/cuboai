@@ -66,6 +66,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         sensors.append(CuboLastUpdateSensor(coordinator, device_id, baby_name))
 
+        # The camera's own DVR history. Opt-in, because pulling it costs a
+        # slower poll (see coordinator.history_sensors_enabled).
+        if coordinator.history_sensors_enabled:
+            sensors.extend(
+                CuboHistorySensor(coordinator, device_id, baby_name, field, label, unit, labelled)
+                for field, label, unit, labelled in HISTORY_SENSORS
+            )
+
     sensors.append(CuboSubscriptionSensor(coordinator, entry.entry_id))
 
     # Ensure global media library sensor is only created once even with multiple cameras
@@ -1134,6 +1142,113 @@ class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         return {
             "identifiers": {("cuboai", self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }
+
+
+#: DVR-history sensors: (payload field, display label, unit, labelled).
+#: `wellbeing` and `baby_event` are deliberately omitted — upstream documents
+#: the first as an opaque firmware bit the app only uses for a UI tint, and the
+#: second as effectively never firing. Exposing either would invent meaning the
+#: data does not carry.
+#:
+#: `labelled` marks a field whose raw number means nothing on its own: the
+#: library maps it to a phrase ('in crib', 'still', 'recording'). If a value
+#: arrives that it has no phrase for, the reading is not interpretable and the
+#: sensor says unknown rather than showing the bare number — a "Baby Present"
+#: reading of `0` looks like "no baby" when it actually means "no answer".
+#: (Observed live: the camera does emit bp=0, which upstream maps to nothing —
+#: it documents only 1='in crib' and 2='not in crib'.)
+HISTORY_SENSORS = (
+    ("baby_present", "Baby Present", None, True),
+    ("noise", "Noise Level", None, False),
+    ("motion", "Motion", None, True),
+    ("privacy", "Privacy Mode", None, True),
+)
+
+
+class CuboHistorySensor(CoordinatorEntity, SensorEntity):
+    """One reading from the camera's on-board DVR history (s_log).
+
+    This is a genuinely different source from the live sensors: it lags about a
+    minute behind, so the reading's own age travels with it. `age_s`, `stale`
+    and the measurement timestamp are exposed as attributes, and the entity
+    goes unavailable rather than showing a value it cannot vouch for — a stale
+    "baby present" displayed as current is the failure this is built to avoid.
+    """
+
+    #: Beyond this the reading is too old to represent "now" for a baby monitor.
+    MAX_AGE_S = 15 * 60
+
+    def __init__(self, coordinator, device_id, baby_name, field, label, unit, labelled=False):
+        super().__init__(coordinator)
+        self._device_id = device_id
+        self._baby_name = baby_name
+        self._field = field
+        # Kept in the signature and the HISTORY_SENSORS table because it
+        # says which fields are coded numbers rather than measurements;
+        # nothing branches on it now that a number is always reported.
+        self._labelled = labelled
+        self._attr_name = f"CuboAI {label} {baby_name}"
+        self._attr_unique_id = f"cuboai_history_{field}_{device_id}"
+        if unit:
+            self._attr_native_unit_of_measurement = unit
+
+    @property
+    def _reading(self) -> dict:
+        cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
+        history = (cam.get("local") or {}).get("history") or {}
+        value = history.get(self._field)
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def available(self) -> bool:
+        reading = self._reading
+        if not reading or not reading.get("available"):
+            return False
+        age = reading.get("age_s")
+        # An age we cannot read is not the same as a fresh one.
+        if age is None:
+            return False
+        return age <= self.MAX_AGE_S
+
+    @property
+    def native_value(self):
+        # The human-readable note the library derives ('in crib' / 'not in
+        # crib', 'still' / 'moving', 'recording').
+        reading = self._reading
+        note = reading.get("note")
+        if note:
+            return note
+        # A value the camera reports confidently, for which the library has no
+        # phrase, is still a value. Reporting unknown instead was wrong in a
+        # way that only showed up against real history: baby_present reads 0
+        # whenever nobody is in the room -- 0 is missing from the label map,
+        # which only covers 1 "in crib" and 2 "not in crib" -- so the entity
+        # sat at `unknown` for 24 hours solid. That reads as a broken sensor
+        # rather than an empty room, and unknown cannot be charted or used to
+        # mark up a timeline, which is the whole point of recording it.
+        return reading.get("value")
+
+    @property
+    def extra_state_attributes(self):
+        reading = self._reading
+        if not reading:
+            return {}
+        return {
+            "raw_value": reading.get("value"),
+            "age_seconds": reading.get("age_s"),
+            "measured_at": reading.get("ts_utc"),
+            "stale": reading.get("stale"),
+            "source": "camera DVR history (~1 min lag)",
+        }
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
             "name": f"CuboAI {self._baby_name}",
             "manufacturer": "CuboAI",
             "model": "Baby Monitor",

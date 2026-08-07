@@ -50,6 +50,29 @@ function cuboaiFindCameraState(hass, deviceId) {
   return shaped.length === 1 ? shaped[0] : null;
 }
 
+// The playback entity that belongs to the same camera as the live one.
+//
+// Matched on attributes, never on the entity id: `dvr` marks it and
+// `device_id` pairs it. Issue #89 was this exact mistake made the other way
+// round -- a card that tested `entityId.startsWith('camera.cuboai_')` matched
+// nothing on any install, because the backend never sets
+// `_attr_has_entity_name`, so the id is `camera.<baby>_recording`.
+function cuboaiFindRecordingState(hass, deviceId) {
+  if (!hass || !hass.states) return null;
+  const shaped = [];
+  for (const entityId in hass.states) {
+    if (!entityId.startsWith('camera.')) continue;
+    const state = hass.states[entityId];
+    const attrs = (state && state.attributes) || {};
+    if (attrs.dvr !== true) continue;
+    if (deviceId && attrs.device_id === deviceId) return { entityId, state };
+    shaped.push({ entityId, state });
+  }
+  // Same rule as the live camera: an unpinned card is only safe to guess for
+  // when there is exactly one, or it shows the wrong baby.
+  return shaped.length === 1 ? shaped[0] : null;
+}
+
 // Single source of truth for the webrtc-camera child config. This object was
 // duplicated at three call sites, so flags added to one copy silently missed
 // the others. There is deliberately NO `url:` fallback — resolving through the
@@ -308,6 +331,17 @@ if (!customElements.get('cuboai-camera-card-editor')) {
 
 
 class CuboAICameraCard extends HTMLElement {
+  disconnectedCallback() {
+    // The DVR timeline keeps a repaint interval and a ResizeObserver alive;
+    // drop both when the card leaves the DOM so a dashboard that is opened and
+    // closed repeatedly does not accumulate timers.
+    if (this._dvrTick) { clearInterval(this._dvrTick); this._dvrTick = null; }
+    if (this._dvrWait) { clearInterval(this._dvrWait); this._dvrWait = null; }
+    if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
+    if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
+    if (super.disconnectedCallback) super.disconnectedCallback();
+  }
+
   
   static getConfigElement() {
     return document.createElement("cuboai-camera-card-editor");
@@ -499,6 +533,10 @@ class CuboAICameraCard extends HTMLElement {
           webrtcConfig.media = this.micEnabled ? 'video,audio,microphone' : 'video,audio';
           webrtcConfig.muted = this.isMuted;
           if (this.content && this.content.setConfig) {
+            // Mid-playback the picture is the recording, not the live camera.
+            // Re-applying the live config here would snap the user back to now
+            // just for tapping mute.
+            if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
             this.content.setConfig(webrtcConfig);
             if (this.content.nextStream) {
               this.content.nextStream(true);
@@ -513,6 +551,323 @@ class CuboAICameraCard extends HTMLElement {
         this.appendChild(this.bpmOverlay);
       }
       
+      // ── DVR timeline ────────────────────────────────────────────────
+      // A scrub bar over the camera's own recording: hour ticks, a draggable
+      // playhead, and the moment under it shown above. Releasing the playhead
+      // asks cuboai.play_recording for that moment, and the Recording camera
+      // entity plays it. Hidden unless the integration exposes that entity, so
+      // older installs are unaffected.
+      if (!this.dvrBar && this._config && this._config.show_timeline !== false) {
+        // Measured against a real camera on 2026-08-07, one probe an hour: 48h
+        // back returns frames, 56h does not. The service description's "about
+        // 72 hours" is optimistic, and a bar that wide is a third dead space
+        // that fails silently when you scrub into it. Retention depends on the
+        // card and how much motion there was, so this is a default, not a fact.
+        const HOURS = Number(this._config.timeline_hours) || 48;   // span shown
+        // A minute of footage then silence looked like playback had failed.
+        // Fifteen minutes is long enough to watch something; the bar restarts
+        // it wherever you drop the playhead next.
+        const PLAY_SECONDS = Number(this._config.timeline_play_seconds) || 900;
+        // The freshest minute is still being written and will not play, so the
+        // right-hand edge stops short of "now" rather than offering a moment
+        // the camera will refuse.
+        const EDGE_LAG_S = 120;
+
+        const bar = document.createElement('div');
+        bar.className = 'cuboai-dvr';
+        bar.style.cssText = 'position:relative;width:100%;background:#000;color:#fff;' +
+          'padding:6px 0 10px;font-family:inherit;user-select:none;touch-action:none;';
+
+        const head0 = document.createElement('div');
+        head0.style.cssText = 'display:flex;align-items:center;gap:10px;padding:0 12px 6px;';
+        const stamp = document.createElement('div');
+        stamp.style.cssText = 'font-size:13px;opacity:.9;flex:1 1 auto;';
+        // Returning to live needs its own control. Dragging the playhead back
+        // to the right-hand edge is fiddly on a phone and impossible to hit
+        // exactly, so there was no reliable way out of playback.
+        const liveBtn = document.createElement('button');
+        liveBtn.textContent = '● LIVE';
+        liveBtn.style.cssText = 'flex:0 0 auto;background:none;border:1px solid #03dac6;' +
+          'color:#03dac6;border-radius:12px;padding:3px 10px;font:inherit;font-size:12px;' +
+          'cursor:pointer;';
+        head0.appendChild(stamp);
+        head0.appendChild(liveBtn);
+        bar.appendChild(head0);
+
+        const track = document.createElement('div');
+        track.style.cssText = 'position:relative;height:46px;margin:0 12px;cursor:ew-resize;';
+        bar.appendChild(track);
+
+        const ruler = document.createElement('canvas');
+        ruler.style.cssText = 'width:100%;height:46px;display:block;';
+        track.appendChild(ruler);
+
+        const head = document.createElement('div');
+        head.style.cssText = 'position:absolute;top:0;bottom:0;width:2px;background:#03dac6;' +
+          'pointer-events:none;';
+        const knob = document.createElement('div');
+        knob.style.cssText = 'position:absolute;top:-6px;left:50%;transform:translateX(-50%);' +
+          'width:14px;height:14px;border-radius:50%;background:#03dac6;';
+        head.appendChild(knob);
+        track.appendChild(head);
+
+        // frac 0..1 across the visible span; 1 = the recent edge.
+        let frac = 1;
+        const spanMs = HOURS * 3600 * 1000;
+        const edgeAt = () => Date.now() - EDGE_LAG_S * 1000;
+        const timeAt = (f) => new Date(edgeAt() - (1 - f) * spanMs);
+
+        const drawRuler = () => {
+          const w = track.clientWidth || 300;
+          const dpr = window.devicePixelRatio || 1;
+          ruler.width = w * dpr; ruler.height = 46 * dpr;
+          const g = ruler.getContext('2d');
+          g.setTransform(dpr, 0, 0, dpr, 0, 0);
+          g.clearRect(0, 0, w, 46);
+          const end = edgeAt(), start = end - spanMs;
+          // Tick spacing has to follow the span. Fifteen minutes was right for
+          // a 12-hour bar and is 288 unreadable ticks across three days, so
+          // pick the finest step that still leaves ticks ~8px apart, and label
+          // roughly every sixth one.
+          const MIN_PX = 8;
+          const STEPS = [5, 15, 30, 60, 120, 180, 360, 720, 1440].map((m) => m * 60000);
+          const step = STEPS.find((s) => (s / spanMs) * w >= MIN_PX) || STEPS[STEPS.length - 1];
+          const labelEvery = Math.max(1, Math.round((w / 6) / ((step / spanMs) * w)));
+          const overADay = spanMs > 26 * 3600 * 1000;
+
+          const first = Math.ceil(start / step) * step;
+          g.textAlign = 'center';
+          g.font = '10px system-ui, sans-serif';
+          let i = 0;
+          for (let t = first; t <= end; t += step, i++) {
+            const x = ((t - start) / spanMs) * w;
+            const at = new Date(t);
+            const major = i % labelEvery === 0;
+            g.strokeStyle = major ? 'rgba(255,255,255,.85)' : 'rgba(255,255,255,.35)';
+            g.beginPath();
+            g.moveTo(x, major ? 22 : 30); g.lineTo(x, 44); g.stroke();
+            if (major) {
+              g.fillStyle = 'rgba(255,255,255,.85)';
+              // Across more than a day, an hour alone is ambiguous: 03:00 today
+              // and 03:00 yesterday look identical on the same bar.
+              g.fillText(
+                overADay
+                  ? at.toLocaleString([], { weekday: 'short', hour: '2-digit' })
+                  : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                x, 14
+              );
+            }
+          }
+        };
+
+        const paint = () => {
+          const w = track.clientWidth || 300;
+          head.style.left = (frac * w) + 'px';
+          const at = timeAt(frac);
+          const live = frac > 0.999;
+          // Bound the picker to what the camera still holds, and keep it in
+          // step with the playhead so the two controls never disagree.
+          when.min = asLocalInput(new Date(edgeAt() - spanMs));
+          when.max = asLocalInput(new Date(edgeAt()));
+          if (!live) when.value = asLocalInput(at);
+          stamp.textContent = live
+            ? 'Live'
+            : at.toLocaleString([], { month: '2-digit', day: '2-digit',
+                                      hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        };
+
+        const seek = (clientX) => {
+          const r = track.getBoundingClientRect();
+          frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+          paint();
+        };
+
+        // Point the picture that is already on screen at an entity. Swapping
+        // the child's config is what keeps playback inside THIS card: the
+        // alternative -- and what this did before -- was to leave the recording
+        // playing on a separate entity you had to add a second card for.
+        const showEntity = (entityId, muted) => {
+          if (!this.content || !this.content.setConfig) return false;
+          const found = { entityId, state: (this._hass.states || {})[entityId] };
+          const cfg = cuboaiWebrtcConfig(found, false, muted);
+          this._dvrEntity = entityId;
+          this.content.setConfig(cfg);
+          this.content.hass = this._hass;
+          return true;
+        };
+
+        const goLive = () => {
+          frac = 1;
+          this._dvrPlaying = false;
+          clearInterval(this._dvrWait); this._dvrWait = null;
+          const live = cuboaiFindCameraState(this._hass, (this._config || {}).device_id);
+          if (live) showEntity(live.entityId, this.isMuted);
+          this._dvrEntity = null;
+          liveBtn.style.opacity = '.45';
+          paint();
+        };
+        liveBtn.addEventListener('click', goLive);
+        liveBtn.style.opacity = '.45';
+
+        const playFrom = (at) => {
+          if (!this._hass) return;
+          // An unpinned card still knows which camera it is showing -- it
+          // resolved one to put a picture on screen. Taking the id from that
+          // entity's attributes is what makes playback work without
+          // `device_id:` in the card config; asking the service for device_id
+          // "" just raises "No CuboAI camera with device_id ''".
+          const pinned = (this._config || {}).device_id;
+          const rec = cuboaiFindRecordingState(this._hass, pinned);
+          const liveCam = cuboaiFindCameraState(this._hass, pinned);
+          const attrsOf = (f) => (f && f.state && f.state.attributes) || {};
+          const dev = pinned || attrsOf(rec).device_id || attrsOf(liveCam).device_id || '';
+          if (!dev) {
+            stamp.textContent = 'No CuboAI camera found';
+            return;
+          }
+          // The service takes an absolute time as well as "10m"-style offsets.
+          this._hass.callService('cuboai', 'play_recording', {
+            device_id: dev,
+            start_time: at.toISOString(),
+            duration: PLAY_SECONDS,
+          });
+          this._dvrPlaying = true;
+          liveBtn.style.opacity = '1';
+          stamp.textContent = 'Loading ' +
+            at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '…';
+
+          // The producer has to connect to the camera and seek before the
+          // entity has a stream, so the swap waits for it to become available
+          // rather than showing an unavailable picture for several seconds.
+          if (!rec) {
+            stamp.textContent = 'No recording entity — reload the integration';
+            return;
+          }
+          let waited = 0;
+          clearInterval(this._dvrWait);
+          this._dvrWait = setInterval(() => {
+            waited += 500;
+            const st = (this._hass.states || {})[rec.entityId];
+            // Readiness is `playing_from`, not the entity state. The entity is
+            // always available -- it has to be, or its attributes never reach
+            // the frontend and this card cannot find it at all -- so its state
+            // says nothing about whether the producer has seeked yet.
+            const ready = st && st.attributes && st.attributes.playing_from;
+            if (ready) {
+              clearInterval(this._dvrWait);
+              this._dvrWait = null;
+              showEntity(rec.entityId, false);   // recorded audio, not the mic
+              stamp.textContent = 'Playing ' +
+                at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } else if (waited >= 30000) {
+              clearInterval(this._dvrWait);
+              this._dvrWait = null;
+              stamp.textContent = 'Nothing recorded at that moment';
+            }
+          }, 500);
+        };
+
+        const commit = () => {
+          if (frac > 0.999) return goLive();      // dropped back on "live"
+          playFrom(timeAt(frac));
+        };
+
+        // Pick a moment instead of aiming at it. At phone width the bar is
+        // ~366px across two days, so one pixel is about eight minutes -- fine
+        // for "last night", useless for "02:14".
+        const picker = document.createElement('div');
+        picker.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px 0;';
+        const when = document.createElement('input');
+        when.type = 'datetime-local';
+        when.step = '1';
+        when.style.cssText = 'flex:1 1 auto;min-width:0;background:#1c1c1e;color:#fff;' +
+          'border:1px solid #444;border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;' +
+          'color-scheme:dark;';
+        const go = document.createElement('button');
+        go.textContent = 'Go';
+        go.style.cssText = 'flex:0 0 auto;background:#03dac6;color:#000;border:none;' +
+          'border-radius:6px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer;';
+        picker.appendChild(when);
+        picker.appendChild(go);
+        bar.appendChild(picker);
+
+        // Local time, no timezone suffix -- what datetime-local speaks.
+        const asLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+          .toISOString().slice(0, 19);
+
+        const goToPicked = () => {
+          if (!when.value) return;
+          const at = new Date(when.value);        // parsed as local time
+          if (isNaN(at)) return;
+          const end = edgeAt(), start = end - spanMs;
+          if (at.getTime() >= end) return goLive();
+          if (at.getTime() < start) {
+            // Say so rather than seek into nothing and time out after 30s.
+            stamp.textContent = 'Older than the camera still holds';
+            return;
+          }
+          frac = 1 - (end - at.getTime()) / spanMs;
+          paint();
+          playFrom(at);
+        };
+        // iOS renders datetime-local as a native wheel with hours and minutes
+        // and no seconds, whatever `step` says. These work on every platform
+        // and are easier than a wheel when you are hunting for a moment.
+        const fine = document.createElement('div');
+        fine.style.cssText = 'display:flex;gap:6px;padding:6px 12px 0;';
+        const nudge = (secs) => {
+          const end = edgeAt(), start = end - spanMs;
+          const from = when.value ? new Date(when.value).getTime() : timeAt(frac).getTime();
+          const t = Math.min(Math.max(from + secs * 1000, start), end);
+          frac = 1 - (end - t) / spanMs;
+          paint();
+          stamp.textContent = 'Loading ' + new Date(t).toLocaleTimeString([],
+            { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '…';
+          // Tapping -10s four times should be one seek, not four: each call
+          // restarts a producer that takes seconds to connect and seek.
+          clearTimeout(this._dvrNudge);
+          this._dvrNudge = setTimeout(() => playFrom(new Date(t)), 700);
+        };
+        for (const [label, secs] of [['-1m', -60], ['-10s', -10], ['+10s', 10], ['+1m', 60]]) {
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.style.cssText = 'flex:1 1 0;background:none;border:1px solid #444;color:#ddd;' +
+            'border-radius:6px;padding:6px 0;font:inherit;font-size:13px;cursor:pointer;';
+          b.addEventListener('click', () => nudge(secs));
+          fine.appendChild(b);
+        }
+        bar.appendChild(fine);
+
+        go.addEventListener('click', goToPicked);
+        when.addEventListener('keydown', (e) => { if (e.key === 'Enter') goToPicked(); });
+
+        let dragging = false;
+        track.addEventListener('pointerdown', (e) => {
+          dragging = true; track.setPointerCapture(e.pointerId); seek(e.clientX);
+        });
+        track.addEventListener('pointermove', (e) => { if (dragging) seek(e.clientX); });
+        const endDrag = (e) => {
+          if (!dragging) return;
+          dragging = false;
+          try { track.releasePointerCapture(e.pointerId); } catch (_) {}
+          commit();
+        };
+        track.addEventListener('pointerup', endDrag);
+        track.addEventListener('pointercancel', endDrag);
+
+        // Keep the ruler honest as time passes and on resize; while the user is
+        // dragging, leave the playhead alone.
+        this._dvrTick = setInterval(() => { if (!dragging) { drawRuler(); paint(); } }, 30000);
+        if (window.ResizeObserver) {
+          this._dvrResize = new ResizeObserver(() => { drawRuler(); paint(); });
+          this._dvrResize.observe(track);
+        }
+        requestAnimationFrame(() => { drawRuler(); paint(); });
+
+        this.dvrBar = bar;
+        this.appendChild(bar);
+      }
+
       if (!this.envOverlay) {
         this.envOverlay = document.createElement('div');
         this.envOverlay.style.cssText = 'position: absolute !important; bottom: 60px !important; left: 16px !important; z-index: 2147483647 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; display: flex !important; gap: 10px !important; align-items: center;';
@@ -524,6 +879,10 @@ class CuboAICameraCard extends HTMLElement {
         if (!this.content) {
           this.content = document.createElement('webrtc-camera');
           if (this.content.setConfig) {
+            // Rebuilt picture (dashboard navigation, a re-render that dropped
+            // the child) while a recording is playing: restore what the scrub
+            // bar says is on screen, not live.
+            if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
             this.content.setConfig(webrtcConfig);
           }
           this.content.hass = this._hass;
@@ -536,6 +895,8 @@ class CuboAICameraCard extends HTMLElement {
           // webrtc-camera `muted` config above.
           if (this.bpmOverlay) this.appendChild(this.bpmOverlay);
           if (this.envOverlay) this.appendChild(this.envOverlay);
+          // Re-appending moves it, so the scrub bar sits below the picture.
+          if (this.dvrBar) this.appendChild(this.dvrBar);
           
           
           // Add Music Player Bar & Song Library
@@ -1937,6 +2298,9 @@ class CuboAICameraCard extends HTMLElement {
       if (this.content.setConfig && this._hass) {
         this.content.hass = this._hass;
       }
+      // Built once, so a re-render that detached the bar would lose it
+      // permanently; put it back instead.
+      if (this.dvrBar && !this.dvrBar.isConnected) this.appendChild(this.dvrBar);
     }
 
       let tempState = null;
@@ -2078,7 +2442,9 @@ class CuboAICameraCard extends HTMLElement {
            if (found) {
              const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
              customElements.whenDefined('webrtc-camera').then(() => {
-               this.content.setConfig(webrtcConfig);
+               // Not while a recording is playing: this fires on any config
+               // touch and would drop the user back to live mid-scrub.
+               if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
              });
            }
          } else if (this.content && !config.device_id) {
@@ -2105,7 +2471,9 @@ class CuboAICameraCard extends HTMLElement {
              if (found) {
                const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
                customElements.whenDefined('webrtc-camera').then(() => {
-                 this.content.setConfig(webrtcConfig);
+                 // Not while a recording is playing: this fires on any config
+                 // touch and would drop the user back to live mid-scrub.
+                 if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
                });
              }
          }
@@ -2273,3 +2641,367 @@ if (!window.customCards.some(c => c.type === 'cuboai-camera-card')) {
   });
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CuboAI timeline card — a swimlane chart, one row per thing being watched.
+//
+// Home Assistant's history-graph gives each entity its own strip and its own
+// axis, which is unreadable for "what happened last night": you cannot see that
+// the noise spike and the baby leaving the crib were the same moment. This puts
+// every row on ONE shared axis with hour gridlines, the way the CuboAI app's
+// own sleep chart does — except the app's is behind its paid tier, and this is
+// drawn from readings Home Assistant already records for free.
+//
+// It lives in this file rather than its own because the integration registers
+// exactly one dashboard resource. A second file would need new plumbing and
+// would silently 404 on every install that has not had it added.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class CuboAITimelineCard extends HTMLElement {
+  setConfig(config) {
+    if (!config || !Array.isArray(config.rows) || !config.rows.length) {
+      throw new Error("cuboai-timeline-card: 'rows' is required");
+    }
+    this._config = config;
+    this._hours = Number(config.hours) || 14;
+    this._rows = config.rows;
+  }
+
+  getCardSize() {
+    return 2 + this._rows.length;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    // Hours of history is a websocket round trip against the recorder.
+    // Refetching on every state tick would hammer it and make the card blink.
+    const now = Date.now();
+    if (this._fetchedAt && now - this._fetchedAt < 60000) return;
+    this._fetchedAt = now;
+    this._load();
+  }
+
+  disconnectedCallback() {
+    this._fetchedAt = 0;
+  }
+
+  // The window this card covers.
+  //
+  // `hours` alone means "the last N hours ending now", which is why a Night
+  // card and a Day card built that way showed almost the same stretch of time:
+  // both ended at this moment and merely differed in length. A tab that says
+  // 19:00-07:00 has to plot 19:00-07:00.
+  //
+  //   from/to  a clock window, e.g. 19:00 -> 07:00. `to` at or before `from`
+  //            spans midnight. Always the most recently STARTED window, so
+  //            Night keeps showing last night all through the following day.
+  //   days     a multi-day span ending now, for the Summary.
+  //   hours    the original behaviour, kept for anything already using it.
+  _window() {
+    const now = new Date();
+    if (this._config.days) {
+      const start = new Date(now.getTime() - Number(this._config.days) * 86400000);
+      return { start, axisEnd: now, fetchEnd: now };
+    }
+    const { from, to } = this._config;
+    if (from && to) {
+      const parse = (v) => String(v).split(":").map(Number);
+      const [fh, fm] = parse(from);
+      const [th, tm] = parse(to);
+      const start = new Date(now); start.setHours(fh, fm || 0, 0, 0);
+      const end = new Date(now); end.setHours(th, tm || 0, 0, 0);
+      if (end <= start) start.setDate(start.getDate() - 1);   // spans midnight
+      if (start > now) {                                      // not begun today
+        start.setDate(start.getDate() - 1);
+        end.setDate(end.getDate() - 1);
+      }
+      // The axis keeps the window's full width even when it has not finished,
+      // so an afternoon glance at Daytime shows how much of the day is left
+      // rather than silently rescaling to a shorter chart.
+      return { start, axisEnd: end, fetchEnd: end > now ? now : end };
+    }
+    const start = new Date(now.getTime() - this._hours * 3600 * 1000);
+    return { start, axisEnd: now, fetchEnd: now };
+  }
+
+  async _load() {
+    const { start, axisEnd, fetchEnd } = this._window();
+    const end = fetchEnd;
+    const ids = [...new Set(this._rows.map((r) => r.entity))];
+    try {
+      const history = await this._hass.callWS({
+        type: "history/history_during_period",
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: ids,
+        minimal_response: true,
+        no_attributes: true,
+      });
+      this._render(history, start, axisEnd, null, end);
+    } catch (err) {
+      this._render(null, start, axisEnd, (err && err.message) || "History unavailable", end);
+    }
+  }
+
+  // Turn one row's history into the spans where its test passes.
+  //
+  // Recorder points carry the moment a state BEGAN, so a span runs from a
+  // matching point to the NEXT point of any kind. Running it to the next
+  // *matching* point instead would swallow every gap between them and draw one
+  // continuous block across a night the baby spent half out of the crib.
+  _spans(row, points, start, end) {
+    const spans = [];
+    const at = (p) => (p.lu !== undefined ? p.lu * 1000 : Date.parse(p.last_changed));
+    const value = (p) => (p.s !== undefined ? p.s : p.state);
+    const matches = (v) => {
+      if (v === undefined || v === null) return false;
+      // A gap in the data is not a negative reading, and must not be drawn as
+      // one — that is the difference between "not in the crib" and "no idea".
+      if (v === "unavailable" || v === "unknown") return false;
+      if (row.above !== undefined) return Number(v) >= Number(row.above);
+      const want = Array.isArray(row.match) ? row.match : [row.match];
+      return want.some((w) => String(w) === String(v));
+    };
+
+    let open = null;
+    for (const p of points) {
+      const raw = at(p);
+      // Points outside the window are discarded, not clamped. Clamping one
+      // that begins AFTER the end closed its span at the end instead -- a
+      // negative width, which surfaced as a lane reporting -35% coverage.
+      // Home Assistant bounds its own reply, but the card must not depend on
+      // that to produce a sane number.
+      if (raw >= end.getTime()) break;
+      const t = Math.max(raw, start.getTime());
+      if (matches(value(p))) {
+        if (open === null) open = t;
+      } else if (open !== null) {
+        spans.push({ from: open, to: t });
+        open = null;
+      }
+    }
+    if (open !== null) spans.push({ from: open, to: end.getTime() });
+    return spans.filter((sp) => sp.to > sp.from);
+  }
+
+  _shell() {
+    if (this._card) return this._body;
+    this._card = document.createElement("ha-card");
+    const style = document.createElement("style");
+    style.textContent = `
+      .tl-wrap { padding: 4px 12px 14px; }
+      .tl-row { display: flex; align-items: center; gap: 10px; height: 30px; }
+      .tl-ico { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 50%;
+                display: flex; align-items: center; justify-content: center;
+                --mdc-icon-size: 16px; color: #fff; }
+      .tl-track { position: relative; flex: 1 1 auto; height: 22px;
+                  border-radius: 4px; background: rgba(127,127,127,.10);
+                  overflow: hidden; min-width: 0; }
+      .tl-seg { position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
+                min-width: 2px; }
+      /* Gridlines are drawn inside every track at the same offsets. That
+         alignment down the column is the entire point of the card. */
+      .tl-grid { position: absolute; top: 0; bottom: 0; width: 1px;
+                 background: rgba(127,127,127,.25); }
+      .tl-axis { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+      .tl-axis .tl-ico { visibility: hidden; }
+      .tl-ticks { position: relative; flex: 1 1 auto; height: 16px; min-width: 0; }
+      .tl-tick { position: absolute; top: 0; font-size: 11px;
+                 color: var(--secondary-text-color); transform: translateX(-50%);
+                 white-space: nowrap; }
+      .tl-note { font-size: 12px; color: var(--secondary-text-color);
+                 padding: 6px 0 0 36px; }
+      .tl-seg { cursor: pointer; }
+      .tl-ico { cursor: pointer; }
+      /* Tooltips need a mouse. On a phone the labels and the timespans were
+         unreachable, so both are shown outright. */
+      /* Which window this is. Two tabs drawing genuinely different periods
+         still read as the same chart when nothing on either says what it
+         covers -- especially when several lanes are empty in both. */
+      .tl-when { font-size: 12px; color: var(--secondary-text-color);
+                 padding: 0 0 6px 36px; }
+      .tl-legend { display: flex; flex-wrap: wrap; gap: 4px 12px;
+                   padding: 8px 0 0 36px; }
+      .tl-pc { color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
+      .tl-key { display: flex; align-items: center; gap: 5px; font-size: 12px;
+                color: var(--secondary-text-color); }
+      .tl-dot { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+      .tl-detail { min-height: 18px; padding: 8px 0 0 36px; font-size: 13px;
+                   color: var(--primary-text-color); }
+      .tl-detail.empty { color: var(--secondary-text-color); font-size: 12px; }
+    `;
+    this._body = document.createElement("div");
+    this._body.className = "tl-wrap";
+    this._card.appendChild(style);
+    this._card.appendChild(this._body);
+    this.appendChild(this._card);
+    return this._body;
+  }
+
+  _render(history, start, end, error, dataEnd) {
+    const body = this._shell();
+    this._card.header = this._config.title || undefined;
+    body.textContent = "";
+
+    if (error) {
+      const p = document.createElement("div");
+      p.className = "tl-note";
+      p.textContent = error;
+      body.appendChild(p);
+      return;
+    }
+
+    const span = end.getTime() - start.getTime();
+    const pct = (t) => ((t - start.getTime()) / span) * 100;
+
+    const stamp = (d) =>
+      d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    const when = document.createElement("div");
+    when.className = "tl-when";
+    when.textContent = `${stamp(start)} – ${stamp(end)} · ${Math.round(span / 3600e3)}h`;
+    body.appendChild(when);
+
+    // Marks, at whatever spacing keeps them from colliding. A week at six
+    // hours is twenty-eight labels in the width of a phone, all overlapping,
+    // so past two days it switches to one per day and labels the weekday.
+    const daily = span > 48 * 3600e3;
+    const step = daily ? 24 : span > 20 * 3600e3 ? 6 : span > 10 * 3600e3 ? 3 : 1;
+    const marks = [];
+    const first = new Date(start);
+    first.setMinutes(0, 0, 0);
+    for (let t = first.getTime(); t <= end.getTime(); t += 3600e3) {
+      if (t < start.getTime()) continue;
+      if (new Date(t).getHours() % step) continue;
+      marks.push(t);
+    }
+
+    let drew = 0;
+    const covered = new Map();
+    for (const row of this._rows) {
+      let rowCover = 0;
+      const line = document.createElement("div");
+      line.className = "tl-row";
+
+      const ico = document.createElement("div");
+      ico.className = "tl-ico";
+      ico.style.background = row.color || "#5e5ce6";
+      const icon = document.createElement("ha-icon");
+      icon.setAttribute("icon", row.icon || "mdi:circle-small");
+      ico.appendChild(icon);
+      ico.title = row.label || row.entity;
+      ico.addEventListener("click", () => {
+        this.dispatchEvent(new CustomEvent("hass-more-info", {
+          detail: { entityId: row.entity }, bubbles: true, composed: true,
+        }));
+      });
+      line.appendChild(ico);
+
+      const track = document.createElement("div");
+      track.className = "tl-track";
+      for (const t of marks) {
+        const g = document.createElement("div");
+        g.className = "tl-grid";
+        g.style.left = pct(t) + "%";
+        track.appendChild(g);
+      }
+
+      const points = (history && history[row.entity]) || [];
+      for (const s of this._spans(row, points, start, dataEnd || end)) {
+        const seg = document.createElement("div");
+        seg.className = "tl-seg";
+        seg.style.left = pct(s.from) + "%";
+        // A one-minute event across fourteen hours is 0.1% wide and invisible,
+        // so every span gets a floor it can actually be seen and tapped at.
+        seg.style.width = Math.max(pct(s.to) - pct(s.from), 0.6) + "%";
+        seg.style.background = row.color || "#5e5ce6";
+        const fmt = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const mins = Math.round((s.to - s.from) / 60000);
+        const dur = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+        const text = `${row.label || row.entity} · ${fmt(new Date(s.from))}–${fmt(new Date(s.to))} · ${dur}`;
+        seg.title = text;
+        seg.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this._detail.textContent = text;
+          this._detail.classList.remove("empty");
+        });
+        track.appendChild(seg);
+        rowCover += s.to - s.from;
+        drew++;
+      }
+      covered.set(row, rowCover);
+      line.appendChild(track);
+      body.appendChild(line);
+    }
+
+    const axis = document.createElement("div");
+    axis.className = "tl-axis";
+    const spacer = document.createElement("div");
+    spacer.className = "tl-ico";
+    axis.appendChild(spacer);
+    const ticks = document.createElement("div");
+    ticks.className = "tl-ticks";
+    for (const t of marks) {
+      const lab = document.createElement("div");
+      lab.className = "tl-tick";
+      lab.style.left = pct(t) + "%";
+      lab.textContent = daily
+        ? new Date(t).toLocaleDateString([], { weekday: "short" })
+        : String(new Date(t).getHours()).padStart(2, "0");
+      ticks.appendChild(lab);
+    }
+    axis.appendChild(ticks);
+    body.appendChild(axis);
+
+    const dataSpan = (dataEnd ? dataEnd.getTime() : end.getTime()) - start.getTime();
+    const legend = document.createElement("div");
+    legend.className = "tl-legend";
+    for (const row of this._rows) {
+      const key = document.createElement("div");
+      key.className = "tl-key";
+      const dot = document.createElement("span");
+      dot.className = "tl-dot";
+      dot.style.background = row.color || "#5e5ce6";
+      key.appendChild(dot);
+      const t = document.createElement("span");
+      t.textContent = row.label || row.entity;
+      key.appendChild(t);
+      // The share of the window each lane covers. This is what actually
+      // distinguishes one period from another at a glance -- noise at 52%
+      // versus 84% is the difference between two nights, and a wall of
+      // identical-looking stipple hides it completely.
+      const pc = document.createElement("span");
+      pc.className = "tl-pc";
+      pc.textContent = `${Math.round((100 * (covered.get(row) || 0)) / (dataSpan || span))}%`;
+      key.appendChild(pc);
+      legend.appendChild(key);
+    }
+    body.appendChild(legend);
+
+    this._detail = document.createElement("div");
+    this._detail.className = "tl-detail empty";
+    this._detail.textContent = "Tap a bar for its times, or an icon for the sensor.";
+    body.appendChild(this._detail);
+
+    // An empty chart and a broken one look identical otherwise.
+    if (!drew) {
+      const p = document.createElement("div");
+      p.className = "tl-note";
+      p.textContent = "Nothing recorded in this window.";
+      body.appendChild(p);
+    }
+  }
+}
+
+if (!customElements.get("cuboai-timeline-card")) {
+  customElements.define("cuboai-timeline-card", CuboAITimelineCard);
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((c) => c.type === "cuboai-timeline-card")) {
+  window.customCards.push({
+    type: "cuboai-timeline-card",
+    name: "CuboAI Timeline",
+    description: "One row per sensor, all on a single shared time axis.",
+  });
+}

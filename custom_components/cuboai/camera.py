@@ -25,9 +25,21 @@ async def async_setup_entry(hass, entry, async_add_entities):
     cls = CuboLocalCameraWebRTC if entry.options.get("frontend_webrtc") else CuboLocalCamera
 
     camera_entities = []
+    recording_cameras = []
     for camera in cameras:
         if "uid" in camera:
             camera_entities.append(cls(coordinator, camera))
+            # A second entity for recorded footage off the camera's own DVR.
+            # It stays idle until cuboai.play_recording points it at a moment.
+            recording = CuboRecordingCamera(coordinator, camera)
+            recording_cameras.append(recording)
+            camera_entities.append(recording)
+
+    # The play_recording service needs to reach these instances to point them
+    # at a stream, so keep them alongside the entry's other runtime objects.
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})[
+        "recording_cameras"
+    ] = recording_cameras
 
     if camera_entities:
         async_add_entities(camera_entities)
@@ -359,3 +371,123 @@ class CuboLocalCameraWebRTC(CuboLocalCamera):
     @callback
     def close_webrtc_session(self, session_id: str) -> None:
         """Nothing to clean up: the exchange is stateless on our side."""
+
+
+class CuboRecordingCamera(CoordinatorEntity, Camera):
+    """Recorded footage from the camera's own on-board DVR.
+
+    Distinct from the live camera in one important way: there is nothing to
+    show until someone asks for a moment. `cuboai.play_recording` publishes a
+    playback stream for a chosen time, and this entity plays it; before that it
+    reports unavailable rather than an empty picture.
+
+    The DVR producer runs in its own process against its own engine copy (see
+    tutk/playback_engine), so nothing here affects the live stream.
+    """
+
+    _attr_icon = "mdi:rewind"
+
+    def __init__(self, coordinator, camera):
+        super().__init__(coordinator)
+        Camera.__init__(self)
+        self._device_id = camera["device_id"]
+        self._baby_name = camera["baby_name"]
+        self._attr_name = f"{self._baby_name} Recording"
+        self._attr_unique_id = f"cuboai_recording_camera_{self._device_id}"
+        #: Set by the play_recording service; None means nothing requested yet.
+        self._source: str | None = None
+        self._playing_from: int | None = None
+
+    @property
+    def supported_features(self) -> int:
+        from homeassistant.components.camera import CameraEntityFeature
+
+        return CameraEntityFeature.STREAM
+
+    @property
+    def frontend_stream_type(self) -> str | None:
+        """HLS, matching the live entity: the DVR producer muxes the same
+        MPEG-TS (HEVC/H264 + AAC) the live path does."""
+        from homeassistant.components.camera import StreamType
+
+        return getattr(StreamType, "HLS", "hls")
+
+    async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
+        """A still from the recorded stream, via go2rtc's frame endpoint."""
+        if self._source is None:
+            return None
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
+        url = f"http://127.0.0.1:{port}/api/frame.jpeg?src=cuboai_dvr_{self._device_id}"
+        try:
+            session = async_get_clientsession(self.hass)
+            # Generous: the producer has to connect to the camera and seek
+            # before the first recorded frame exists.
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 1000:
+                        return data
+        except Exception as err:  # noqa: BLE001 - no frame is not an error here
+            _LOGGER.debug("No recorded frame yet for %s: %s", self._device_id, err)
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Always available, even with nothing loaded.
+
+        Reporting unavailable until a moment is requested reads well and is
+        unusable: Home Assistant does not publish state attributes for an
+        unavailable entity, so `device_id` and `dvr` never reached the
+        frontend, and the card could not find the entity it needs in order to
+        start the playback that would have made it available. The state is
+        `idle` with no picture until `play_recording` points it somewhere,
+        which is what a DVR does anyway.
+        """
+        return True
+
+    @property
+    def extra_state_attributes(self):
+        """Carries `device_id` for the same reason the live camera does.
+
+        The card has to pair this entity with the live one it is already
+        showing, and issue #89 was precisely what happens when a card matches a
+        camera by guessing at its entity id: `_attr_has_entity_name` is not set
+        here either, so this entity is `camera.<baby>_recording` with no
+        `cuboai_` in it, and any prefix test would match nothing on every
+        install. `dvr` marks it as the playback entity so the pairing survives
+        a rename.
+        """
+        attrs = {
+            "device_id": self._device_id,
+            "uid": self._device_id,
+            "dvr": True,
+            "playing_from": None,
+        }
+        if self._playing_from is not None:
+            import datetime as dt
+
+            attrs["playing_from"] = dt.datetime.fromtimestamp(
+                self._playing_from, dt.UTC
+            ).isoformat()
+        return attrs
+
+    def set_playback(self, source: str | None, start_epoch: int | None) -> None:
+        """Point this entity at a published playback stream (or clear it)."""
+        self._source = source
+        self._playing_from = start_epoch
+        self.async_write_ha_state()
+
+    async def stream_source(self) -> str | None:
+        return self._source
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": f"CuboAI {self._baby_name}",
+            "manufacturer": "CuboAI",
+            "model": "Baby Monitor",
+        }

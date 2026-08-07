@@ -32,6 +32,7 @@
           "hours_back": "Time window to check for alerts (hours)",
           "update_interval": "Update interval (seconds)",
           "enable_debug_logs": "Enable debug logs",
+          "history_sensors": "Baby-present & DVR history sensors",
           "rtsp_port": "RTSP port for the local camera stream"
         },
         "data_description": {
@@ -72,6 +73,7 @@
           "hours_back": "Time window to check for alerts (hours)",
           "update_interval": "Update interval (seconds)",
           "enable_debug_logs": "Enable debug logs",
+          "history_sensors": "Baby-present & DVR history sensors",
           "h264_cameras": "Transcode these cameras to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)",
           "rtsp_port": "RTSP port for the local camera stream"
         },

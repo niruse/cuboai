@@ -11,8 +11,9 @@ plays in MSE/HLS/WebRTC. `--raw` reverts to the original byte-for-byte HEVC Anne
 (the byte-identical regression anchor). `--output-format annexb` keeps Annex-B but still strips
 the trailer. Audio (AAC) is available, gated behind CUBOAI_MUX_AUDIO (default off).
 
-The pure-Python transport runs a background reader that keeps the camera's send-window open even
-if go2rtc's pipe back-pressures, so the stream does not stall.
+STATUS: Working at ~10–12 fps. The pure-Python transport's background reader keeps the camera's
+send-window open even if go2rtc's pipe back-pressures, so the stream does not stall (session-14
+C/D windowed-ACK fix).
 
 Usage in go2rtc config (go2rtc.yaml):
     streams:
@@ -45,7 +46,8 @@ Known limitations:
       CUBOAI_MUX_AUDIO=1; go2rtc transcodes it to Opus for the WebRTC leg.
 
 See also:
-    cuboai_stream_audio.py — standalone audio stream
+    cuboai_stream_audio.py — standalone audio stream (legacy)
+    LIBRARY_SETUP.md       — native library notes (the deployment runs pure Python)
 """
 
 import argparse
@@ -56,19 +58,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cuboai_session import get_session   # auto: PureSession (no --lib) or TUTKSession
-
-def _env_float(name: str, default: float) -> float:
-    """Parse a CUBOAI_* env var as float, falling back to `default` on empty or
-    non-numeric input (a bare float(os.environ[...]) raises on garbage).
-
-    Vendored alongside cuboai_sensors.py, which imports it from this module.
-    """
-    try:
-        raw = os.environ.get(name, '')
-        return float(raw) if raw else float(default)
-    except (TypeError, ValueError):
-        return float(default)
-
 
 
 # ── Production env profile ─────────────────────────────────────────────────
@@ -112,6 +101,50 @@ RAW_ENV = {
 }
 
 
+def _env_float(name: str, default: float) -> float:
+    """Parse a CUBOAI_* env var as float, falling back to `default` on empty/non-numeric input
+    (B-8/R3 — the previous bare float(os.environ[...]) raised an uncaught ValueError on garbage)."""
+    try:
+        raw = os.environ.get(name, '')
+        return float(raw) if raw else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _clamp_env_knobs():
+    """Range-clamp the numeric CUBOAI_* tuning env vars (startup only, stderr only) so a zero/absurd
+    override can't divide-by-zero or break recovery. Non-numeric -> default; out-of-range -> clamp.
+
+    Lives in the shared streamer module (B-8) so BOTH the production streamer (apply_env_profile)
+    and the validate CLI sanitise identically — the streamer used to skip clamping entirely, so a
+    bad CUBOAI_* only got caught under `cuboai_validate`, never on the go2rtc exec path."""
+    KNOBS = [  # (env, lo, hi, default-or-None, is_float)
+        ('CUBOAI_GAP_DEPTH_CAP', 1, 10000, 200, False),
+        ('CUBOAI_RECOVERY_HOLD', 0, 2000, 24, False),
+        ('CUBOAI_LONE_SKIP_ROUNDS', 0, 2000, 20, False),
+        ('CUBOAI_KF_HOLD', 0, 2000, 40, False),
+        ('CUBOAI_GAP_HOLD_MS', 1, 600000, None, False),
+        ('CUBOAI_VERBOSE_INTERVAL', 0.1, 3600, 5.0, True),
+        ('CUBOAI_VERBOSE_CAMERA_STATS_INTERVAL', 1, 86400, None, False),
+        ('CUBOAI_LIST_PACE_S', 0, 3600, 0.5, True),   # B-8/R3: also parsed with a bare float()
+    ]
+    for env, lo, hi, dflt, isf in KNOBS:
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        try:
+            v = float(raw) if isf else int(raw)
+        except ValueError:
+            if dflt is not None:
+                os.environ[env] = str(dflt)
+                print(f"Warning: {env}={raw!r} is not a number; using default {dflt}.", file=sys.stderr)
+            continue
+        cv = min(hi, max(lo, v))
+        if cv != v:
+            os.environ[env] = str(cv if isf else int(cv))
+            print(f"Warning: {env}={raw} out of range [{lo},{hi}]; clamped to {cv}.", file=sys.stderr)
+
+
 def apply_env_profile(raw: bool) -> str:
     """Install the env profile and return the resolved output format.
 
@@ -121,6 +154,8 @@ def apply_env_profile(raw: bool) -> str:
                 env var). The engine reads these at construction, so this MUST run before
                 get_session().
     """
+    _clamp_env_knobs()          # B-8: sanitise numeric CUBOAI_* on the streamer path too (was
+                                # validate-only) — a bad knob must never reach get_session().
     if raw:
         for k, v in RAW_ENV.items():
             os.environ[k] = v
@@ -139,7 +174,7 @@ def _verbose_loop(sess, interval, camera_stats, stop):
 
     Runs on a daemon thread reading the engine's read-only get_stats() snapshot (lock-free,
     no socket I/O) and pairing successive snapshots through cuboai_pure.stats_delta for the
-    interval fps/bitrate/loss/recovery — the same metric set the benchmark prints.
+    interval fps/bitrate/loss/recovery — the same Task-1 metric set the benchmark prints.
     With camera_stats it also folds the camera 0x0934 session-stats at a slower cadence
     (injected on the reader thread via get_during_stream, so it never races the AV socket).
     Decoupled from the engine's own verbose (_vlog prints to stdout) so media stays clean.
@@ -167,6 +202,16 @@ def _verbose_loop(sess, interval, camera_stats, stop):
                 f"gap {cur['gap_now']} (max {cur['gap_max']}, capjmp {cur['gap_cap_jumps']}) | "
                 f"incAU {d['au_incomplete']} kf {d['kf_incomplete']}/{d['kf_total']} | "
                 f"ts garbage {gpct:.0f}% regress {cur['ts_regress']}")
+        # SILENT-RECOVERY VISIBILITY (audit 2026-07-23). ioctl()'s auto-reconnect masked the
+        # ghost-conn bug for weeks on Linux — a path that quietly recovers must never read as
+        # healthy. Print the send side + the recoveries ONLY when non-zero, so a clean session's
+        # line is unchanged and any occurrence stands out. stderr only (stdout is the media pipe).
+        _rec = (cur.get('reconnects', 0), cur.get('ioctl_retries', 0),
+                cur.get('tx_ioctl_retx', 0), cur.get('tx_err', 0), cur.get('keepalive_err', 0))
+        if any(_rec):
+            line += (f" | RECOVERED reconn {_rec[0]} (fail {cur.get('reconnect_fail', 0)}, "
+                     f"{cur.get('reconnect_s', 0)}s) ioctl-retry {_rec[1]} ioctl-retx {_rec[2]} "
+                     f"txerr {_rec[3]} kaerr {_rec[4]}")
         if camera_stats and tick % 6 == 0:          # slow cadence (~6× the interval)
             try:
                 ss = sess.get_during_stream('get_session_stats', timeout=1.5) or {}
@@ -202,9 +247,8 @@ def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log
     tap/audio_tap, if given, are called per muxed video/audio AU with (pts_90k, keyframe, pts_ms);
     the live path passes None so a 24/7 stream retains no per-AU state. Returns the PTSClock stats.
     """
-    from cuboai_mpegts import TSMuxer
     from cuboai_pts import AVTimeline
-    from cuboai_pure import detect_video_codec
+    from cuboai_mpegts import TSMuxer
 
     def _nal_kf(au):
         return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
@@ -235,19 +279,7 @@ def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log
         if kind != 'video':
             continue
         if mux is None:
-            # The PMT stream_type is written once, from the FIRST video AU — a wrong guess
-            # poisons the whole producer: an H264 stream declared as HEVC parses to no
-            # parameter sets, so go2rtc registers NO video track at all and every video
-            # consumer dies ("codecs not matched: audio:AAC, audio:OPUS" on frame.jpeg,
-            # "finding first packet" timeout on the RTSP leg — issue #85). When this AU has
-            # no FRAMEINFO (mid-GOP join / incomplete), sniff the codec from its NAL
-            # headers; if even that is indecisive (P-frame-only AU), WAIT for the next
-            # video AU instead of defaulting.
-            codec = (fi or {}).get('codec') or detect_video_codec(data, default=None)
-            if not codec:
-                continue
-            if not fi:
-                log(f"[mpegts] first video AU has no FRAMEINFO — codec sniffed from NAL headers: {codec}")
+            codec = (fi or {}).get('codec', 'hevc')
             mux = TSMuxer(codec=codec, audio_codec=('aac' if mux_audio else None))
             log(f"[mpegts] muxing {codec}{'+aac' if mux_audio else ''} → MPEG-TS with FRAMEINFO PTS "
                 f"(stream_type=0x{mux.stream_type:02x})")
@@ -366,8 +398,7 @@ def main() -> None:
     _v_stop = None
     if verbose:
         import threading as _threading
-        v_interval = (args.verbose_interval
-                      or float(os.environ.get('CUBOAI_VERBOSE_INTERVAL', '') or 5.0))
+        v_interval = args.verbose_interval or _env_float('CUBOAI_VERBOSE_INTERVAL', 5.0)
         v_camera = (args.verbose_camera_stats
                     or os.environ.get('CUBOAI_VERBOSE_CAMERA_STATS', '0') != '0')
         _v_stop = _threading.Event()
@@ -382,8 +413,8 @@ def main() -> None:
     # the 00 00 00 01 start codes.
     import time as _time
     stdout = sys.stdout.buffer
-    # Optional per-video-AU emit-timestamp trace (latency/jitter harness). Gated; when
-    # CUBOAI_EMIT_TS_FILE is unset this is a no-op and the stream is byte-identical.
+    # Optional per-video-AU emit-timestamp trace (overnight #2 latency/jitter harness). Gated;
+    # when CUBOAI_EMIT_TS_FILE is unset this is a no-op and the stream is byte-identical.
     _etsf = None
     _ets = os.environ.get('CUBOAI_EMIT_TS_FILE')
     if _ets:
@@ -395,11 +426,37 @@ def main() -> None:
         stdout.write(data)
         stdout.flush()
 
+    # ── SIGTERM → clean teardown (B-1) ────────────────────────────────────
+    # go2rtc stops an exec: source with SIGTERM (see the recipe above, killsignal=SIGTERM).
+    # Python's DEFAULT SIGTERM action terminates the process WITHOUT unwinding, so the
+    # `finally: sess.disconnect()` below — the 3x build_close session-stop burst — is skipped
+    # on every normal stream stop. Route SIGTERM into the SAME path SIGINT already takes:
+    # raise KeyboardInterrupt in the main thread so the `except (BrokenPipeError,
+    # KeyboardInterrupt)` + `finally` below run disconnect() exactly as they do for Ctrl-C.
+    #
+    # SIGINT is DELIBERATELY LEFT ALONE — Python's default handler already raises
+    # KeyboardInterrupt and unwinds cleanly (offline-proven: 3x build_close, ~30 ms), so
+    # touching it could only regress the working path. This is why the fix is just a SIGTERM
+    # alias, with none of the SIGALRM-watchdog / os._exit machinery that hung SIGINT in the
+    # first attempt. The handler is one-shot (restores SIG_DFL before raising) so a second,
+    # impatient SIGTERM hard-kills instead of re-entering teardown.
+    import signal as _signal
+
+    def _term_handler(_signum, _frame):
+        _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)   # 2nd SIGTERM → hard kill
+        raise KeyboardInterrupt                             # → except/finally → disconnect()
+
+    try:
+        _signal.signal(_signal.SIGTERM, _term_handler)
+    except (ValueError, OSError):
+        pass   # not the main thread / unsupported platform — leave the default (best-effort)
+
     try:
         if output_format == 'mpegts':
-            # MPEG-TS path: carry per-AU PTS from the camera FRAMEINFO so MSE/HLS play along
-            # currentTime without underrun (the PTS, not arrival timing, drives the timeline).
-            # clean-GOP (default on) drops incomplete AUs until the next clean keyframe.
+            # MPEG-TS path (Part C): carry per-frame PTS from the camera FRAMEINFO so MSE/HLS play
+            # along currentTime without underrun. PACE is not used here — the PTS, not arrival
+            # timing, drives the timeline. The muxing loop lives in mux_timed_stream() (shared with
+            # the validator). clean-GOP (default on) drops incomplete AUs until the next clean IDR.
             clean_gop = os.environ.get('CUBOAI_CLEAN_GOP', '1') != '0'
             mux_audio = os.environ.get('CUBOAI_MUX_AUDIO', '0') != '0'
             mux_timed_stream(sess.av_frames_timed(), _emit, clean_gop=clean_gop, mux_audio=mux_audio)
@@ -421,8 +478,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # Standalone process: allow the broadcast-redirect shim to re-exec us with
-    # LD_PRELOAD (blocked when this module is imported by a host application).
-    import os as _os
-    _os.environ.setdefault('CUBOAI_ALLOW_REEXEC', '1')
     main()

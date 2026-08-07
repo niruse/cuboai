@@ -1,0 +1,435 @@
+# CuboAI dashboard — Live, Nighttime, Daytime, Summary, Alerts.
+#
+# YAML mode: edit this file, then reload from the dashboard's ⋮ menu.
+#
+# Deliberately NOT a copy of the CuboAI app's report screens. Total Sleep,
+# Wake-ups, Longest Sleep and the sleep-routine chart are gated behind CuboAI's
+# paid tier -- the app itself renders them as "Report Preview / Activate
+# Ultimate to see more!", and sensor.cuboai_subscription reads `inactive`, so
+# the integration cannot fetch them either. Every card below is backed by a
+# reading this camera actually returns.
+
+views:
+  # ── Live ────────────────────────────────────────────────────────────────
+  - title: Live
+    path: live
+    icon: mdi:video
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          # The camera, with the DVR scrub bar and time picker underneath it.
+          - type: custom:cuboai-camera-card
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Right now
+            heading_style: title
+
+          - type: glance
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_temperature_mia
+                name: Temp
+              - entity: sensor.cuboai_mia_cuboai_humidity_mia
+                name: Humidity
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                name: Noise
+
+          # baby_present reads 0 for an empty room and 1/2 for in/not in crib.
+          # It sat at `unknown` until the label map was found to be missing 0.
+          - type: glance
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                name: Present
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                name: Motion
+              - entity: sensor.cuboai_camera_state_mia
+                name: Camera
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Controls
+            heading_style: title
+
+          - type: tile
+            entity: light.cuboai_mia_mia_night_light
+            features:
+              - type: light-brightness
+
+          - type: entities
+            entities:
+              - entity: select.cuboai_mia_mia_night_vision
+                name: Night vision
+              - entity: switch.cuboai_mia_mia_sleep_mode
+                name: Sleep mode
+              - entity: switch.cuboai_mia_mia_status_led
+                name: Status LED
+              - entity: switch.cuboai_mia_mia_flip_screen
+                name: Flip screen
+
+          - type: media-control
+            entity: media_player.cuboai_mia_mia_lullaby
+
+  # ── Nighttime ───────────────────────────────────────────────────────────
+  # 19:00 to 07:00. The app's own version of this page is paywalled, so every
+  # figure here is computed from recorded baby_present readings instead.
+  - title: Nighttime
+    path: night
+    icon: mdi:weather-night
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Last night · 19:00–07:00
+            heading_style: title
+
+          - type: tile
+            entity: sensor.mia_night_in_crib
+            name: In crib
+            color: indigo
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_night_out_of_crib
+                name: Not in crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_night_sleeps
+                name: Sleeps
+                vertical: true
+
+          # A night the camera spent offline and a night the baby spent
+          # elsewhere both read as 0 hours in crib. This is what tells them
+          # apart, so it sits next to the figure it qualifies.
+          - type: conditional
+            conditions:
+              - condition: numeric_state
+                entity: sensor.mia_night_no_reading
+                above: 0.5
+            card:
+              type: markdown
+              content: >
+                ⚠️ The camera was unreachable for
+                {{ states('sensor.mia_night_no_reading') }} h of this window,
+                so the figures above cover only part of the night.
+                This counts only time the sensor was unavailable — an empty
+                room is a reading, not a gap.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Through the night
+            heading_style: title
+
+          # One row per thing being watched, all on ONE shared axis with the
+          # same hour gridlines. history-graph gives each entity its own strip
+          # and its own axis, so you cannot see that the noise spike and the
+          # baby leaving the crib were the same moment.
+          - type: custom:cuboai-timeline-card
+            title: Last night
+            from: "19:00"
+            to: "07:00"
+            rows:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              # 0 as well as 2. What 0 means is not documented upstream --
+              # only 1 and 2 are -- but it held steady through a day the house
+              # was empty and the baby was demonstrably not in the crib, so
+              # matching only 2 drew an empty row through exactly the hours
+              # this is meant to show.
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Not in crib
+                icon: mdi:baby-carriage
+                match:
+                  - not in crib
+                  - "0"
+                color: "#e9c46a"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise over 26
+                icon: mdi:volume-high
+                above: 26
+                color: "#5e5ce6"
+              # An empty chart and a camera that was offline look identical
+              # without this row.
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
+
+  # ── Daytime ─────────────────────────────────────────────────────────────
+  - title: Daytime
+    path: day
+    icon: mdi:white-balance-sunny
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Today · 07:00–19:00
+            heading_style: title
+
+          - type: tile
+            entity: sensor.mia_day_in_crib
+            name: In crib
+            color: amber
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_day_out_of_crib
+                name: Not in crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_day_sleeps
+                name: Sleeps
+                vertical: true
+
+          - type: conditional
+            conditions:
+              - condition: numeric_state
+                entity: sensor.mia_day_no_reading
+                above: 0.5
+            card:
+              type: markdown
+              content: >
+                ⚠️ The camera was unreachable for
+                {{ states('sensor.mia_day_no_reading') }} h of this window,
+                so the figures above cover only part of the day.
+                This counts only time the sensor was unavailable — an empty
+                room is a reading, not a gap.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Through the day
+            heading_style: title
+
+          # One row per thing being watched, all on ONE shared axis with the
+          # same hour gridlines. history-graph gives each entity its own strip
+          # and its own axis, so you cannot see that the noise spike and the
+          # baby leaving the crib were the same moment.
+          - type: custom:cuboai-timeline-card
+            title: Today
+            from: "07:00"
+            to: "19:00"
+            rows:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              # 0 as well as 2. What 0 means is not documented upstream --
+              # only 1 and 2 are -- but it held steady through a day the house
+              # was empty and the baby was demonstrably not in the crib, so
+              # matching only 2 drew an empty row through exactly the hours
+              # this is meant to show.
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Not in crib
+                icon: mdi:baby-carriage
+                match:
+                  - not in crib
+                  - "0"
+                color: "#e9c46a"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise over 26
+                icon: mdi:volume-high
+                above: 26
+                color: "#5e5ce6"
+              # An empty chart and a camera that was offline look identical
+              # without this row.
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
+
+  # ── Summary ─────────────────────────────────────────────────────────────
+  - title: Summary
+    path: summary
+    icon: mdi:chart-box-outline
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Last 7 days
+            heading_style: title
+
+          - type: tile
+            entity: sensor.mia_week_in_crib
+            name: In crib
+            color: indigo
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_week_out_of_crib
+                name: Not in crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_week_sleeps
+                name: Sleeps
+                vertical: true
+
+          - type: tile
+            entity: sensor.mia_average_day_in_crib
+            name: Average per day
+
+          # Divided by seven days, not by the days that happen to hold data,
+          # so downtime pulls the average down instead of being averaged away.
+          # This is the number that says how much to trust the one above it.
+          - type: tile
+            entity: sensor.mia_week_coverage
+            name: Camera coverage
+            color: green
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: The week
+            heading_style: title
+
+          # Everything, over the whole week, on one axis.
+          - type: custom:cuboai-timeline-card
+            title: The last 7 days
+            days: 7
+            rows:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Not in crib
+                icon: mdi:baby-carriage
+                match:
+                  - not in crib
+                  - "0"
+                color: "#e9c46a"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise over 26
+                icon: mdi:volume-high
+                above: 26
+                color: "#5e5ce6"
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
+
+          - type: history-graph
+            hours_to_show: 168
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_temperature_mia
+                name: Temperature
+              - entity: sensor.cuboai_mia_cuboai_humidity_mia
+                name: Humidity
+
+  # ── Alerts ──────────────────────────────────────────────────────────────
+  - title: Alerts
+    path: alerts
+    icon: mdi:bell-ring
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Latest
+            heading_style: title
+
+          - type: tile
+            entity: sensor.cuboai_last_alert_mia
+            name: Last alert
+
+          # Replaces a hand-written markdown TABLE, which rendered as leaking
+          # pipes with full-width photographs between them. A table cannot hold
+          # an image on a phone; a list with a sized thumbnail can.
+          #
+          # Literal block (|) not folded (>): folding collapses the newlines
+          # that Jinja blocks and markdown lists both depend on.
+          - type: markdown
+            content: |
+              {% set s = 'sensor.cuboai_mia_cuboai_session_history_mia' %}
+              {% set alerts = state_attr(s, 'alerts') or [] %}
+              {% if alerts %}
+              {% for a in alerts %}
+              **{{ a.type | replace('CUBO_ALERT_', '') | title }}** ·
+              {{ as_timestamp(a.time) | timestamp_custom('%a %d %b, %H:%M:%S') }}
+              {% if a.image_url %}
+
+              <img src="{{ a.image_url }}" width="220">
+              {% endif %}
+
+              ---
+              {% endfor %}
+              {% else %}
+              **No alerts recorded yet.**
+
+              How many are kept is set under Settings → Devices & Services →
+              CuboAI → Configure (`alerts_count`).
+              {% endif %}
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: What is being watched
+            heading_style: title
+
+          - type: entities
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_cry_detection_status_mia
+                name: Cry detection
+              - entity: sensor.cuboai_mia_cuboai_cough_detection_status_mia
+                name: Cough detection
+              - entity: sensor.cuboai_mia_cuboai_cry_sensitivity_mia
+                name: Cry sensitivity
+              - entity: sensor.cuboai_mia_cuboai_sleep_safety_status_mia
+                name: Covered face
+              - entity: sensor.cuboai_subscription
+                name: Subscription
+
+          # Says plainly why there is no sleep report here, rather than leaving
+          # an empty tab that looks broken.
+          - type: markdown
+            content: |
+              {% if states('sensor.cuboai_subscription') != 'active' %}
+              **No sleep report.** CuboAI keeps Total Sleep, Wake-ups, Longest
+              Sleep and the sleep-routine chart behind its paid tier — the app
+              shows them as *"Report Preview — Activate Ultimate to see more"*,
+              and this account reads `{{ states('sensor.cuboai_subscription') }}`.
+              The History tab is built from readings the camera returns for free.
+              {% endif %}

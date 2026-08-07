@@ -124,6 +124,19 @@ class Go2RTCManager:
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
+            # Recorded footage from the camera's own DVR. Declared here rather
+            # than added over go2rtc's API, which rejects `exec:` sources (it
+            # would be a remote-execution hole). Which moment to play is passed
+            # through the state file the play_recording service writes, so this
+            # entry never changes. The producer only runs while something is
+            # watching, so an idle DVR stream costs nothing.
+            playback_script = os.path.join(script_dir, "cuboai_stream_playback.py")
+            state_file = self.hass.config.path(f"cuboai_playback_{dev_id}.json")
+            self._streams[f"cuboai_dvr_{dev_id}"] = [
+                f"exec:{env_vars}CUBOAI_PLAY_STATE={state_file} "
+                f"{py} {playback_script}#{{killsignal=SIGTERM}}",
+            ]
+
     @property
     def is_running(self) -> bool:
         """Whether the go2rtc subprocess is alive. Camera entities consult
@@ -347,9 +360,17 @@ class Go2RTCManager:
         if "streams" not in config:
             config["streams"] = {}
 
-        # Overwrite our streams, keeping any other streams (e.g. from user)
+        # Overwrite our streams, keeping any other streams (e.g. from user).
+        # Drop stale cuboai_* entries first: this file is merged into, not
+        # replaced, so a stream we no longer generate (or one an older version
+        # wrote into the wrong key) would otherwise linger and be served.
+        for key in [k for k in config["streams"] if str(k).startswith("cuboai_")]:
+            if key not in self._streams:
+                _LOGGER.debug("Dropping stale go2rtc stream %s", key)
+                del config["streams"][key]
         for k, v in self._streams.items():
             config["streams"][k] = v
+        _LOGGER.info("go2rtc config written with streams: %s", sorted(self._streams))
 
         def _write():
             os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
@@ -446,3 +467,75 @@ class Go2RTCManager:
             finally:
                 self.process = None
                 _LOGGER.info("go2rtc stopped.")
+
+    # ── DVR playback ──────────────────────────────────────────────────────
+    #
+    # Recorded footage is served the same way as live: a go2rtc `exec:` producer
+    # writing MPEG-TS. The difference is that a playback stream is transient —
+    # it exists for one rewind request — so it is published through go2rtc's
+    # REST API at request time instead of living in go2rtc.yaml.
+
+    def playback_stream_name(self, device_id: str) -> str:
+        """The go2rtc stream name a camera's recorded playback is served on."""
+        return f"cuboai_dvr_{device_id}"
+
+    def playback_rtsp_url(self, device_id: str) -> str:
+        """Where Home Assistant should play the recorded stream from.
+
+        Uses the port go2rtc actually bound, not the configured one: it
+        self-heals to a free port when the configured one is taken (HA's own
+        go2rtc often holds 8555), and pointing at the configured port then
+        reaches nothing — no producer is ever spawned and no frames arrive.
+        This is the same resolution the live camera entity uses.
+        """
+        rtsp_port = (
+            self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
+            or getattr(self, "_rtsp_port", None)
+            or self._options.get("rtsp_port", 8555)
+        )
+        return f"rtsp://127.0.0.1:{rtsp_port}/{self.playback_stream_name(device_id)}"
+
+    async def async_start_playback(self, cam: dict, start_epoch: int, seconds: int) -> str:
+        """Request playback of `start_epoch` (UTC) for `cam`; returns its URL.
+
+        Writes the moment to the camera's state file, which the already-declared
+        DVR producer reads when a viewer connects. Any producer still running
+        for a previous request is stopped first, so the next viewer gets the
+        moment just asked for rather than the tail of the old one.
+        """
+        import json
+
+        dev_id = cam.get("device_id")
+        state_path = self.hass.config.path(f"cuboai_playback_{dev_id}.json")
+        payload = {"start_epoch": int(start_epoch), "seconds": int(seconds)}
+
+        def _write() -> None:
+            with open(state_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+        await self.hass.async_add_executor_job(_write)
+        # Deliberately NOT deleting the stream here. go2rtc's DELETE removes the
+        # stream itself — not just its producer — and this one is declared in
+        # the config, so deleting it made every later request 404 until go2rtc
+        # restarted. go2rtc already starts a fresh producer, which reads the
+        # file just written, when the next viewer connects.
+        _LOGGER.info("Playback requested for %s from %s (%ss)", dev_id, start_epoch, seconds)
+        return self.playback_rtsp_url(dev_id)
+
+    async def async_stop_playback(self, device_id: str) -> None:
+        """Clear a camera's playback request.
+
+        Note this does NOT call go2rtc's DELETE: that removes the declared
+        stream rather than just its producer, and it would then 404 until
+        go2rtc restarted. Removing the state file is enough — the producer
+        stops at end of footage, and without a request it refuses to start.
+        """
+        state_path = self.hass.config.path(f"cuboai_playback_{device_id}.json")
+
+        def _remove() -> None:
+            try:
+                os.remove(state_path)
+            except FileNotFoundError:
+                pass
+
+        await self.hass.async_add_executor_job(_remove)

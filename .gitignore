@@ -28,3 +28,4 @@ Thumbs.db
 
 # Scripts with sensitive data (API tokens, etc.)
 scripts/
+.venv-test/
