@@ -250,9 +250,18 @@ def test_a_sentence_note_is_shortened_for_the_state(monkeypatch):
     the em dash becomes the state; the whole thing stays in attributes."""
     long_note = "out of crib (caregiver?) — opaque firmware activity bit; app only uses it to tint"
     s = _make_sensor(
-        {"wellbeing": {"value": 0, "age_s": 30.0, "available": True,
-                       "stale": False, "note": long_note, "ts_utc": None}},
-        monkeypatch, field="wellbeing",
+        {
+            "wellbeing": {
+                "value": 0,
+                "age_s": 30.0,
+                "available": True,
+                "stale": False,
+                "note": long_note,
+                "ts_utc": None,
+            }
+        },
+        monkeypatch,
+        field="wellbeing",
     )
     assert s.native_value == "out of crib (caregiver?)"
     assert s.extra_state_attributes["note"] == long_note
