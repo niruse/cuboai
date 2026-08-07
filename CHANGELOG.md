@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0]
+
+### Added
+- **Play back the camera's own recordings, in the card you already have.** The
+  camera records to its own storage; this reads it back with no cloud
+  subscription. A scrub bar under the picture covers the retention window
+  (about two days — measured, not taken from the docs: 48h back returns
+  footage, 56h does not), with a date/time field for an exact moment and
+  -1m/-10s/+10s/+1m buttons for seconds, because iOS renders `datetime-local`
+  as a wheel with no seconds whatever `step` says. Releasing the playhead
+  swaps the picture in place and a LIVE button brings it back — no second card
+  on the dashboard. Also available as the `cuboai.play_recording` service,
+  which takes "10m"/"2h"/"3d" or an absolute time.
+- **A timeline card** (`custom:cuboai-timeline-card`): one row per sensor on a
+  single shared axis with hour gridlines, which `history-graph` cannot do — it
+  gives every entity its own strip and its own axis, so you cannot see that a
+  noise spike and the baby leaving the crib were the same moment. Takes a clock
+  window (`from`/`to`, spanning midnight), a multi-day span, or the last N
+  hours. Tap a bar for its times, tap a row's icon for the sensor.
+- **A five-tab example dashboard** — Live, Nighttime, Daytime, Summary, Alerts —
+  with a `history_stats` package computing time in crib, time out of it, number
+  of sleeps and camera-blind time for each window. The three report tabs
+  deliberately measure the same things and differ only in the period covered.
+  CuboAI keeps its own Total Sleep, Wake-ups and routine chart behind its paid
+  tier, so these are computed locally from the DVR history instead.
+- **DVR history sensors** — baby present, motion, noise and privacy from the
+  camera's on-board log, each carrying its own age so a stale reading is
+  withheld rather than shown as current.
+
+### Fixed
+- **The DVR history sensors reported `unknown` instead of their value.** A
+  reading the library has no phrase for was suppressed; `baby_present` reads 0
+  whenever a room is empty, and 0 is absent from a map covering only 1 "in crib"
+  and 2 "not in crib", so the entity sat at `unknown` for a day at a time. That
+  is indistinguishable from a broken sensor, cannot be charted and cannot mark
+  up a timeline. The number is reported now; a phrase still wins where one
+  exists, and a stale reading is still withheld.
+
+### Notes
+- The example dashboard ships with placeholder entity ids. Replace them with
+  your own or nothing will render — see the README.
+- Playback needs the camera's own storage; retention varies with the card and
+  how much motion there was.
+
 ## [2.4.11]
 
 ### Fixed
