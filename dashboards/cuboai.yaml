@@ -167,6 +167,16 @@ views:
                 color: "#5e5ce6"
               # An empty chart and a camera that was offline look identical
               # without this row.
+              # Upstream's own phrase for 0 carries a question mark, and so
+              # does this label. It is the only field that plausibly matches the
+              # app's "Caregiver visit" series; whether it really does is
+              # settled by one night when you know you went in, not by naming it
+              # confidently on a chart.
+              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
+                label: Caregiver?
+                icon: mdi:account-child
+                match: out of crib (caregiver?)
+                color: "#d67ab1"
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv
@@ -262,6 +272,16 @@ views:
                 color: "#5e5ce6"
               # An empty chart and a camera that was offline look identical
               # without this row.
+              # Upstream's own phrase for 0 carries a question mark, and so
+              # does this label. It is the only field that plausibly matches the
+              # app's "Caregiver visit" series; whether it really does is
+              # settled by one night when you know you went in, not by naming it
+              # confidently on a chart.
+              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
+                label: Caregiver?
+                icon: mdi:account-child
+                match: out of crib (caregiver?)
+                color: "#d67ab1"
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv
@@ -344,6 +364,16 @@ views:
                 icon: mdi:volume-high
                 above: 26
                 color: "#5e5ce6"
+              # Upstream's own phrase for 0 carries a question mark, and so
+              # does this label. It is the only field that plausibly matches the
+              # app's "Caregiver visit" series; whether it really does is
+              # settled by one night when you know you went in, not by naming it
+              # confidently on a chart.
+              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
+                label: Caregiver?
+                icon: mdi:account-child
+                match: out of crib (caregiver?)
+                color: "#d67ab1"
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv

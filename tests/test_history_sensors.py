@@ -222,14 +222,41 @@ def test_missing_history_block_does_not_raise(monkeypatch):
     assert s.native_value is None
 
 
-def test_opaque_fields_are_not_exposed_as_entities(monkeypatch):
-    """`wellbeing`/`baby_event` are documented upstream as an opaque UI-tint bit
-    and an effectively-never-firing flag — exposing them would invent meaning."""
+def test_only_the_never_firing_field_stays_unexposed(monkeypatch):
+    """`baby_event` is documented upstream as effectively never firing, and a
+    sensor that never changes is noise.
+
+    `wellbeing` used to be excluded alongside it, on the reasoning that
+    exposing an opaque bit invents meaning. That was backwards. It is the only
+    field that plausibly corresponds to the app's "Caregiver visit" series, and
+    leaving it out guaranteed it could never be checked against a night when
+    someone knew they went in. It is recorded now, with its uncertainty kept in
+    the value -- upstream's own phrase for 0 is "out of crib (caregiver?)",
+    question mark included, and the state keeps it. Inventing meaning would be
+    labelling it "Caregiver visit"; recording it is what makes that claim
+    testable later.
+    """
 
     _make_sensor({}, monkeypatch)
     module = sys.modules["cuboai_pkg.sensor"]
     fields = {f for f, _, _, _ in module.HISTORY_SENSORS}
-    assert fields == {"baby_present", "noise", "motion", "privacy"}
+    assert fields == {"baby_present", "noise", "motion", "privacy", "wellbeing"}
+    assert "baby_event" not in fields
+
+
+def test_a_sentence_note_is_shortened_for_the_state(monkeypatch):
+    """wellbeing's note is a full sentence about firmware tinting. A state has
+    a 255-character limit and is read at a glance, so only the phrase before
+    the em dash becomes the state; the whole thing stays in attributes."""
+    long_note = "out of crib (caregiver?) — opaque firmware activity bit; app only uses it to tint"
+    s = _make_sensor(
+        {"wellbeing": {"value": 0, "age_s": 30.0, "available": True,
+                       "stale": False, "note": long_note, "ts_utc": None}},
+        monkeypatch, field="wellbeing",
+    )
+    assert s.native_value == "out of crib (caregiver?)"
+    assert s.extra_state_attributes["note"] == long_note
+    assert s.extra_state_attributes["raw_value"] == 0
 
 
 def test_unlabelled_baby_present_reports_its_number(monkeypatch):

@@ -1152,10 +1152,17 @@ class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
 
 
 #: DVR-history sensors: (payload field, display label, unit, labelled).
-#: `wellbeing` and `baby_event` are deliberately omitted — upstream documents
-#: the first as an opaque firmware bit the app only uses for a UI tint, and the
-#: second as effectively never firing. Exposing either would invent meaning the
-#: data does not carry.
+#: `baby_event` stays omitted — upstream documents it as effectively never
+#: firing, and a sensor that is always the same value is noise.
+#:
+#: `wellbeing` IS exposed, with its uncertainty carried in the value rather
+#: than hidden by leaving it out. Upstream calls it an opaque firmware activity
+#: bit and maps 0 to "out of crib (caregiver?)" — with that question mark,
+#: which is why the state keeps it. It is the only field that plausibly
+#: corresponds to the app's "Caregiver visit" series, and it cannot be
+#: confirmed without a night where someone knows they went in. Recording it is
+#: what makes that comparison possible; asserting it means "caregiver" on a
+#: chart would be the same mistake `baby_present`'s undocumented 0 already was.
 #:
 #: `labelled` marks a field whose raw number means nothing on its own: the
 #: library maps it to a phrase ('in crib', 'still', 'recording'). If a value
@@ -1166,6 +1173,7 @@ class CuboCrySensitivitySensor(CoordinatorEntity, SensorEntity):
 #: it documents only 1='in crib' and 2='not in crib'.)
 HISTORY_SENSORS = (
     ("baby_present", "Baby Present", None, True),
+    ("wellbeing", "Caregiver Activity", None, True),
     ("noise", "Noise Level", None, False),
     ("motion", "Motion", None, True),
     ("privacy", "Privacy Mode", None, True),
@@ -1224,7 +1232,11 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
         reading = self._reading
         note = reading.get("note")
         if note:
-            return note
+            # Notes come as "short phrase — longer explanation"; wellbeing's
+            # runs to a full sentence about firmware tinting, which is no use
+            # as a state and would blow past Home Assistant's 255-char limit
+            # for a longer one. The explanation stays in `note`.
+            return note.split(" — ")[0].strip()
         # A value the camera reports confidently, for which the library has no
         # phrase, is still a value. Reporting unknown instead was wrong in a
         # way that only showed up against real history: baby_present reads 0
@@ -1245,6 +1257,7 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
             "age_seconds": reading.get("age_s"),
             "measured_at": reading.get("ts_utc"),
             "stale": reading.get("stale"),
+            "note": reading.get("note"),
             "source": "camera DVR history (~1 min lag)",
         }
 
