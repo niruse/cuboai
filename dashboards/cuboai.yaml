@@ -1,4 +1,4 @@
-# CuboAI dashboard — three tabs.
+# CuboAI dashboard — Live, Nighttime, Daytime, Summary, Alerts.
 #
 # YAML mode: edit this file, then reload from the dashboard's ⋮ menu.
 #
@@ -73,25 +73,96 @@ views:
           - type: media-control
             entity: media_player.cuboai_mia_mia_lullaby
 
-  # ── History ─────────────────────────────────────────────────────────────
-  # What the room did, from readings that are genuinely recorded. Pair this
-  # with the scrub bar on the Live tab: find the hour here, watch it there.
-  - title: History
-    path: history
-    icon: mdi:chart-timeline-variant
+  # ── Nighttime ───────────────────────────────────────────────────────────
+  # 19:00 to 07:00. The app's own version of this page is paywalled, so every
+  # figure here is computed from recorded baby_present readings instead.
+  - title: Nighttime
+    path: night
+    icon: mdi:weather-night
     type: sections
     max_columns: 2
     sections:
       - type: grid
         cards:
           - type: heading
-            heading: Was anyone in the room
+            heading: Last night · 19:00–07:00
             heading_style: title
 
-          # 0 = empty room, 1 = in crib, 2 = not in crib. Recorded properly
-          # only since the sensor stopped reporting every reading as unknown.
+          - type: tile
+            entity: sensor.mia_night_in_crib
+            name: In crib
+            color: indigo
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_night_out_of_crib
+                name: Out of crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_night_out_of_crib_count
+                name: Times out
+                vertical: true
+
+          # A night the camera spent offline and a night the baby spent
+          # elsewhere both read as 0 hours in crib. This is what tells them
+          # apart, so it sits next to the figure it qualifies.
+          - type: conditional
+            conditions:
+              - condition: numeric_state
+                entity: sensor.mia_night_no_reading
+                above: 0.5
+            card:
+              type: markdown
+              content: >
+                ⚠️ The camera had no reading for
+                {{ states('sensor.mia_night_no_reading') }} h of this window,
+                so the figures above cover only part of the night.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Through the night
+            heading_style: title
+
+          # One row per thing being watched, all on ONE shared axis with the
+          # same hour gridlines. history-graph gives each entity its own strip
+          # and its own axis, so you cannot see that the noise spike and the
+          # baby leaving the crib were the same moment.
+          - type: custom:cuboai-timeline-card
+            title: Last night
+            hours: 14
+            rows:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Out of crib
+                icon: mdi:baby-carriage
+                match: not in crib
+                color: "#e9c46a"
+              # Drawn on purpose: an empty room and a camera that stopped
+              # answering both leave the two rows above blank.
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Empty room
+                icon: mdi:door-open
+                match: "0"
+                color: "#6c757d"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise
+                icon: mdi:volume-high
+                above: 30
+                color: "#5e5ce6"
+
           - type: history-graph
-            hours_to_show: 24
+            hours_to_show: 14
             entities:
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
                 name: Baby present
@@ -99,32 +170,165 @@ views:
                 name: Motion
 
           - type: history-graph
-            hours_to_show: 24
+            hours_to_show: 14
             entities:
               - entity: sensor.cuboai_mia_cuboai_noise_level_mia
-                name: Noise level
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Room conditions
-            heading_style: title
+                name: Noise
 
           - type: history-graph
-            hours_to_show: 24
+            hours_to_show: 14
             entities:
               - entity: sensor.cuboai_mia_cuboai_temperature_mia
                 name: Temperature
               - entity: sensor.cuboai_mia_cuboai_humidity_mia
                 name: Humidity
 
+  # ── Daytime ─────────────────────────────────────────────────────────────
+  - title: Daytime
+    path: day
+    icon: mdi:white-balance-sunny
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Today · 07:00–19:00
+            heading_style: title
+
+          - type: tile
+            entity: sensor.mia_day_in_crib
+            name: In crib
+            color: amber
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_day_out_of_crib
+                name: Out of crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_day_naps
+                name: Naps
+                vertical: true
+
+          - type: conditional
+            conditions:
+              - condition: numeric_state
+                entity: sensor.mia_day_no_reading
+                above: 0.5
+            card:
+              type: markdown
+              content: >
+                ⚠️ The camera had no reading for
+                {{ states('sensor.mia_day_no_reading') }} h of this window,
+                so the figures above cover only part of the day.
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Through the day
+            heading_style: title
+
+          # One row per thing being watched, all on ONE shared axis with the
+          # same hour gridlines. history-graph gives each entity its own strip
+          # and its own axis, so you cannot see that the noise spike and the
+          # baby leaving the crib were the same moment.
+          - type: custom:cuboai-timeline-card
+            title: Today
+            hours: 12
+            rows:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Out of crib
+                icon: mdi:baby-carriage
+                match: not in crib
+                color: "#e9c46a"
+              # Drawn on purpose: an empty room and a camera that stopped
+              # answering both leave the two rows above blank.
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Empty room
+                icon: mdi:door-open
+                match: "0"
+                color: "#6c757d"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise
+                icon: mdi:volume-high
+                above: 30
+                color: "#5e5ce6"
+
           - type: history-graph
-            hours_to_show: 24
+            hours_to_show: 12
             entities:
-              - entity: sensor.cuboai_mia_cuboai_mat_bpm_mia
-                name: Mat reading
-              - entity: sensor.cuboai_mia_cuboai_mat_battery_mia
-                name: Mat battery
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                name: Baby present
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                name: Motion
+
+          - type: history-graph
+            hours_to_show: 12
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                name: Noise
+
+  # ── Summary ─────────────────────────────────────────────────────────────
+  - title: Summary
+    path: summary
+    icon: mdi:chart-box-outline
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Last 7 days
+            heading_style: title
+
+          - type: tile
+            entity: sensor.mia_week_in_crib
+            name: Total in crib
+            color: indigo
+
+          - type: tile
+            entity: sensor.mia_average_day_in_crib
+            name: Average per day
+
+          # Divided by seven days, not by the days that happen to hold data,
+          # so downtime pulls the average down instead of being averaged away.
+          # This is the number that says how much to trust the one above it.
+          - type: tile
+            entity: sensor.mia_week_coverage
+            name: Camera coverage
+            color: green
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: The week
+            heading_style: title
+
+          - type: history-graph
+            hours_to_show: 168
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                name: Baby present
+
+          - type: history-graph
+            hours_to_show: 168
+            entities:
+              - entity: sensor.cuboai_mia_cuboai_temperature_mia
+                name: Temperature
+              - entity: sensor.cuboai_mia_cuboai_humidity_mia
+                name: Humidity
 
   # ── Alerts ──────────────────────────────────────────────────────────────
   - title: Alerts

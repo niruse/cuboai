@@ -2641,3 +2641,244 @@ if (!window.customCards.some(c => c.type === 'cuboai-camera-card')) {
   });
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CuboAI timeline card — a swimlane chart, one row per thing being watched.
+//
+// Home Assistant's history-graph gives each entity its own strip and its own
+// axis, which is unreadable for "what happened last night": you cannot see that
+// the noise spike and the baby leaving the crib were the same moment. This puts
+// every row on ONE shared axis with hour gridlines, the way the CuboAI app's
+// own sleep chart does — except the app's is behind its paid tier, and this is
+// drawn from readings Home Assistant already records for free.
+//
+// It lives in this file rather than its own because the integration registers
+// exactly one dashboard resource. A second file would need new plumbing and
+// would silently 404 on every install that has not had it added.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class CuboAITimelineCard extends HTMLElement {
+  setConfig(config) {
+    if (!config || !Array.isArray(config.rows) || !config.rows.length) {
+      throw new Error("cuboai-timeline-card: 'rows' is required");
+    }
+    this._config = config;
+    this._hours = Number(config.hours) || 14;
+    this._rows = config.rows;
+  }
+
+  getCardSize() {
+    return 2 + this._rows.length;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    // Hours of history is a websocket round trip against the recorder.
+    // Refetching on every state tick would hammer it and make the card blink.
+    const now = Date.now();
+    if (this._fetchedAt && now - this._fetchedAt < 60000) return;
+    this._fetchedAt = now;
+    this._load();
+  }
+
+  disconnectedCallback() {
+    this._fetchedAt = 0;
+  }
+
+  async _load() {
+    const end = new Date();
+    const start = new Date(end.getTime() - this._hours * 3600 * 1000);
+    const ids = [...new Set(this._rows.map((r) => r.entity))];
+    try {
+      const history = await this._hass.callWS({
+        type: "history/history_during_period",
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: ids,
+        minimal_response: true,
+        no_attributes: true,
+      });
+      this._render(history, start, end, null);
+    } catch (err) {
+      this._render(null, start, end, (err && err.message) || "History unavailable");
+    }
+  }
+
+  // Turn one row's history into the spans where its test passes.
+  //
+  // Recorder points carry the moment a state BEGAN, so a span runs from a
+  // matching point to the NEXT point of any kind. Running it to the next
+  // *matching* point instead would swallow every gap between them and draw one
+  // continuous block across a night the baby spent half out of the crib.
+  _spans(row, points, start, end) {
+    const spans = [];
+    const at = (p) => (p.lu !== undefined ? p.lu * 1000 : Date.parse(p.last_changed));
+    const value = (p) => (p.s !== undefined ? p.s : p.state);
+    const matches = (v) => {
+      if (v === undefined || v === null) return false;
+      // A gap in the data is not a negative reading, and must not be drawn as
+      // one — that is the difference between "not in the crib" and "no idea".
+      if (v === "unavailable" || v === "unknown") return false;
+      if (row.above !== undefined) return Number(v) >= Number(row.above);
+      const want = Array.isArray(row.match) ? row.match : [row.match];
+      return want.some((w) => String(w) === String(v));
+    };
+
+    let open = null;
+    for (const p of points) {
+      const t = Math.max(at(p), start.getTime());
+      if (matches(value(p))) {
+        if (open === null) open = t;
+      } else if (open !== null) {
+        spans.push({ from: open, to: t });
+        open = null;
+      }
+    }
+    if (open !== null) spans.push({ from: open, to: end.getTime() });
+    return spans;
+  }
+
+  _shell() {
+    if (this._card) return this._body;
+    this._card = document.createElement("ha-card");
+    const style = document.createElement("style");
+    style.textContent = `
+      .tl-wrap { padding: 4px 12px 14px; }
+      .tl-row { display: flex; align-items: center; gap: 10px; height: 30px; }
+      .tl-ico { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 50%;
+                display: flex; align-items: center; justify-content: center;
+                --mdc-icon-size: 16px; color: #fff; }
+      .tl-track { position: relative; flex: 1 1 auto; height: 22px;
+                  border-radius: 4px; background: rgba(127,127,127,.10);
+                  overflow: hidden; min-width: 0; }
+      .tl-seg { position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
+                min-width: 2px; }
+      /* Gridlines are drawn inside every track at the same offsets. That
+         alignment down the column is the entire point of the card. */
+      .tl-grid { position: absolute; top: 0; bottom: 0; width: 1px;
+                 background: rgba(127,127,127,.25); }
+      .tl-axis { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+      .tl-axis .tl-ico { visibility: hidden; }
+      .tl-ticks { position: relative; flex: 1 1 auto; height: 16px; min-width: 0; }
+      .tl-tick { position: absolute; top: 0; font-size: 11px;
+                 color: var(--secondary-text-color); transform: translateX(-50%);
+                 white-space: nowrap; }
+      .tl-note { font-size: 12px; color: var(--secondary-text-color);
+                 padding: 6px 0 0 36px; }
+    `;
+    this._body = document.createElement("div");
+    this._body.className = "tl-wrap";
+    this._card.appendChild(style);
+    this._card.appendChild(this._body);
+    this.appendChild(this._card);
+    return this._body;
+  }
+
+  _render(history, start, end, error) {
+    const body = this._shell();
+    this._card.header = this._config.title || undefined;
+    body.textContent = "";
+
+    if (error) {
+      const p = document.createElement("div");
+      p.className = "tl-note";
+      p.textContent = error;
+      body.appendChild(p);
+      return;
+    }
+
+    const span = end.getTime() - start.getTime();
+    const pct = (t) => ((t - start.getTime()) / span) * 100;
+
+    // Hour marks, at whatever spacing keeps them from colliding.
+    const step = span > 20 * 3600e3 ? 6 : span > 10 * 3600e3 ? 3 : 1;
+    const marks = [];
+    const first = new Date(start);
+    first.setMinutes(0, 0, 0);
+    for (let t = first.getTime(); t <= end.getTime(); t += 3600e3) {
+      if (t < start.getTime()) continue;
+      if (new Date(t).getHours() % step) continue;
+      marks.push(t);
+    }
+
+    let drew = 0;
+    for (const row of this._rows) {
+      const line = document.createElement("div");
+      line.className = "tl-row";
+
+      const ico = document.createElement("div");
+      ico.className = "tl-ico";
+      ico.style.background = row.color || "#5e5ce6";
+      const icon = document.createElement("ha-icon");
+      icon.setAttribute("icon", row.icon || "mdi:circle-small");
+      ico.appendChild(icon);
+      ico.title = row.label || row.entity;
+      line.appendChild(ico);
+
+      const track = document.createElement("div");
+      track.className = "tl-track";
+      for (const t of marks) {
+        const g = document.createElement("div");
+        g.className = "tl-grid";
+        g.style.left = pct(t) + "%";
+        track.appendChild(g);
+      }
+
+      const points = (history && history[row.entity]) || [];
+      for (const s of this._spans(row, points, start, end)) {
+        const seg = document.createElement("div");
+        seg.className = "tl-seg";
+        seg.style.left = pct(s.from) + "%";
+        // A one-minute event across fourteen hours is 0.1% wide and invisible,
+        // so every span gets a floor it can actually be seen and tapped at.
+        seg.style.width = Math.max(pct(s.to) - pct(s.from), 0.6) + "%";
+        seg.style.background = row.color || "#5e5ce6";
+        const fmt = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        seg.title = `${row.label || row.entity}: ${fmt(new Date(s.from))}–${fmt(new Date(s.to))}`;
+        track.appendChild(seg);
+        drew++;
+      }
+      line.appendChild(track);
+      body.appendChild(line);
+    }
+
+    const axis = document.createElement("div");
+    axis.className = "tl-axis";
+    const spacer = document.createElement("div");
+    spacer.className = "tl-ico";
+    axis.appendChild(spacer);
+    const ticks = document.createElement("div");
+    ticks.className = "tl-ticks";
+    for (const t of marks) {
+      const lab = document.createElement("div");
+      lab.className = "tl-tick";
+      lab.style.left = pct(t) + "%";
+      lab.textContent = String(new Date(t).getHours()).padStart(2, "0");
+      ticks.appendChild(lab);
+    }
+    axis.appendChild(ticks);
+    body.appendChild(axis);
+
+    // An empty chart and a broken one look identical otherwise.
+    if (!drew) {
+      const p = document.createElement("div");
+      p.className = "tl-note";
+      p.textContent = "Nothing recorded in this window.";
+      body.appendChild(p);
+    }
+  }
+}
+
+if (!customElements.get("cuboai-timeline-card")) {
+  customElements.define("cuboai-timeline-card", CuboAITimelineCard);
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((c) => c.type === "cuboai-timeline-card")) {
+  window.customCards.push({
+    type: "cuboai-timeline-card",
+    name: "CuboAI Timeline",
+    description: "One row per sensor, all on a single shared time axis.",
+  });
+}
