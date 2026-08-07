@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.6.0]
 
 ### Fixed
 - **A camera is opened once now, however many things are watching (issue #85).**
