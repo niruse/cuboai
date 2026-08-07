@@ -226,6 +226,249 @@ Once the card is on your dashboard, you have full control over the camera direct
 
 ---
 
+## ⏪ Recorded Playback (on-camera DVR)
+
+The camera records to its own storage. This integration can play that footage
+back **inside the card you already have** — no cloud subscription, and no second
+card on your dashboard.
+
+Retention is roughly **two days**, but it varies with the SD card and how much
+motion there was. Measured on one camera, one request an hour: 48 h back
+returned footage, 56 h did not. Requests older than the bar's span are refused
+with a message rather than left to time out.
+
+### Using it
+
+A scrub bar sits under the picture, with a time field and fine-adjust buttons:
+
+```
+Live                                            ● LIVE
+────────┬────────┬────────┬────────┬────────┬────────
+      Wed 18   Thu 00   Thu 06   Thu 12   Thu 18
+                    ▲ drag
+[ 06/08/2026 02:00:00 ]                         [ Go ]
+[  -1m  ][  -10s  ][  +10s  ][  +1m  ]
+```
+
+| Control | For |
+|---|---|
+| **The bar** | The rough moment. Two days across a phone is about 8 minutes per pixel. |
+| **Time field + Go** | An exact date, hour and minute. |
+| **−1m / −10s / +10s / +1m** | Seconds. iOS renders `datetime-local` as a wheel with no seconds whatever `step` says, so these exist on every platform. Taps are debounced, so four taps are one seek. |
+| **● LIVE** | Back to the live stream. |
+
+Releasing the playhead plays 15 minutes from that point, in the same card. The
+picture switches back to live when you press LIVE.
+
+### Card options
+
+```yaml
+type: custom:cuboai-camera-card
+# Everything below is optional.
+show_timeline: true          # false hides the scrub bar entirely
+timeline_hours: 48           # span of the bar; match your camera's retention
+timeline_play_seconds: 900   # how much footage one request plays
+```
+
+### The service
+
+Playback is also a service, so automations and scripts can use it:
+
+```yaml
+service: cuboai.play_recording
+data:
+  device_id: CB02XXXXXXXXXXXX
+  start_time: "10m"          # "90s", "10m", "2h", "3d" — or an absolute time
+  duration: 900
+```
+
+`start_time` accepts a relative amount ago or an absolute date/time. A naive
+string like `2026-08-06 02:00:00` is read in **your** timezone.
+
+```yaml
+# Show the last ten minutes on a wall tablet when the doorbell rings.
+automation:
+  - alias: Rewind the nursery on doorbell
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.doorbell
+        to: "on"
+    actions:
+      - action: cuboai.play_recording
+        data:
+          device_id: CB02XXXXXXXXXXXX
+          start_time: "10m"
+          duration: 600
+```
+
+A second camera entity, `camera.<baby>_recording`, carries the playback stream.
+You do **not** need to put it on a dashboard — the card drives it for you. It
+idles with no picture until something asks for a moment.
+
+---
+
+## 📈 Sleep windows and the timeline chart
+
+CuboAI keeps Total Sleep, Wake-ups, Longest Sleep and the sleep-routine chart
+behind its paid tier — the app renders them as *"Report Preview — Activate
+Ultimate to see more"*. This integration cannot fetch them either.
+
+What the camera **does** give away for free is its DVR history, including
+`baby_present`. Recorded by Home Assistant, that supports a comparable set of
+figures, computed locally.
+
+### The timeline card
+
+`history-graph` gives every entity its own strip and its own axis, so you
+cannot see that a noise spike and the baby leaving the crib were the same
+moment. This card puts every row on **one shared axis**:
+
+```yaml
+type: custom:cuboai-timeline-card
+title: Last night
+from: "19:00"        # a clock window; `to` at or before `from` spans midnight
+to: "07:00"
+rows:
+  - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+    label: In crib
+    icon: mdi:sleep
+    match: in crib
+    color: "#2a9d8f"
+  - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+    label: Not in crib
+    icon: mdi:baby-carriage
+    match: ["not in crib", "0"]     # a list matches any of them
+    color: "#e9c46a"
+  - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+    label: Noise over 26
+    icon: mdi:volume-high
+    above: 26                       # numeric rows use a threshold
+    color: "#5e5ce6"
+```
+
+| Option | Meaning |
+|---|---|
+| `from` / `to` | A clock window. Always the most recently **started** one, so a Night card keeps showing last night all through the next day. An unfinished window keeps its full width and fetches only up to now. |
+| `days: 7` | A multi-day span ending now. Marks switch to one per day past 48 h. |
+| `hours: 14` | The last N hours ending now. |
+| `match` | A state string, or a list of them. |
+| `above` | For numeric sensors: shade wherever the value is at or above this. |
+
+Tap a bar for what it is and how long it lasted; tap a row's icon to open that
+sensor. Each lane's share of the window is shown in the legend — that number is
+what makes one period visibly different from another.
+
+Two behaviours worth knowing: `unavailable` and `unknown` are **never** drawn as
+a negative reading (the difference between "not in the crib" and "no idea"), and
+a span runs from a matching reading to the next reading of any kind, so gaps are
+not swallowed into one long block.
+
+### The figures
+
+`packages/cuboai_sleep.yaml` in this repo builds the same four metrics for
+three windows using Home Assistant's built-in `history_stats`:
+
+| Metric | Night 19:00–07:00 | Day 07:00–19:00 | Week |
+|---|---|---|---|
+| Time in crib | ✅ | ✅ | ✅ |
+| Time not in crib | ✅ | ✅ | ✅ |
+| Number of sleeps | ✅ | ✅ | ✅ |
+| Time the sensor said nothing | ✅ | ✅ | ✅ |
+
+Plus, for the week, an average day and a **coverage** percentage saying how much
+of the total to believe.
+
+Two things it is careful about, both learned the hard way:
+
+- **It matches state strings, not raw numbers.** The sensor reports the
+  library's phrase where it has one, so `1` surfaces as `in crib` and `2` as
+  `not in crib`. Matching `"1"` silently measures nothing.
+- **`0` is treated as "not in the crib".** What `0` means is not documented
+  upstream — only 1 and 2 are — but it holds steady while a room is empty.
+  It is *not* treated as "the camera said nothing": those readings arrive fresh
+  and available. Genuine blindness is `unavailable`/`unknown` and is measured
+  separately, so an empty room is never reported as camera downtime. Note that a
+  Home Assistant restart also makes entities unavailable, so restarts count
+  toward it.
+
+---
+
+## 🗂️ Installing the full dashboard
+
+The repo ships a five-tab dashboard — **Live · Nighttime · Daytime · Summary ·
+Alerts** — as a worked example.
+
+> **The example uses the entity IDs of a camera named `mia`.** Yours will differ.
+> Open Developer Tools → States, filter for `cuboai`, and replace `mia`
+> throughout both files with your own. Nothing will render until you do.
+
+**1. Copy both files into your config.**
+
+```bash
+# from the repo
+cp dashboards/cuboai.yaml            /config/dashboards/cuboai.yaml
+cp dashboards/packages/cuboai_sleep.yaml /config/packages/cuboai_sleep.yaml
+```
+
+**2. Enable packages** (skip if you already have them) in `configuration.yaml`:
+
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+**3. Register the dashboard** in `configuration.yaml`:
+
+```yaml
+lovelace:
+  dashboards:
+    cuboai-dashboard:
+      mode: yaml
+      title: CuboAI
+      icon: mdi:baby-face-outline
+      show_in_sidebar: true
+      filename: dashboards/cuboai.yaml
+```
+
+**4. Check the config before restarting** — Developer Tools → YAML → *Check
+configuration*, or:
+
+```bash
+ha core check
+```
+
+**5. Restart Home Assistant.** A restart is required: packages and YAML
+dashboards are only read at startup.
+
+**6. Hard-refresh the browser** (Ctrl+Shift+R, or force-close the Companion
+app). The card is cached, and a stale copy is the most common reason a change
+appears not to have landed.
+
+### What each tab holds
+
+| Tab | Contents |
+|---|---|
+| **Live** | The camera card with the scrub bar, current temperature / humidity / noise, presence, and the controls. |
+| **Nighttime** | 19:00–07:00: the four figures, and the timeline for that window. |
+| **Daytime** | 07:00–19:00: the same four figures, same lanes. |
+| **Summary** | The last 7 days, plus average day and coverage. |
+| **Alerts** | The latest alert, recent alerts with thumbnails, and what the camera is watching for. |
+
+The three report tabs deliberately measure **the same things** and differ only in
+the period they cover — otherwise they cannot be compared with one another.
+
+### If a tab looks empty
+
+- `In crib` stays at zero until the camera has actually reported someone in the
+  crib. An empty room is a reading, not a fault.
+- Every window also publishes how long the sensor said *nothing*. If that is
+  large, the figures beside it cover only part of the window — an offline camera
+  and an empty room otherwise look identical.
+- The `Camera online` lane on the chart exists for the same reason.
+
+
+---
+
 ## 🛠️ Troubleshooting
 
 ### Debug logs
