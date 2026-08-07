@@ -100,8 +100,8 @@ views:
                 name: Not in crib
                 vertical: true
               - type: tile
-                entity: sensor.mia_night_out_of_crib_count
-                name: Times out
+                entity: sensor.mia_night_sleeps
+                name: Sleeps
                 vertical: true
 
           # A night the camera spent offline and a night the baby spent
@@ -198,8 +198,8 @@ views:
                 name: Not in crib
                 vertical: true
               - type: tile
-                entity: sensor.mia_day_naps
-                name: Naps
+                entity: sensor.mia_day_sleeps
+                name: Sleeps
                 vertical: true
 
           - type: conditional
@@ -283,8 +283,19 @@ views:
 
           - type: tile
             entity: sensor.mia_week_in_crib
-            name: Total in crib
+            name: In crib
             color: indigo
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.mia_week_out_of_crib
+                name: Not in crib
+                vertical: true
+              - type: tile
+                entity: sensor.mia_week_sleeps
+                name: Sleeps
+                vertical: true
 
           - type: tile
             entity: sensor.mia_average_day_in_crib

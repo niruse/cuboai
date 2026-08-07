@@ -6,23 +6,34 @@
 # from the one reading the camera does give away for free: the DVR history's
 # baby_present field, recorded by Home Assistant.
 #
-# The states matched below are the sensor's STATE STRINGS, not the raw numbers.
-# The sensor reports the library's phrase whenever it has one, so 1 surfaces as
+# THE SAME FOUR METRICS FOR EVERY WINDOW. The three tabs differ only in the
+# period they cover, so they must not differ in what they measure — Night used
+# to count spells out of the crib while Day counted naps and the week counted
+# neither, which made the tabs impossible to compare with each other. Anything
+# added below should be added to all three.
+#
+#   in crib      time the camera reported the baby in the crib
+#   out of crib  time it reported anything else it was sure of (see below)
+#   sleeps       how many separate spells in the crib
+#   no reading   time the sensor was unavailable or unknown
+#
+# The states matched are the sensor's STATE STRINGS, not the raw numbers. The
+# sensor reports the library's phrase whenever it has one, so 1 surfaces as
 # "in crib" and 2 as "not in crib"; an unmapped value stays a bare number.
 # Matching on "1" here would silently measure nothing.
 #
-# What 0 means is NOT documented anywhere upstream -- the library maps only 1
-# and 2. It is treated here as "not in the crib", on the evidence that the
-# field sat at 0 continuously across a period when the house was empty and the
-# baby was demonstrably not in the crib. So "not in crib" below matches both 2
-# and 0, which is what makes the figure match reality rather than reading 0h
-# through an entire day out.
+# What 0 means is NOT documented upstream -- the library maps only 1 and 2. It
+# is treated as "not in the crib", on the evidence that the field sat at 0
+# continuously across a period when the house was empty and the baby was
+# demonstrably not in the crib. Matching only 2 reported 0h through an entire
+# day out.
 #
-# It is deliberately NOT treated as "the camera said nothing". The readings
-# carrying 0 arrive fresh and available, so the camera is answering. Genuine
-# blindness is `unavailable`/`unknown`, and that is measured separately below
-# -- conflating the two was a real error in the first version of this file: it
-# reported an empty room as camera downtime and warned about it on screen.
+# It is deliberately NOT treated as "the camera said nothing". Readings carrying
+# 0 arrive fresh and available, so the camera is answering. Genuine blindness is
+# `unavailable`/`unknown` and is measured separately -- conflating the two was a
+# real error here once: it reported an empty room as camera downtime and warned
+# about it on screen. Note that a Home Assistant restart also makes every entity
+# unavailable, so restarts count toward it.
 #
 # Windows are fixed and predictable rather than derived from when the baby
 # actually settled: night is 19:00 to 07:00, day is 07:00 to 19:00. After 19:00
@@ -48,22 +59,14 @@ sensor:
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
 
-  # Every separate spell out of the crib. The closest honest stand-in for the
-  # app's "Wake-ups": it counts leaving the crib, not waking up in it.
   - platform: history_stats
-    name: Mia night out of crib count
+    name: Mia night sleeps
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state:
-      - "not in crib"
-      - "0"
+    state: "in crib"
     type: count
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
 
-  # How long the camera genuinely said nothing -- unavailable or unknown, not
-  # a 0 reading. Published on purpose: without it a night the camera spent
-  # offline is indistinguishable from a night the baby spent elsewhere, and
-  # both read as 0 hours in crib.
   - platform: history_stats
     name: Mia night no reading
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
@@ -94,7 +97,7 @@ sensor:
     end: "{{ today_at('19:00') }}"
 
   - platform: history_stats
-    name: Mia day naps
+    name: Mia day sleeps
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
     state: "in crib"
     type: count
@@ -117,6 +120,24 @@ sensor:
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
     state: "in crib"
     type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Mia week out of crib
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state:
+      - "not in crib"
+      - "0"
+    type: time
+    start: "{{ now() - timedelta(days=7) }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: Mia week sleeps
+    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    state: "in crib"
+    type: count
     start: "{{ now() - timedelta(days=7) }}"
     end: "{{ now() }}"
 
