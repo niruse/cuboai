@@ -8,9 +8,21 @@
 #
 # The states matched below are the sensor's STATE STRINGS, not the raw numbers.
 # The sensor reports the library's phrase whenever it has one, so 1 surfaces as
-# "in crib" and 2 as "not in crib"; only an unmapped value (0, an empty room)
-# surfaces as a bare number. Matching on "1" here would silently measure
-# nothing.
+# "in crib" and 2 as "not in crib"; an unmapped value stays a bare number.
+# Matching on "1" here would silently measure nothing.
+#
+# What 0 means is NOT documented anywhere upstream -- the library maps only 1
+# and 2. It is treated here as "not in the crib", on the evidence that the
+# field sat at 0 continuously across a period when the house was empty and the
+# baby was demonstrably not in the crib. So "not in crib" below matches both 2
+# and 0, which is what makes the figure match reality rather than reading 0h
+# through an entire day out.
+#
+# It is deliberately NOT treated as "the camera said nothing". The readings
+# carrying 0 arrive fresh and available, so the camera is answering. Genuine
+# blindness is `unavailable`/`unknown`, and that is measured separately below
+# -- conflating the two was a real error in the first version of this file: it
+# reported an empty room as camera downtime and warned about it on screen.
 #
 # Windows are fixed and predictable rather than derived from when the baby
 # actually settled: night is 19:00 to 07:00, day is 07:00 to 19:00. After 19:00
@@ -29,7 +41,9 @@ sensor:
   - platform: history_stats
     name: Mia night out of crib
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "not in crib"
+    state:
+      - "not in crib"
+      - "0"
     type: time
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
@@ -39,18 +53,23 @@ sensor:
   - platform: history_stats
     name: Mia night out of crib count
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "not in crib"
+    state:
+      - "not in crib"
+      - "0"
     type: count
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
 
-  # How much of the window the camera had no reading at all. Published on
-  # purpose: without it, a night the camera spent offline is indistinguishable
-  # from a night the baby spent elsewhere, and both read as 0 hours in crib.
+  # How long the camera genuinely said nothing -- unavailable or unknown, not
+  # a 0 reading. Published on purpose: without it a night the camera spent
+  # offline is indistinguishable from a night the baby spent elsewhere, and
+  # both read as 0 hours in crib.
   - platform: history_stats
     name: Mia night no reading
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "0"
+    state:
+      - "unavailable"
+      - "unknown"
     type: time
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
@@ -67,7 +86,9 @@ sensor:
   - platform: history_stats
     name: Mia day out of crib
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "not in crib"
+    state:
+      - "not in crib"
+      - "0"
     type: time
     start: "{{ today_at('07:00') }}"
     end: "{{ today_at('19:00') }}"
@@ -83,7 +104,9 @@ sensor:
   - platform: history_stats
     name: Mia day no reading
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "0"
+    state:
+      - "unavailable"
+      - "unknown"
     type: time
     start: "{{ today_at('07:00') }}"
     end: "{{ today_at('19:00') }}"
@@ -100,7 +123,9 @@ sensor:
   - platform: history_stats
     name: Mia week no reading
     entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
-    state: "0"
+    state:
+      - "unavailable"
+      - "unknown"
     type: time
     start: "{{ now() - timedelta(days=7) }}"
     end: "{{ now() }}"

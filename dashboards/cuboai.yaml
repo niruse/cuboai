@@ -97,7 +97,7 @@ views:
             cards:
               - type: tile
                 entity: sensor.mia_night_out_of_crib
-                name: Out of crib
+                name: Not in crib
                 vertical: true
               - type: tile
                 entity: sensor.mia_night_out_of_crib_count
@@ -115,9 +115,11 @@ views:
             card:
               type: markdown
               content: >
-                ⚠️ The camera had no reading for
+                ⚠️ The camera was unreachable for
                 {{ states('sensor.mia_night_no_reading') }} h of this window,
                 so the figures above cover only part of the night.
+                This counts only time the sensor was unavailable — an empty
+                room is a reading, not a gap.
 
       - type: grid
         cards:
@@ -138,18 +140,18 @@ views:
                 icon: mdi:sleep
                 match: in crib
                 color: "#2a9d8f"
+              # 0 as well as 2. What 0 means is not documented upstream --
+              # only 1 and 2 are -- but it held steady through a day the house
+              # was empty and the baby was demonstrably not in the crib, so
+              # matching only 2 drew an empty row through exactly the hours
+              # this is meant to show.
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                label: Out of crib
+                label: Not in crib
                 icon: mdi:baby-carriage
-                match: not in crib
+                match:
+                  - not in crib
+                  - "0"
                 color: "#e9c46a"
-              # Drawn on purpose: an empty room and a camera that stopped
-              # answering both leave the two rows above blank.
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                label: Empty room
-                icon: mdi:door-open
-                match: "0"
-                color: "#6c757d"
               - entity: sensor.cuboai_mia_cuboai_motion_mia
                 label: Moving
                 icon: mdi:motion-sensor
@@ -205,7 +207,7 @@ views:
             cards:
               - type: tile
                 entity: sensor.mia_day_out_of_crib
-                name: Out of crib
+                name: Not in crib
                 vertical: true
               - type: tile
                 entity: sensor.mia_day_naps
@@ -220,9 +222,11 @@ views:
             card:
               type: markdown
               content: >
-                ⚠️ The camera had no reading for
+                ⚠️ The camera was unreachable for
                 {{ states('sensor.mia_day_no_reading') }} h of this window,
                 so the figures above cover only part of the day.
+                This counts only time the sensor was unavailable — an empty
+                room is a reading, not a gap.
 
       - type: grid
         cards:
@@ -243,18 +247,18 @@ views:
                 icon: mdi:sleep
                 match: in crib
                 color: "#2a9d8f"
+              # 0 as well as 2. What 0 means is not documented upstream --
+              # only 1 and 2 are -- but it held steady through a day the house
+              # was empty and the baby was demonstrably not in the crib, so
+              # matching only 2 drew an empty row through exactly the hours
+              # this is meant to show.
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                label: Out of crib
+                label: Not in crib
                 icon: mdi:baby-carriage
-                match: not in crib
+                match:
+                  - not in crib
+                  - "0"
                 color: "#e9c46a"
-              # Drawn on purpose: an empty room and a camera that stopped
-              # answering both leave the two rows above blank.
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                label: Empty room
-                icon: mdi:door-open
-                match: "0"
-                color: "#6c757d"
               - entity: sensor.cuboai_mia_cuboai_motion_mia
                 label: Moving
                 icon: mdi:motion-sensor
