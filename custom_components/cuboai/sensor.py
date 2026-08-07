@@ -489,7 +489,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return f"cuboai_{self._device_id}"
+        # The one live-view stream name per camera (#85). There used to be a
+        # plain "cuboai_<id>" alongside it; declaring two names opened two
+        # concurrent TUTK sessions and broke HomeKit on Cubo 3 (SW05).
+        return f"cuboai_combined_{self._device_id}"
 
     @property
     def extra_state_attributes(self):
@@ -514,9 +517,9 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
         api_port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
         attrs = {
             "go2rtc_server": f"http://127.0.0.1:{api_port}",
-            "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_{self._device_id}",
-            "web_player_url": f"http://127.0.0.1:{api_port}/stream.html?src=cuboai_{self._device_id}",
-            "stream_id": f"cuboai_{self._device_id}",
+            "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}",
+            "web_player_url": f"http://127.0.0.1:{api_port}/stream.html?src=cuboai_combined_{self._device_id}",
+            "stream_id": f"cuboai_combined_{self._device_id}",
         }
 
         if nvr_enabled:
@@ -532,7 +535,7 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
                 host = urlparse(get_url(self.hass, allow_external=False, allow_ip=True)).hostname
             except Exception:
                 pass
-            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_{self._device_id}"
+            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_combined_{self._device_id}"
             attrs["nvr_rtsp_url"] = base
             attrs["nvr_rtsp_url_video_only"] = base + "?video"
             attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"

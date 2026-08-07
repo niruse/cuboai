@@ -103,21 +103,45 @@ class Go2RTCManager:
             # NOT a comma.
             audio_codecs = "#audio=opus#audio=aac"
 
-            # The 1st stream runs the pure-python engine which outputs native A/V MPEG-TS.
-            # The 2nd stream uses ffmpeg to transcode audio (Opus for WebRTC, AAC for MSE).
-            self._streams[f"cuboai_{dev_id}"] = [
-                f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_{dev_id}#video={video_codec}{audio_codecs}",
-            ]
-
             # The speaker stream is isolated so the media_player entity can securely cast TTS or audio files to it
             self._streams[f"cuboai_speaker_{dev_id}"] = [
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma"
             ]
 
-            # The combined stream: video from the main camera stream + backchannel for two-way audio.
-            # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
-            # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
+            # INVARIANT (#85): there is EXACTLY ONE live-view stream name per
+            # camera, and it is this one. Every consumer — snapshots, HLS,
+            # HomeKit, the card's WebRTC and MSE paths, the WebRTC sensor's
+            # attributes, NVR URLs — must name cuboai_combined_<dev_id>.
+            #
+            # NEVER declare a second live-view stream (e.g. a plain
+            # "cuboai_<dev_id>") that also runs the video exec. Two stream
+            # NAMES mean two concurrent TUTK sessions against one camera as
+            # soon as two consumers attach. A Cubo Plus (CB02) tolerates that;
+            # a Cubo 3 (SW05) does not — the second session serves no tracks,
+            # so HomeKit gets nothing and shows "No Response".
+            #
+            # And do NOT "share" the producer by pointing one stream's source
+            # at another with a cross-stream ffmpeg: reference. That was tried
+            # (commit bb4bf13) and reverted (3942771): the reference does
+            # resolve and reuse does begin, but the nested ffmpeg has a fixed
+            # 5-SECOND RTSP read timeout while the pure-python engine needs
+            # ~10s from cold, so on a cold start it times out and go2rtc
+            # reports producer(None) medias=[] tracks=[]. It only "worked"
+            # when the stream happened to be warm — a race, not a fix. A
+            # longer timeout is not the answer either; one stream name is.
+            #
+            # The three sources below are ordered and must stay ordered:
+            #   1. exec: the pure-python engine, native A/V MPEG-TS producer.
+            #   2. ffmpeg: a SELF-referencing transcode (same stream name).
+            #      This one is safe precisely because it is dialed AFTER the
+            #      exec producer within this same stream, so its DESCRIBE
+            #      always hits an already-warm producer — the 5s-vs-10s race
+            #      above cannot happen. It gives HomeKit/HLS H.264 when
+            #      video_codec is h264, and Opus (WebRTC) + AAC (MSE/Safari).
+            #   3. exec: the backchannel for two-way audio. go2rtc writes the
+            #      incoming WebRTC microphone audio (PCMA) straight to this
+            #      process's stdin; the script reads pipe:0 as alaw and sends
+            #      it to the camera speaker.
             self._streams[f"cuboai_combined_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
                 f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{audio_codecs}",

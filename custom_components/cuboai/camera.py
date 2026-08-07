@@ -43,6 +43,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         async_add_entities(camera_entities)
 
 
+class _ColdProducer(Exception):
+    """No producer is running yet, so a still must not start one."""
+
+
 class CuboLocalCamera(CoordinatorEntity, Camera):
     def __init__(self, coordinator, camera):
         super().__init__(coordinator)
@@ -110,6 +114,28 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
         return getattr(StreamType, "HLS", "hls")
 
+    async def _producer_is_warm(self, session, aiohttp) -> bool:
+        """True when the shared stream already has a producer serving media.
+
+        Read-only: /api/streams reports state without attaching a consumer, so
+        asking cannot itself start anything. Anything unreadable counts as cold
+        -- the fallback is a slightly stale picture, while the alternative is
+        killing a starting engine other consumers depend on.
+        """
+        try:
+            async with session.get(
+                f"{self._go2rtc_api_base()}/api/streams?src=cuboai_combined_{self._device_id}",
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as resp:
+                if resp.status != 200:
+                    return False
+                data = await resp.json(content_type=None)
+        except Exception:
+            return False
+        producers = (data or {}).get("producers") or []
+        # A producer with no medias is one that is still dialing.
+        return any(p.get("medias") for p in producers if isinstance(p, dict))
+
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return a still image response from the camera."""
         # 1. Try to get a LIVE snapshot from go2rtc API — only when OUR go2rtc
@@ -118,15 +144,38 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             import aiohttp
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-            url = f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_{self._device_id}"
+            url = f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_combined_{self._device_id}"
             try:
                 session = async_get_clientsession(self.hass)
+                # Only pull a still from a producer that is ALREADY running.
+                #
+                # Every consumer now shares one stream, which is the point of the
+                # #85 fix -- but it makes this the dangerous caller. Asking
+                # go2rtc for a frame attaches a consumer, and attaching to a cold
+                # stream starts the TUTK engine, which needs ~10s (the pre-warm
+                # below allows 15s for exactly that reason). This call gives up
+                # after 5s, and when it does the consumer count falls back to
+                # zero and go2rtc kills the engine five seconds into a ten second
+                # start -- an engine HomeKit, HLS, the card and any NVR now all
+                # share. Home Assistant polls stills constantly, so that would be
+                # the common path, not a rare one.
+                #
+                # A still is the one consumer that can always wait: there is a
+                # recent alert image to fall back on below.
+                if not await self._producer_is_warm(session, aiohttp):
+                    raise _ColdProducer
                 # 5 second timeout so we don't hang HA if camera is offline
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status == 200:
                         image_bytes = await resp.read()
                         if len(image_bytes) > 1000:  # Ensure it's a real image, not an empty file
                             return image_bytes
+            except _ColdProducer:
+                _LOGGER.debug(
+                    "Skipping live snapshot for %s: no producer running yet, and "
+                    "starting one for a still would kill it mid-start",
+                    self._device_id,
+                )
             except Exception as e:
                 _LOGGER.debug(f"Failed to get live snapshot from go2rtc: {e}")
 

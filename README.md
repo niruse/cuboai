@@ -53,7 +53,7 @@ This integration provides a massive suite of local control and real-time monitor
 - **Thermometer**: Live reading and battery state of the external thermometer
 - **Last Alert**: Image thumbnail and time of the last captured event
 - **Firmware Version**: The active firmware installed on the camera
-- **WebRTC Stream**: Raw stream ID for embedding ultra-low latency go2rtc video
+- **WebRTC Stream**: Raw go2rtc stream ID (`cuboai_combined_<device id>`) for embedding ultra-low latency video
 
 ### 🛠️ Diagnostics
 - **WiFi Diagnostics**: Signal strength (RSSI), Quality (%), Noise, Channel, and SSID

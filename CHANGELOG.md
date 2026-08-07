@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **A camera is opened once now, however many things are watching (issue #85).**
+  Each camera declared two go2rtc streams and each spawned its own copy of the
+  video engine, so a dashboard viewer and a HomeKit viewer were two concurrent
+  TUTK sessions against one camera. A Cubo Plus (CB02) tolerates that; a Cubo 3
+  (SW05) does not — the second session serves no tracks, so HomeKit gets no
+  decodable video and reports "No Response". There is one live-view stream now
+  and every consumer names it.
+- **A snapshot can no longer kill the stream everything else is using.** Now
+  that consumers share one producer, asking go2rtc for a still would start the
+  engine and then abandon it 5 seconds into a ~10 second start. Stills are
+  skipped while the producer is cold and fall back to the most recent alert
+  image, which is what they did before whenever the stream was unavailable.
+
+### Changed — BREAKING for anyone using the RTSP URL directly
+- The live-view stream is now named `cuboai_combined_<device_id>`; the old
+  `cuboai_<device_id>` no longer exists. **If you pasted an RTSP URL into an
+  NVR — Frigate, Synology, HiLook — re-copy it** from the `nvr_rtsp_url`
+  attribute of the *WebRTC Stream* sensor, or recording stops silently with a
+  404. No alias is offered on purpose: a second name for the same camera is
+  precisely the bug above.
+- HomeKit, HLS, the custom card, snapshots and the DVR resolve the stream
+  themselves and need no change.
+- The default `nvr_rtsp_url` now includes the two-way-audio track. Recorders
+  that dislike a sendonly PCMA media should use `nvr_rtsp_url_video_only`.
+
 ## [2.5.0]
 
 ### Added

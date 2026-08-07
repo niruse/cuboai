@@ -53,8 +53,3 @@ class TestH264Transcode:
                 # go2rtc multi-codec syntax is REPEATED params, not a comma
                 assert "#audio=opus#audio=aac" in line
                 assert "audio=opus,aac" not in line
-
-    def test_main_stream_also_transcodes_when_selected(self):
-        streams = _resolve({"h264_cameras": ["SW05BBB"]})
-        main = next(s for s in streams["cuboai_SW05BBB"] if s.startswith("ffmpeg:"))
-        assert "video=h264" in main
