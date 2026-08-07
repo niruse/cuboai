@@ -31,7 +31,7 @@ are:
 | Noise level | `sensor.cuboai_mia_cuboai_noise_level_mia` | same shape, `_noise_level_` |
 | Camera online | `sensor.cuboai_camera_state_mia` | `sensor.cuboai_camera_state_<baby>` |
 
-The area prefix (`f2_kid_room_`, `nursery_`, …) appears only if you have
+The area prefix (`nursery_`, `upstairs_`, …) appears only if you have
 assigned the device to an area, which is why the example cannot guess it. **Copy
 the ids exactly as Home Assistant shows them.**
 
