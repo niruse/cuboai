@@ -337,6 +337,7 @@ class CuboAICameraCard extends HTMLElement {
     // closed repeatedly does not accumulate timers.
     if (this._dvrTick) { clearInterval(this._dvrTick); this._dvrTick = null; }
     if (this._dvrWait) { clearInterval(this._dvrWait); this._dvrWait = null; }
+    if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
@@ -709,8 +710,21 @@ class CuboAICameraCard extends HTMLElement {
         liveBtn.style.opacity = '.45';
 
         const playFrom = (at) => {
-          const dev = (this._config && this._config.device_id) || '';
           if (!this._hass) return;
+          // An unpinned card still knows which camera it is showing -- it
+          // resolved one to put a picture on screen. Taking the id from that
+          // entity's attributes is what makes playback work without
+          // `device_id:` in the card config; asking the service for device_id
+          // "" just raises "No CuboAI camera with device_id ''".
+          const pinned = (this._config || {}).device_id;
+          const rec = cuboaiFindRecordingState(this._hass, pinned);
+          const liveCam = cuboaiFindCameraState(this._hass, pinned);
+          const attrsOf = (f) => (f && f.state && f.state.attributes) || {};
+          const dev = pinned || attrsOf(rec).device_id || attrsOf(liveCam).device_id || '';
+          if (!dev) {
+            stamp.textContent = 'No CuboAI camera found';
+            return;
+          }
           // The service takes an absolute time as well as "10m"-style offsets.
           this._hass.callService('cuboai', 'play_recording', {
             device_id: dev,
@@ -725,7 +739,6 @@ class CuboAICameraCard extends HTMLElement {
           // The producer has to connect to the camera and seek before the
           // entity has a stream, so the swap waits for it to become available
           // rather than showing an unavailable picture for several seconds.
-          const rec = cuboaiFindRecordingState(this._hass, dev);
           if (!rec) {
             stamp.textContent = 'No recording entity — reload the integration';
             return;
@@ -797,6 +810,34 @@ class CuboAICameraCard extends HTMLElement {
           paint();
           playFrom(at);
         };
+        // iOS renders datetime-local as a native wheel with hours and minutes
+        // and no seconds, whatever `step` says. These work on every platform
+        // and are easier than a wheel when you are hunting for a moment.
+        const fine = document.createElement('div');
+        fine.style.cssText = 'display:flex;gap:6px;padding:6px 12px 0;';
+        const nudge = (secs) => {
+          const end = edgeAt(), start = end - spanMs;
+          const from = when.value ? new Date(when.value).getTime() : timeAt(frac).getTime();
+          const t = Math.min(Math.max(from + secs * 1000, start), end);
+          frac = 1 - (end - t) / spanMs;
+          paint();
+          stamp.textContent = 'Loading ' + new Date(t).toLocaleTimeString([],
+            { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '…';
+          // Tapping -10s four times should be one seek, not four: each call
+          // restarts a producer that takes seconds to connect and seek.
+          clearTimeout(this._dvrNudge);
+          this._dvrNudge = setTimeout(() => playFrom(new Date(t)), 700);
+        };
+        for (const [label, secs] of [['-1m', -60], ['-10s', -10], ['+10s', 10], ['+1m', 60]]) {
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.style.cssText = 'flex:1 1 0;background:none;border:1px solid #444;color:#ddd;' +
+            'border-radius:6px;padding:6px 0;font:inherit;font-size:13px;cursor:pointer;';
+          b.addEventListener('click', () => nudge(secs));
+          fine.appendChild(b);
+        }
+        bar.appendChild(fine);
+
         go.addEventListener('click', goToPicked);
         when.addEventListener('keydown', (e) => { if (e.key === 'Enter') goToPicked(); });
 

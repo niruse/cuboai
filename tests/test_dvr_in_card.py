@@ -206,6 +206,36 @@ class TestCardKeepsPlaybackInPlace:
         assert "when.min = asLocalInput" in code and "when.max = asLocalInput" in code
         assert "Older than the camera still holds" in code
 
+    def test_seconds_are_reachable_without_a_native_seconds_picker(self):
+        """iOS renders datetime-local as a wheel with hours and minutes and no
+        seconds, whatever `step` says, so `step=1` alone does not give anyone
+        on a phone second-level control."""
+        code = _card_code()
+        assert "const nudge" in code
+        for label in ("'-1m'", "'-10s'", "'+10s'", "'+1m'"):
+            assert label in code, label
+        assert "b.addEventListener('click', () => nudge(secs))" in code
+        # On screen, not merely constructed: dropping the append left every
+        # other assertion here passing and no buttons in the card.
+        assert "bar.appendChild(fine)" in code
+        # Four taps must be one seek: each call restarts a producer that takes
+        # seconds to connect and seek. Pinned as a pair, because asserting
+        # clearTimeout on its own was satisfied by the one in
+        # disconnectedCallback while the debounce itself was gone.
+        assert ("clearTimeout(this._dvrNudge);\n          this._dvrNudge = setTimeout"
+                in code)
+
+    def test_playback_works_on_a_card_with_no_device_id(self):
+        """Regression, self-inflicted: splitting commit() into playFrom()
+        dropped the `!dev` guard, so an unpinned card asked the service for
+        device_id "" and got "No CuboAI camera with device_id ''". The card
+        already resolved an entity to put a picture on screen; the id comes
+        from that entity's attributes."""
+        code = _card_code()
+        assert "const pinned = (this._config || {}).device_id;" in code
+        assert "attrsOf(rec).device_id || attrsOf(liveCam).device_id" in code
+        assert "'No CuboAI camera found'" in code
+
     def test_the_picker_and_the_playhead_share_one_path(self):
         """Two ways in must not become two implementations of playback."""
         code = _card_code()
