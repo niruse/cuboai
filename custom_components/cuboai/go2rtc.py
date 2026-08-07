@@ -118,9 +118,24 @@ class Go2RTCManager:
             # The combined stream: video from the main camera stream + backchannel for two-way audio.
             # go2rtc writes incoming WebRTC microphone audio (PCMA) directly to the backchannel exec's stdin.
             # The backchannel script reads from pipe:0 (stdin) in alaw format and sends it to the camera speaker.
+            #
+            # The video source is the OTHER STREAM, not a second `exec:` engine.
+            # It used to spawn its own copy of the video script, which opened a
+            # second, independent TUTK session to the same camera -- so a
+            # dashboard viewer and a HomeKit viewer were two concurrent sessions.
+            # A Cubo Plus (CB02) tolerates that; a Cubo 3 (SW05) does not, and
+            # the second session yields nothing: `producer(...) tracks=[] recv=None`,
+            # HomeKit sees no decodable video and reports "No Response" (#85).
+            # The reporter's decisive test was watching the Cubo 3 play in Home
+            # Assistant without a stutter while HomeKit failed alongside it --
+            # the camera was fine, opening it twice was not.
+            #
+            # Referencing `cuboai_{dev_id}` makes go2rtc reuse that stream's
+            # running producer, so a camera is opened once no matter how many
+            # consumers attach. It is the same mechanism the main stream already
+            # uses for its own codec variants, one line above.
             self._streams[f"cuboai_combined_{dev_id}"] = [
-                f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{audio_codecs}",
+                f"ffmpeg:cuboai_{dev_id}#video={video_codec}{audio_codecs}",
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
