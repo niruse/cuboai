@@ -28,6 +28,5 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["custom_components.cuboai"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
+# Pytest is configured in pytest.ini, which takes precedence over this file.
+# A [tool.pytest.ini_options] block here would be silently ignored.
