@@ -187,6 +187,15 @@ class TestCardKeepsPlaybackInPlace:
         seconds = re.search(r"Number\(this\._config\.timeline_play_seconds\) \|\| (\d+)", code)
         assert seconds and int(seconds.group(1)) >= 600, seconds and seconds.group(1)
 
+    def test_readiness_waits_for_the_seek_not_for_the_entity(self):
+        """The entity is always available -- it has to be, or its attributes
+        never reach the frontend. So its state says nothing about whether the
+        producer has connected and seeked yet, and waiting on availability
+        would pass instantly and swap the card to a black picture."""
+        code = _card_code()
+        assert "st.attributes.playing_from" in code
+        assert "st.state !== 'unavailable'" not in code
+
     def test_tick_spacing_adapts_to_the_span(self):
         """A fixed 15-minute tick is 288 ticks across three days."""
         code = _card_code()
