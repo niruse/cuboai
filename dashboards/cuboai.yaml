@@ -133,7 +133,8 @@ views:
           # baby leaving the crib were the same moment.
           - type: custom:cuboai-timeline-card
             title: Last night
-            hours: 14
+            from: "19:00"
+            to: "07:00"
             rows:
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
                 label: In crib
@@ -157,33 +158,20 @@ views:
                 icon: mdi:motion-sensor
                 match: moving
                 color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
               - entity: sensor.cuboai_mia_cuboai_noise_level_mia
-                label: Noise
+                label: Noise over 26
                 icon: mdi:volume-high
-                above: 30
+                above: 26
                 color: "#5e5ce6"
-
-          - type: history-graph
-            hours_to_show: 14
-            entities:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                name: Baby present
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
-                name: Motion
-
-          - type: history-graph
-            hours_to_show: 14
-            entities:
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
-                name: Noise
-
-          - type: history-graph
-            hours_to_show: 14
-            entities:
-              - entity: sensor.cuboai_mia_cuboai_temperature_mia
-                name: Temperature
-              - entity: sensor.cuboai_mia_cuboai_humidity_mia
-                name: Humidity
+              # An empty chart and a camera that was offline look identical
+              # without this row.
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
 
   # ── Daytime ─────────────────────────────────────────────────────────────
   - title: Daytime
@@ -240,7 +228,8 @@ views:
           # baby leaving the crib were the same moment.
           - type: custom:cuboai-timeline-card
             title: Today
-            hours: 12
+            from: "07:00"
+            to: "19:00"
             rows:
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
                 label: In crib
@@ -264,25 +253,20 @@ views:
                 icon: mdi:motion-sensor
                 match: moving
                 color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
               - entity: sensor.cuboai_mia_cuboai_noise_level_mia
-                label: Noise
+                label: Noise over 26
                 icon: mdi:volume-high
-                above: 30
+                above: 26
                 color: "#5e5ce6"
-
-          - type: history-graph
-            hours_to_show: 12
-            entities:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                name: Baby present
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
-                name: Motion
-
-          - type: history-graph
-            hours_to_show: 12
-            entities:
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
-                name: Noise
+              # An empty chart and a camera that was offline look identical
+              # without this row.
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
 
   # ── Summary ─────────────────────────────────────────────────────────────
   - title: Summary
@@ -320,11 +304,40 @@ views:
             heading: The week
             heading_style: title
 
-          - type: history-graph
-            hours_to_show: 168
-            entities:
+          # Everything, over the whole week, on one axis.
+          - type: custom:cuboai-timeline-card
+            title: The last 7 days
+            days: 7
+            rows:
               - entity: sensor.cuboai_mia_cuboai_baby_present_mia
-                name: Baby present
+                label: In crib
+                icon: mdi:sleep
+                match: in crib
+                color: "#2a9d8f"
+              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+                label: Not in crib
+                icon: mdi:baby-carriage
+                match:
+                  - not in crib
+                  - "0"
+                color: "#e9c46a"
+              - entity: sensor.cuboai_mia_cuboai_motion_mia
+                label: Moving
+                icon: mdi:motion-sensor
+                match: moving
+                color: "#f4a261"
+              # 26, not 30: the measured range on this camera is 24-27, so a
+              # threshold of 30 was a lane that could never light up.
+              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+                label: Noise over 26
+                icon: mdi:volume-high
+                above: 26
+                color: "#5e5ce6"
+              - entity: sensor.cuboai_camera_state_mia
+                label: Camera online
+                icon: mdi:cctv
+                match: online
+                color: "#30d158"
 
           - type: history-graph
             hours_to_show: 168

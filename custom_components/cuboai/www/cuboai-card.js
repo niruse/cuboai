@@ -2686,9 +2686,48 @@ class CuboAITimelineCard extends HTMLElement {
     this._fetchedAt = 0;
   }
 
+  // The window this card covers.
+  //
+  // `hours` alone means "the last N hours ending now", which is why a Night
+  // card and a Day card built that way showed almost the same stretch of time:
+  // both ended at this moment and merely differed in length. A tab that says
+  // 19:00-07:00 has to plot 19:00-07:00.
+  //
+  //   from/to  a clock window, e.g. 19:00 -> 07:00. `to` at or before `from`
+  //            spans midnight. Always the most recently STARTED window, so
+  //            Night keeps showing last night all through the following day.
+  //   days     a multi-day span ending now, for the Summary.
+  //   hours    the original behaviour, kept for anything already using it.
+  _window() {
+    const now = new Date();
+    if (this._config.days) {
+      const start = new Date(now.getTime() - Number(this._config.days) * 86400000);
+      return { start, axisEnd: now, fetchEnd: now };
+    }
+    const { from, to } = this._config;
+    if (from && to) {
+      const parse = (v) => String(v).split(":").map(Number);
+      const [fh, fm] = parse(from);
+      const [th, tm] = parse(to);
+      const start = new Date(now); start.setHours(fh, fm || 0, 0, 0);
+      const end = new Date(now); end.setHours(th, tm || 0, 0, 0);
+      if (end <= start) start.setDate(start.getDate() - 1);   // spans midnight
+      if (start > now) {                                      // not begun today
+        start.setDate(start.getDate() - 1);
+        end.setDate(end.getDate() - 1);
+      }
+      // The axis keeps the window's full width even when it has not finished,
+      // so an afternoon glance at Daytime shows how much of the day is left
+      // rather than silently rescaling to a shorter chart.
+      return { start, axisEnd: end, fetchEnd: end > now ? now : end };
+    }
+    const start = new Date(now.getTime() - this._hours * 3600 * 1000);
+    return { start, axisEnd: now, fetchEnd: now };
+  }
+
   async _load() {
-    const end = new Date();
-    const start = new Date(end.getTime() - this._hours * 3600 * 1000);
+    const { start, axisEnd, fetchEnd } = this._window();
+    const end = fetchEnd;
     const ids = [...new Set(this._rows.map((r) => r.entity))];
     try {
       const history = await this._hass.callWS({
@@ -2699,9 +2738,9 @@ class CuboAITimelineCard extends HTMLElement {
         minimal_response: true,
         no_attributes: true,
       });
-      this._render(history, start, end, null);
+      this._render(history, start, axisEnd, null, end);
     } catch (err) {
-      this._render(null, start, end, (err && err.message) || "History unavailable");
+      this._render(null, start, axisEnd, (err && err.message) || "History unavailable", end);
     }
   }
 
@@ -2766,6 +2805,18 @@ class CuboAITimelineCard extends HTMLElement {
                  white-space: nowrap; }
       .tl-note { font-size: 12px; color: var(--secondary-text-color);
                  padding: 6px 0 0 36px; }
+      .tl-seg { cursor: pointer; }
+      .tl-ico { cursor: pointer; }
+      /* Tooltips need a mouse. On a phone the labels and the timespans were
+         unreachable, so both are shown outright. */
+      .tl-legend { display: flex; flex-wrap: wrap; gap: 4px 12px;
+                   padding: 8px 0 0 36px; }
+      .tl-key { display: flex; align-items: center; gap: 5px; font-size: 12px;
+                color: var(--secondary-text-color); }
+      .tl-dot { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+      .tl-detail { min-height: 18px; padding: 8px 0 0 36px; font-size: 13px;
+                   color: var(--primary-text-color); }
+      .tl-detail.empty { color: var(--secondary-text-color); font-size: 12px; }
     `;
     this._body = document.createElement("div");
     this._body.className = "tl-wrap";
@@ -2775,7 +2826,7 @@ class CuboAITimelineCard extends HTMLElement {
     return this._body;
   }
 
-  _render(history, start, end, error) {
+  _render(history, start, end, error, dataEnd) {
     const body = this._shell();
     this._card.header = this._config.title || undefined;
     body.textContent = "";
@@ -2791,8 +2842,11 @@ class CuboAITimelineCard extends HTMLElement {
     const span = end.getTime() - start.getTime();
     const pct = (t) => ((t - start.getTime()) / span) * 100;
 
-    // Hour marks, at whatever spacing keeps them from colliding.
-    const step = span > 20 * 3600e3 ? 6 : span > 10 * 3600e3 ? 3 : 1;
+    // Marks, at whatever spacing keeps them from colliding. A week at six
+    // hours is twenty-eight labels in the width of a phone, all overlapping,
+    // so past two days it switches to one per day and labels the weekday.
+    const daily = span > 48 * 3600e3;
+    const step = daily ? 24 : span > 20 * 3600e3 ? 6 : span > 10 * 3600e3 ? 3 : 1;
     const marks = [];
     const first = new Date(start);
     first.setMinutes(0, 0, 0);
@@ -2814,6 +2868,11 @@ class CuboAITimelineCard extends HTMLElement {
       icon.setAttribute("icon", row.icon || "mdi:circle-small");
       ico.appendChild(icon);
       ico.title = row.label || row.entity;
+      ico.addEventListener("click", () => {
+        this.dispatchEvent(new CustomEvent("hass-more-info", {
+          detail: { entityId: row.entity }, bubbles: true, composed: true,
+        }));
+      });
       line.appendChild(ico);
 
       const track = document.createElement("div");
@@ -2826,7 +2885,7 @@ class CuboAITimelineCard extends HTMLElement {
       }
 
       const points = (history && history[row.entity]) || [];
-      for (const s of this._spans(row, points, start, end)) {
+      for (const s of this._spans(row, points, start, dataEnd || end)) {
         const seg = document.createElement("div");
         seg.className = "tl-seg";
         seg.style.left = pct(s.from) + "%";
@@ -2835,7 +2894,15 @@ class CuboAITimelineCard extends HTMLElement {
         seg.style.width = Math.max(pct(s.to) - pct(s.from), 0.6) + "%";
         seg.style.background = row.color || "#5e5ce6";
         const fmt = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        seg.title = `${row.label || row.entity}: ${fmt(new Date(s.from))}–${fmt(new Date(s.to))}`;
+        const mins = Math.round((s.to - s.from) / 60000);
+        const dur = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+        const text = `${row.label || row.entity} · ${fmt(new Date(s.from))}–${fmt(new Date(s.to))} · ${dur}`;
+        seg.title = text;
+        seg.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this._detail.textContent = text;
+          this._detail.classList.remove("empty");
+        });
         track.appendChild(seg);
         drew++;
       }
@@ -2854,11 +2921,34 @@ class CuboAITimelineCard extends HTMLElement {
       const lab = document.createElement("div");
       lab.className = "tl-tick";
       lab.style.left = pct(t) + "%";
-      lab.textContent = String(new Date(t).getHours()).padStart(2, "0");
+      lab.textContent = daily
+        ? new Date(t).toLocaleDateString([], { weekday: "short" })
+        : String(new Date(t).getHours()).padStart(2, "0");
       ticks.appendChild(lab);
     }
     axis.appendChild(ticks);
     body.appendChild(axis);
+
+    const legend = document.createElement("div");
+    legend.className = "tl-legend";
+    for (const row of this._rows) {
+      const key = document.createElement("div");
+      key.className = "tl-key";
+      const dot = document.createElement("span");
+      dot.className = "tl-dot";
+      dot.style.background = row.color || "#5e5ce6";
+      key.appendChild(dot);
+      const t = document.createElement("span");
+      t.textContent = row.label || row.entity;
+      key.appendChild(t);
+      legend.appendChild(key);
+    }
+    body.appendChild(legend);
+
+    this._detail = document.createElement("div");
+    this._detail.className = "tl-detail empty";
+    this._detail.textContent = "Tap a bar for its times, or an icon for the sensor.";
+    body.appendChild(this._detail);
 
     // An empty chart and a broken one look identical otherwise.
     if (!drew) {
