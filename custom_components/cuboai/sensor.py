@@ -1187,6 +1187,9 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
         self._device_id = device_id
         self._baby_name = baby_name
         self._field = field
+        # Kept in the signature and the HISTORY_SENSORS table because it
+        # says which fields are coded numbers rather than measurements;
+        # nothing branches on it now that a number is always reported.
         self._labelled = labelled
         self._attr_name = f"CuboAI {label} {baby_name}"
         self._attr_unique_id = f"cuboai_history_{field}_{device_id}"
@@ -1219,11 +1222,14 @@ class CuboHistorySensor(CoordinatorEntity, SensorEntity):
         note = reading.get("note")
         if note:
             return note
-        if self._labelled:
-            # No phrase for this value: the raw number is not self-describing,
-            # so report unknown instead of a digit that reads like an answer.
-            # The number is still in `raw_value` for anyone debugging.
-            return None
+        # A value the camera reports confidently, for which the library has no
+        # phrase, is still a value. Reporting unknown instead was wrong in a
+        # way that only showed up against real history: baby_present reads 0
+        # whenever nobody is in the room -- 0 is missing from the label map,
+        # which only covers 1 "in crib" and 2 "not in crib" -- so the entity
+        # sat at `unknown` for 24 hours solid. That reads as a broken sensor
+        # rather than an empty room, and unknown cannot be charted or used to
+        # mark up a timeline, which is the whole point of recording it.
         return reading.get("value")
 
     @property

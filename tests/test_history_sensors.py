@@ -189,20 +189,51 @@ def test_opaque_fields_are_not_exposed_as_entities(monkeypatch):
     assert fields == {"baby_present", "noise", "motion", "privacy"}
 
 
-def test_unlabelled_baby_present_reads_unknown_not_zero(monkeypatch):
-    """Observed on a real camera: bp=0, which upstream maps to no phrase.
+def test_unlabelled_baby_present_reports_its_number(monkeypatch):
+    """Reversal of an earlier decision in this file, on evidence.
 
-    A "Baby Present" sensor showing `0` reads as "no baby"; it actually means
-    the camera gave no interpretable answer. It must be unknown instead.
+    bp=0 has no phrase because the library's map only covers 1 "in crib" and
+    2 "not in crib". This used to report unknown, on the reasoning that a bare
+    `0` reads like "no baby" when the camera had given no interpretable
+    answer. Twenty-four hours of real history says otherwise: while the house
+    was empty the field sat at 0 continuously, so 0 is the camera answering,
+    not declining to.
+
+    Unknown was the worse of the two. It is indistinguishable from a broken
+    sensor, it cannot be charted, and it cannot mark up a timeline -- which is
+    what this reading is recorded for. The number is reported; `note` still
+    wins whenever the library has a phrase.
     """
     s = _make_sensor(
         {"baby_present": {"value": 0, "age_s": 55.0, "available": True,
                           "stale": False, "note": None, "ts_utc": None}},
         monkeypatch,
     )
-    assert s.available is True          # the reading is fresh and real
-    assert s.native_value is None       # but it is not interpretable
-    assert s.extra_state_attributes["raw_value"] == 0   # still visible for debugging
+    assert s.available is True
+    assert s.native_value == 0
+    assert s.extra_state_attributes["raw_value"] == 0
+
+
+def test_a_phrase_still_wins_over_the_number(monkeypatch):
+    """1 and 2 are mapped, and "in crib" is far more use than "1"."""
+    s = _make_sensor(
+        {"baby_present": {"value": 1, "age_s": 55.0, "available": True,
+                          "stale": False, "note": "in crib", "ts_utc": None}},
+        monkeypatch,
+    )
+    assert s.native_value == "in crib"
+    assert s.extra_state_attributes["raw_value"] == 1
+
+
+def test_a_stale_reading_is_still_withheld(monkeypatch):
+    """Showing the number is not the same as vouching for it: an old "in crib"
+    presented as current is the failure this sensor was built to avoid."""
+    s = _make_sensor(
+        {"baby_present": {"value": 0, "age_s": 3600.0, "available": True,
+                          "stale": True, "note": None, "ts_utc": None}},
+        monkeypatch,
+    )
+    assert s.available is False
 
 
 def test_numeric_field_still_shows_its_number(monkeypatch):
