@@ -648,6 +648,10 @@ class CuboAICameraCard extends HTMLElement {
             g.moveTo(x, major ? 22 : 30); g.lineTo(x, 44); g.stroke();
             if (major) {
               g.fillStyle = 'rgba(255,255,255,.85)';
+              // Centred text runs off both ends of the canvas -- the first
+              // label was rendering as "d, 15" instead of "Wed, 15". Pull the
+              // edge labels inside instead of letting them clip.
+              g.textAlign = x < 28 ? 'left' : (x > w - 28 ? 'right' : 'center');
               // Across more than a day, an hour alone is ambiguous: 03:00 today
               // and 03:00 yesterday look identical on the same bar.
               g.fillText(
@@ -669,7 +673,11 @@ class CuboAICameraCard extends HTMLElement {
           // step with the playhead so the two controls never disagree.
           when.min = asLocalInput(new Date(edgeAt() - spanMs));
           when.max = asLocalInput(new Date(edgeAt()));
-          if (!live) when.value = asLocalInput(at);
+          // Filled even while live: an empty box gives you nothing to adjust
+          // from and no hint of the format it wants. Never while it has focus
+          // though -- paint() also runs on a 30s tick and on resize, and would
+          // overwrite a time you were halfway through typing.
+          if (document.activeElement !== when) when.value = asLocalInput(at);
           stamp.textContent = live
             ? 'Live'
             : at.toLocaleString([], { month: '2-digit', day: '2-digit',
