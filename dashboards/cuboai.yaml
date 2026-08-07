@@ -182,6 +182,27 @@ views:
                 icon: mdi:cctv
                 match: online
                 color: "#30d158"
+              # The app's own nighttime chart has Cry, Cough and Caregiver
+              # series on top of the continuous ones. Those are point events:
+              # they never reach the recorder as states, they arrive as a list
+              # on this sensor's `alerts` attribute, so this lane is ticks
+              # rather than shading and costs no history query at all.
+              #
+              # Left unfiltered on purpose. Only CUBO_ALERT_TEMPERATURE has
+              # been seen on this camera; `match_type: CUBO_ALERT_CRY` on a
+              # second row is what splits Cry and Cough into their own lanes
+              # once they turn up, and a lane per guessed type would sit empty
+              # until then while hiding anything else that arrived.
+              #
+              # The legend calls them recent because that is all they are: the
+              # integration keeps its last `alerts_count` alerts (5) from the
+              # last `hours_back` hours (12), so this window's first two hours
+              # cannot be covered however loud they were.
+              - entity: sensor.cuboai_last_alert_mia
+                label: Alerts
+                icon: mdi:bell-ring
+                events: alerts
+                color: "#ff453a"
 
   # ── Daytime ─────────────────────────────────────────────────────────────
   - title: Daytime

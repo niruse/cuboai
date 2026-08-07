@@ -357,6 +357,43 @@ rows:
 | `hours: 14` | The last N hours ending now. |
 | `match` | A state string, or a list of them. |
 | `above` | For numeric sensors: shade wherever the value is at or above this. |
+| `events` | The attribute holding a list of point events — see below. |
+| `match_type` | On an `events` row: draw only this alert `type` (or a list of them). |
+
+#### Alert markers
+
+Cry, Cough and Caregiver in the CuboAI app's own chart are **point events**:
+they have a moment, not a duration, and Home Assistant never records them as
+states. They arrive as a list on an attribute instead, so a row that names that
+attribute is drawn as ticks rather than as shading:
+
+```yaml
+  - entity: sensor.cuboai_last_alert_mia
+    label: Alerts
+    icon: mdi:bell-ring
+    events: alerts                  # the attribute holding the list
+    color: "#ff453a"
+  - entity: sensor.cuboai_last_alert_mia
+    label: Crying
+    icon: mdi:emoticon-cry
+    events: alerts
+    match_type: CUBO_ALERT_CRY      # one type per lane, once they appear
+    color: "#ff9f0a"
+```
+
+Such a row makes **no recorder call at all** — the list is already in the
+frontend as a state attribute, which is also why it keeps drawing when the
+history behind the other lanes fails. Tap a marker for its type, its time and
+its photo if one was saved.
+
+No alert type is built in. `CUBO_ALERT_TEMPERATURE` is the only one seen on this
+camera so far, the types are free-form strings from CuboAI's API, and a row with
+no `match_type` draws whatever arrives — including types that do not exist yet.
+
+The legend counts markers rather than showing a share of the window, and says
+**recent** because that is what they are: the integration keeps only its last
+`alerts_count` alerts (5 by default) from the last `hours_back` hours (12), so
+the opening hours of a longer window cannot be covered however quiet they were.
 
 Tap a bar for what it is and how long it lasted; tap a row's icon to open that
 sensor. Each lane's share of the window is shown in the legend — that number is

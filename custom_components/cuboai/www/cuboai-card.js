@@ -2671,9 +2671,31 @@ class CuboAITimelineCard extends HTMLElement {
     if (!config || !Array.isArray(config.rows) || !config.rows.length) {
       throw new Error("cuboai-timeline-card: 'rows' is required");
     }
+    // A row that names no entity is unreadable for an events row -- there is
+    // no history reply to come back empty, so it would draw a silent blank
+    // lane forever. Only events rows are checked: history rows have shipped
+    // without validation and a throw here would break existing dashboards.
+    for (const row of config.rows) {
+      if (this._eventsAttr(row) && !(row && row.entity)) {
+        throw new Error("cuboai-timeline-card: an 'events' row needs an 'entity'");
+      }
+    }
     this._config = config;
     this._hours = Number(config.hours) || 14;
     this._rows = config.rows;
+  }
+
+  // Which attribute, if any, holds this row's point events.
+  //
+  //   events: alerts     the attribute name
+  //   events: true       shorthand for the only list either alert sensor
+  //                      publishes
+  //
+  // Anything else is a history row, unchanged.
+  _eventsAttr(row) {
+    const a = row && row.events;
+    if (a === true) return "alerts";
+    return typeof a === "string" && a ? a : null;
   }
 
   getCardSize() {
@@ -2685,9 +2707,43 @@ class CuboAITimelineCard extends HTMLElement {
     // Hours of history is a websocket round trip against the recorder.
     // Refetching on every state tick would hammer it and make the card blink.
     const now = Date.now();
-    if (this._fetchedAt && now - this._fetchedAt < 60000) return;
+    if (this._fetchedAt && now - this._fetchedAt < 60000) {
+      // Point events are already in memory -- they arrive as an attribute on a
+      // state, not from the recorder -- but nothing on screen changes outside
+      // _render, so throttling the FETCH must not also throttle the REPAINT or
+      // an alert sits invisible for up to a minute after it fires. Repaint on
+      // a cheap signature of the lists, not on every tick.
+      const sig = this._eventSignature();
+      if (sig !== this._eventSig) {
+        this._eventSig = sig;
+        this._repaint();
+      }
+      return;
+    }
     this._fetchedAt = now;
+    this._eventSig = this._eventSignature();
     this._load();
+  }
+
+  // Enough of the event lists to notice a new, removed or replaced alert
+  // without walking them on every state tick.
+  _eventSignature() {
+    let sig = "";
+    for (const row of this._rows || []) {
+      if (!this._eventsAttr(row)) continue;
+      const list = this._eventList(row);
+      const newest = list.length ? list[0] : null;
+      sig += `${row.entity}=${list.length}@${(newest && (newest.id || newest.ts || newest.time)) || ""};`;
+    }
+    return sig;
+  }
+
+  // Draw the last window again with the current states. No recorder traffic:
+  // the history half of the picture is whatever the last fetch returned.
+  _repaint() {
+    const r = this._lastRender;
+    if (!r) return;
+    this._render(r.history, r.start, r.end, r.error, r.dataEnd);
   }
 
   disconnectedCallback() {
@@ -2736,7 +2792,15 @@ class CuboAITimelineCard extends HTMLElement {
   async _load() {
     const { start, axisEnd, fetchEnd } = this._window();
     const end = fetchEnd;
-    const ids = [...new Set(this._rows.map((r) => r.entity))];
+    // Events rows are deliberately absent from this list. Their data is a
+    // state ATTRIBUTE, which the recorder drops above 16 KiB and which
+    // history_during_period is asked not to return anyway (no_attributes
+    // below), so querying them would cost a round trip and return nothing.
+    const ids = [...new Set(this._rows.filter((r) => !this._eventsAttr(r)).map((r) => r.entity))];
+    if (!ids.length) {
+      this._render({}, start, axisEnd, null, end);
+      return;
+    }
     try {
       const history = await this._hass.callWS({
         type: "history/history_during_period",
@@ -2793,6 +2857,104 @@ class CuboAITimelineCard extends HTMLElement {
     return spans.filter((sp) => sp.to > sp.from);
   }
 
+  // ── Point events ────────────────────────────────────────────────────────
+  //
+  // Alerts are not states. They have a moment, not a duration, and they never
+  // reach the recorder as history -- they arrive as a LIST on an attribute of
+  // sensor.cuboai_..._last_alert_..., newest first. So they cannot go through
+  // _spans (which filters out every zero-width interval at its last line) and
+  // they cannot come from _load. They are read straight off hass.states and
+  // drawn as ticks.
+
+  // This row's raw list, defended against every way it can be missing.
+  //
+  // The attribute is normally present and list-valued, but before the first
+  // refresh -- and after a refresh whose alert fetch threw, which resets the
+  // list to empty rather than keeping the last one -- it is []. That is
+  // "nothing to draw", never an error.
+  _eventList(row) {
+    const attr = this._eventsAttr(row);
+    if (!attr) return [];
+    const st = this._hass && this._hass.states && this._hass.states[row.entity];
+    if (!st || st.state === "unavailable" || st.state === "unknown") return [];
+    const list = st.attributes && st.attributes[attr];
+    return Array.isArray(list) ? list : [];
+  }
+
+  // When one alert happened, in epoch milliseconds, or NaN if it cannot be
+  // known.
+  //
+  // `ts` is unix SECONDS and is preferred because it needs no zone reasoning
+  // at all. The string forms do: Date.parse("2024-01-01") is specified as UTC
+  // midnight while Date.parse("2024-01-01T00:00") is LOCAL, so a bare date
+  // silently lands hours off on a card that is local-time throughout. A
+  // date-only string is therefore read as local midnight, matching the rest of
+  // this card rather than the spec's split personality.
+  _eventTime(a) {
+    if (!a || typeof a !== "object") return NaN;
+    if (a.ts !== undefined && a.ts !== null && a.ts !== "") {
+      const n = Number(a.ts);
+      // `ts` has no default upstream: the key exists holding null whenever the
+      // API omits it. Plotted, that is a mark at the epoch or left: NaN%.
+      if (!Number.isFinite(n) || n <= 0) return NaN;
+      return n * 1000;
+    }
+    const s = a.time || a.created;
+    if (typeof s !== "string" || !s) return NaN;
+    const t = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + "T00:00:00" : s);
+    return Number.isFinite(t) ? t : NaN;
+  }
+
+  // One row's list into the marks inside the window. Pure -- no DOM, no hass.
+  //
+  // `match_type` narrows the lane to one alert type (or a list of them) so a
+  // Cry lane and a Cough lane can be separate rows over the same entity. With
+  // none, every type that arrives is drawn: the types are free-form strings
+  // from the API and nothing in the pipeline enumerates them, so a hardcoded
+  // list would silently hide any type this camera has not shown yet.
+  _events(row, list, start, end) {
+    if (!Array.isArray(list)) return [];
+    const raw = row.match_type;
+    const want =
+      raw === undefined || raw === null ? null : (Array.isArray(raw) ? raw : [raw]).map(String);
+    const from = start.getTime();
+    const to = end.getTime();
+    const marks = [];
+    const seen = new Set();
+    for (const a of list) {
+      const t = this._eventTime(a);
+      if (!Number.isFinite(t)) continue;
+      if (t < from || t >= to) continue;
+      const type = String((a && a.type) || "unknown");
+      if (want && !want.includes(type)) continue;
+      // The same alert is re-published on every poll and both alert sensors
+      // are built from one list, so a lane can be handed the same event twice.
+      // Two marks at one moment stack invisibly and count double in the legend.
+      const key = a && a.id !== undefined && a.id !== null ? "id:" + a.id : `${type}@${t}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // `image` is null whenever download_images is off, and the session
+      // history sensor's `image_url` is null rather than "" for the same case
+      // -- so this is a truthiness test, never a comparison against "".
+      marks.push({ t, type, image: (a && (a.image || a.image_url)) || null, id: a && a.id });
+    }
+    // The list arrives newest first; the axis runs the other way.
+    marks.sort((x, y) => x.t - y.t);
+    return marks;
+  }
+
+  // CUBO_ALERT_TEMPERATURE -> Temperature. The prefix is the same on every
+  // type and spends a third of a phone's line width saying nothing.
+  _eventLabel(type) {
+    const t = String(type || "unknown")
+      .replace(/^CUBO_ALERT_/, "")
+      .replace(/_/g, " ")
+      .toLowerCase()
+      .trim();
+    if (!t) return "Alert";
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+
   _shell() {
     if (this._card) return this._body;
     this._card = document.createElement("ha-card");
@@ -2808,6 +2970,16 @@ class CuboAITimelineCard extends HTMLElement {
                   overflow: hidden; min-width: 0; }
       .tl-seg { position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
                 min-width: 2px; }
+      /* A point event has no duration to scale, so its mark is a fixed width
+         in PIXELS -- a percentage would be a hairline on a phone and a slab
+         on a tablet. 9px stays tappable at any window length. */
+      .tl-mark { position: absolute; top: 1px; bottom: 1px; width: 9px;
+                 margin-left: -4px; border-radius: 3px; cursor: pointer;
+                 box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+      /* The track is overflow:hidden, so a thumbnail cannot live in it. The
+         detail line is below the legend and full width -- phone-safe. */
+      .tl-shot { display: block; margin-top: 6px; max-width: 100%;
+                 width: 180px; border-radius: 6px; }
       /* Gridlines are drawn inside every track at the same offsets. That
          alignment down the column is the entire point of the card. */
       .tl-grid { position: absolute; top: 0; bottom: 0; width: 1px;
@@ -2851,14 +3023,24 @@ class CuboAITimelineCard extends HTMLElement {
     const body = this._shell();
     this._card.header = this._config.title || undefined;
     body.textContent = "";
+    // Kept so a new alert can be repainted onto the same window without going
+    // back to the recorder for history that has not changed.
+    this._lastRender = { history, start, end, error, dataEnd };
 
+    const anyEvents = this._rows.some((r) => this._eventsAttr(r));
     if (error) {
       const p = document.createElement("div");
       p.className = "tl-note";
       p.textContent = error;
       body.appendChild(p);
-      return;
+      // A recorder hiccup says nothing about the alert lanes -- they never
+      // asked it anything -- so they still draw. With no events row the card
+      // behaves exactly as it did: the error and nothing else.
+      if (!anyEvents) return;
     }
+    // Events rows read hass.states, not the recorder, so they are unaffected;
+    // history rows have nothing and must say so rather than show a number.
+    const historyFailed = Boolean(error);
 
     const span = end.getTime() - start.getTime();
     const pct = (t) => ((t - start.getTime()) / span) * 100;
@@ -2886,6 +3068,7 @@ class CuboAITimelineCard extends HTMLElement {
 
     let drew = 0;
     const covered = new Map();
+    const counted = new Map();
     for (const row of this._rows) {
       let rowCover = 0;
       const line = document.createElement("div");
@@ -2912,6 +3095,44 @@ class CuboAITimelineCard extends HTMLElement {
         g.className = "tl-grid";
         g.style.left = pct(t) + "%";
         track.appendChild(g);
+      }
+
+      if (this._eventsAttr(row)) {
+        const marks = this._events(row, this._eventList(row), start, end);
+        for (const m of marks) {
+          const mk = document.createElement("div");
+          mk.className = "tl-mark";
+          mk.style.left = pct(m.t) + "%";
+          mk.style.background = row.color || "#ff453a";
+          const at = new Date(m.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const text =
+            `${row.label || row.entity} · ${this._eventLabel(m.type)} · ${at}` +
+            (m.image ? " · photo" : "");
+          mk.title = text;
+          mk.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            this._detail.textContent = text;
+            this._detail.classList.remove("empty");
+            if (m.image) {
+              const img = document.createElement("img");
+              img.className = "tl-shot";
+              img.src = m.image;
+              img.alt = "";
+              // Photos are pruned to max_saved_photos while alerts_count can
+              // be larger, so an older alert holds the path of a jpg that has
+              // been deleted -- and /local 404s outright on an install with no
+              // www folder. Either way, no broken-image icon.
+              img.addEventListener("error", () => img.remove());
+              this._detail.appendChild(img);
+            }
+          });
+          track.appendChild(mk);
+          drew++;
+        }
+        counted.set(row, marks.length);
+        line.appendChild(track);
+        body.appendChild(line);
+        continue;
       }
 
       const points = (history && history[row.entity]) || [];
@@ -2980,7 +3201,32 @@ class CuboAITimelineCard extends HTMLElement {
       // identical-looking stipple hides it completely.
       const pc = document.createElement("span");
       pc.className = "tl-pc";
-      pc.textContent = `${Math.round((100 * (covered.get(row) || 0)) / (dataSpan || span))}%`;
+      if (this._eventsAttr(row)) {
+        // A share of the window is meaningless for events that have no
+        // duration -- it is 0% however many fired. The count says "recent"
+        // because it is not the night's total: the integration keeps only its
+        // last `alerts_count` alerts (5 by default) from the last `hours_back`
+        // hours (12), so the start of a 14-hour window cannot be covered.
+        const n = counted.get(row) || 0;
+        // An entity id that does not exist returns [] exactly like a quiet
+        // night does. Silence about a typo is the worst of both.
+        if (this._hass && this._hass.states && !this._hass.states[row.entity]) {
+          pc.textContent = "sensor not found";
+          pc.title = `No entity named ${row.entity}`;
+        } else {
+          pc.textContent = n === 1 ? "1 recent alert" : `${n} recent alerts`;
+        }
+        pc.title = "Only the most recent alerts the integration keeps are available.";
+      } else if (historyFailed) {
+        // The recorder did not answer, so this lane has no data -- and 0% is a
+        // claim about the night, not an admission of not knowing. `_spans`
+        // already refuses that conflation for `unavailable` readings; the
+        // legend must not undo it one line later.
+        pc.textContent = "—";
+        pc.title = "No history returned for this window.";
+      } else {
+        pc.textContent = `${Math.round((100 * (covered.get(row) || 0)) / (dataSpan || span))}%`;
+      }
       key.appendChild(pc);
       legend.appendChild(key);
     }
@@ -2988,7 +3234,9 @@ class CuboAITimelineCard extends HTMLElement {
 
     this._detail = document.createElement("div");
     this._detail.className = "tl-detail empty";
-    this._detail.textContent = "Tap a bar for its times, or an icon for the sensor.";
+    this._detail.textContent = anyEvents
+      ? "Tap a bar or a marker for detail, or an icon for the sensor."
+      : "Tap a bar for its times, or an icon for the sensor.";
     body.appendChild(this._detail);
 
     // An empty chart and a broken one look identical otherwise.
