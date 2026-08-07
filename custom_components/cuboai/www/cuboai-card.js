@@ -2766,7 +2766,14 @@ class CuboAITimelineCard extends HTMLElement {
 
     let open = null;
     for (const p of points) {
-      const t = Math.max(at(p), start.getTime());
+      const raw = at(p);
+      // Points outside the window are discarded, not clamped. Clamping one
+      // that begins AFTER the end closed its span at the end instead -- a
+      // negative width, which surfaced as a lane reporting -35% coverage.
+      // Home Assistant bounds its own reply, but the card must not depend on
+      // that to produce a sane number.
+      if (raw >= end.getTime()) break;
+      const t = Math.max(raw, start.getTime());
       if (matches(value(p))) {
         if (open === null) open = t;
       } else if (open !== null) {
@@ -2775,7 +2782,7 @@ class CuboAITimelineCard extends HTMLElement {
       }
     }
     if (open !== null) spans.push({ from: open, to: end.getTime() });
-    return spans;
+    return spans.filter((sp) => sp.to > sp.from);
   }
 
   _shell() {
@@ -2809,8 +2816,14 @@ class CuboAITimelineCard extends HTMLElement {
       .tl-ico { cursor: pointer; }
       /* Tooltips need a mouse. On a phone the labels and the timespans were
          unreachable, so both are shown outright. */
+      /* Which window this is. Two tabs drawing genuinely different periods
+         still read as the same chart when nothing on either says what it
+         covers -- especially when several lanes are empty in both. */
+      .tl-when { font-size: 12px; color: var(--secondary-text-color);
+                 padding: 0 0 6px 36px; }
       .tl-legend { display: flex; flex-wrap: wrap; gap: 4px 12px;
                    padding: 8px 0 0 36px; }
+      .tl-pc { color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
       .tl-key { display: flex; align-items: center; gap: 5px; font-size: 12px;
                 color: var(--secondary-text-color); }
       .tl-dot { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
@@ -2842,6 +2855,13 @@ class CuboAITimelineCard extends HTMLElement {
     const span = end.getTime() - start.getTime();
     const pct = (t) => ((t - start.getTime()) / span) * 100;
 
+    const stamp = (d) =>
+      d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    const when = document.createElement("div");
+    when.className = "tl-when";
+    when.textContent = `${stamp(start)} – ${stamp(end)} · ${Math.round(span / 3600e3)}h`;
+    body.appendChild(when);
+
     // Marks, at whatever spacing keeps them from colliding. A week at six
     // hours is twenty-eight labels in the width of a phone, all overlapping,
     // so past two days it switches to one per day and labels the weekday.
@@ -2857,7 +2877,9 @@ class CuboAITimelineCard extends HTMLElement {
     }
 
     let drew = 0;
+    const covered = new Map();
     for (const row of this._rows) {
+      let rowCover = 0;
       const line = document.createElement("div");
       line.className = "tl-row";
 
@@ -2904,8 +2926,10 @@ class CuboAITimelineCard extends HTMLElement {
           this._detail.classList.remove("empty");
         });
         track.appendChild(seg);
+        rowCover += s.to - s.from;
         drew++;
       }
+      covered.set(row, rowCover);
       line.appendChild(track);
       body.appendChild(line);
     }
@@ -2929,6 +2953,7 @@ class CuboAITimelineCard extends HTMLElement {
     axis.appendChild(ticks);
     body.appendChild(axis);
 
+    const dataSpan = (dataEnd ? dataEnd.getTime() : end.getTime()) - start.getTime();
     const legend = document.createElement("div");
     legend.className = "tl-legend";
     for (const row of this._rows) {
@@ -2941,6 +2966,14 @@ class CuboAITimelineCard extends HTMLElement {
       const t = document.createElement("span");
       t.textContent = row.label || row.entity;
       key.appendChild(t);
+      // The share of the window each lane covers. This is what actually
+      // distinguishes one period from another at a glance -- noise at 52%
+      // versus 84% is the difference between two nights, and a wall of
+      // identical-looking stipple hides it completely.
+      const pc = document.createElement("span");
+      pc.className = "tl-pc";
+      pc.textContent = `${Math.round((100 * (covered.get(row) || 0)) / (dataSpan || span))}%`;
+      key.appendChild(pc);
       legend.appendChild(key);
     }
     body.appendChild(legend);
