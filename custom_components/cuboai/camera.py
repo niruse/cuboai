@@ -37,9 +37,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     # The play_recording service needs to reach these instances to point them
     # at a stream, so keep them alongside the entry's other runtime objects.
-    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})[
-        "recording_cameras"
-    ] = recording_cameras
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["recording_cameras"] = recording_cameras
 
     if camera_entities:
         async_add_entities(camera_entities)
@@ -469,9 +467,7 @@ class CuboRecordingCamera(CoordinatorEntity, Camera):
         if self._playing_from is not None:
             import datetime as dt
 
-            attrs["playing_from"] = dt.datetime.fromtimestamp(
-                self._playing_from, dt.UTC
-            ).isoformat()
+            attrs["playing_from"] = dt.datetime.fromtimestamp(self._playing_from, dt.UTC).isoformat()
         return attrs
 
     def set_playback(self, source: str | None, start_epoch: int | None) -> None:

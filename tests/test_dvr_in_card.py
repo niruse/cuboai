@@ -50,9 +50,7 @@ def _install_camera_mocks():
     coordinator_mod = ModuleType("homeassistant.helpers.update_coordinator")
     coordinator_mod.CoordinatorEntity = _FakeCoordinatorEntity
     aiohttp_client_mod = ModuleType("homeassistant.helpers.aiohttp_client")
-    aiohttp_client_mod.async_get_clientsession = MagicMock(
-        side_effect=RuntimeError("no session in tests")
-    )
+    aiohttp_client_mod.async_get_clientsession = MagicMock(side_effect=RuntimeError("no session in tests"))
     sys.modules.setdefault("homeassistant.components", components)
     sys.modules.setdefault("homeassistant.components.camera", camera_mod)
     sys.modules.setdefault("homeassistant.helpers.update_coordinator", coordinator_mod)
@@ -68,9 +66,7 @@ CARD = Path(__file__).parent.parent / "custom_components" / "cuboai" / "www" / "
 
 def _make_recording():
     coordinator = MagicMock()
-    rec = camera_platform.CuboRecordingCamera(
-        coordinator, {"device_id": "DEV1", "baby_name": "Mia"}
-    )
+    rec = camera_platform.CuboRecordingCamera(coordinator, {"device_id": "DEV1", "baby_name": "Mia"})
     rec.hass = MagicMock()
     rec.async_write_ha_state = MagicMock()
     return rec
@@ -84,8 +80,7 @@ def _card_code():
     failed against its own explanation.
     """
     return "\n".join(
-        line for line in CARD.read_text(encoding="utf-8").splitlines()
-        if not line.strip().startswith("//")
+        line for line in CARD.read_text(encoding="utf-8").splitlines() if not line.strip().startswith("//")
     )
 
 
@@ -161,13 +156,12 @@ class TestCardKeepsPlaybackInPlace:
         """Each of these re-applies the LIVE entity to the child. Any one left
         unguarded ends playback the moment the config is touched."""
         lines = _card_code().splitlines()
-        sites = [i for i, line in enumerate(lines)
-                 if "this.content.setConfig(webrtcConfig)" in line]
+        sites = [i for i, line in enumerate(lines) if "this.content.setConfig(webrtcConfig)" in line]
         assert len(sites) == 4, f"call sites moved: {sites}"
         for i in sites:
             # The guard sits on the call line or just above it -- two of these
             # retarget the config, two skip the call outright.
-            window = "\n".join(lines[max(0, i - 3):i + 1])
+            window = "\n".join(lines[max(0, i - 3) : i + 1])
             assert "_dvrPlaying" in window, lines[i]
 
     def test_there_is_a_way_back_to_live(self):
@@ -222,8 +216,7 @@ class TestCardKeepsPlaybackInPlace:
         # seconds to connect and seek. Pinned as a pair, because asserting
         # clearTimeout on its own was satisfied by the one in
         # disconnectedCallback while the debounce itself was gone.
-        assert ("clearTimeout(this._dvrNudge);\n          this._dvrNudge = setTimeout"
-                in code)
+        assert "clearTimeout(this._dvrNudge);\n          this._dvrNudge = setTimeout" in code
 
     def test_playback_works_on_a_card_with_no_device_id(self):
         """Regression, self-inflicted: splitting commit() into playFrom()
@@ -296,10 +289,13 @@ def test_recording_matcher(tmp_path):
     harness.write_text(_HARNESS, encoding="utf-8")
 
     one = {"camera.mia_local_camera": _live("DEV1"), "camera.mia_recording": _rec("DEV1")}
-    two = dict(one, **{
-        "camera.leo_local_camera": _live("DEV2"),
-        "camera.leo_recording": _rec("DEV2"),
-    })
+    two = dict(
+        one,
+        **{
+            "camera.leo_local_camera": _live("DEV2"),
+            "camera.leo_recording": _rec("DEV2"),
+        },
+    )
     cases = [
         # Paired by device_id.
         {"hass": {"states": one}, "deviceId": "DEV1"},
@@ -322,7 +318,9 @@ def test_recording_matcher(tmp_path):
 
     proc = subprocess.run(
         [shutil.which("node"), str(harness), str(card), str(payload)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -336,3 +334,57 @@ def test_recording_matcher(tmp_path):
         None,
         None,
     ]
+
+
+_SPANS_HARNESS = """
+const fs = require('fs');
+globalThis.HTMLElement = class {};
+globalThis.customElements = { get: () => undefined, define: () => {} };
+globalThis.window = globalThis;
+globalThis.document = { createElement: () => ({ style:{}, appendChild(){}, setAttribute(){}, addEventListener(){} }) };
+new Function(fs.readFileSync(process.argv[2], 'utf8') + ';globalThis.__TL = CuboAITimelineCard;')();
+const card = Object.create(globalThis.__TL.prototype);
+const start = new Date(1000000 * 1000), end = new Date(1010000 * 1000);
+// A matching reading that begins AFTER the window ends. Home Assistant bounds
+// its own reply, so only a card fed a wider range than it asked for sees this.
+const points = [
+  { lu: 1000500, s: 'in crib' },
+  { lu: 1001500, s: 'out' },
+  { lu: 1020000, s: 'in crib' },
+];
+const spans = card._spans({ match: 'in crib' }, points, start, end);
+console.log(JSON.stringify({
+  spans: spans.map((x) => [x.from / 1000, x.to / 1000]),
+  anyNegative: spans.some((x) => x.to <= x.from),
+  anyPastEnd: spans.some((x) => x.to > end.getTime()),
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_readings_outside_the_window_are_discarded_not_clamped(tmp_path):
+    """Clamping one that begins AFTER the end closed its span at the end,
+    running the span backwards. It surfaced as a lane reporting -35% coverage
+    once the legend started showing each lane's share of the window.
+
+    Two things now prevent it -- the loop stops at the window's end, and any
+    span that still ends before it starts is filtered out -- and they are
+    redundant: removing either alone leaves this passing, because the other
+    still covers it. Only removing both fails, which is verified. That is the
+    right level for this test to sit at: it asserts the outcome, not a line.
+    """
+    (tmp_path / "card.js").write_text(CARD.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "h.js").write_text(_SPANS_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        [shutil.which("node"), str(tmp_path / "h.js"), str(tmp_path / "card.js")],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+
+    assert got["anyNegative"] is False, got["spans"]
+    assert got["anyPastEnd"] is False, got["spans"]
+    assert got["spans"] == [[1000500, 1001500]]

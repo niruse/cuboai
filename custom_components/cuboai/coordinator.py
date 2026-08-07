@@ -62,8 +62,7 @@ def _history_payload(hist) -> dict:
     return out
 
 
-def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False,
-                      history_sensors=False):
+def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False, history_sensors=False):
     """Synchronous function to fetch local data via TUTK."""
     from .utils import log_to_file
 
@@ -277,8 +276,9 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                         except Exception as gerr2:
                             log_to_file(f"Failed to load libgcompat.so: {gerr2}")
 
-                    return _fetch_local_data(uid, account, password, camera_ip, fetch_extras,
-                                             is_retry=True, history_sensors=history_sensors)
+                    return _fetch_local_data(
+                        uid, account, password, camera_ip, fetch_extras, is_retry=True, history_sensors=history_sensors
+                    )
                 except Exception as retry_e:
                     log_to_file(f"Alpine retry failed: {retry_e}\n{traceback.format_exc()}")
         log_to_file(f"Failed to connect to camera via TUTK for local polling: {e}\n{traceback.format_exc()}")
@@ -348,11 +348,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
         makes the local poll noticeably slower and is only worth paying for if
         the baby-present / noise / motion sensors are actually wanted.
         """
-        return bool(
-            self._entry.options.get(
-                "history_sensors", self._entry.data.get("history_sensors", False)
-            )
-        )
+        return bool(self._entry.options.get("history_sensors", self._entry.data.get("history_sensors", False)))
 
     @property
     def hours_back(self) -> int:
@@ -518,8 +514,14 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     ),
                     asyncio.wait_for(
                         self.hass.async_add_executor_job(
-                            _fetch_local_data, uid, account, password, camera_ip, fetch_extras,
-                            False, self.history_sensors_enabled,
+                            _fetch_local_data,
+                            uid,
+                            account,
+                            password,
+                            camera_ip,
+                            fetch_extras,
+                            False,
+                            self.history_sensors_enabled,
                         )
                         if uid
                         else _dummy_async(),

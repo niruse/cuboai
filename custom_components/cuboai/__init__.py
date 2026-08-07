@@ -226,9 +226,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         start_epoch = _parse_start_time(raw)
         if start_epoch is None:
-            raise HomeAssistantError(
-                f"Could not read start_time {raw!r} — use '10m', '2h', or a date/time"
-            )
+            raise HomeAssistantError(f"Could not read start_time {raw!r} — use '10m', '2h', or a date/time")
 
         for entry in hass.config_entries.async_entries(DOMAIN):
             cams = entry.data.get("all_cameras") or entry.data.get("cameras", [])

@@ -6,6 +6,7 @@ reading from 40 minutes ago rendered as now is the failure mode the upstream
 sensor API is explicitly built to make impossible, so the age has to survive
 the trip from the library, through the coordinator payload, to the entity.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -50,15 +51,22 @@ class _Hist:
     def __init__(self, **fields):
         self.stale = fields.pop("stale", False)
         self.fetched_at = dt.datetime(2026, 8, 6, 12, 0, 0, tzinfo=dt.UTC)
-        for name in ("baby_present", "noise", "motion", "wellbeing",
-                     "baby_event", "privacy", "temperature_c", "humidity_pct"):
+        for name in (
+            "baby_present",
+            "noise",
+            "motion",
+            "wellbeing",
+            "baby_event",
+            "privacy",
+            "temperature_c",
+            "humidity_pct",
+        ):
             setattr(self, name, fields.get(name, _Reading(None, None, available=False)))
 
 
 def test_payload_keeps_age_and_staleness_with_every_value():
     payload = _load_history_payload()(
-        _Hist(baby_present=_Reading(1, 62.0, note="in crib",
-                                    ts=dt.datetime(2026, 8, 6, 11, 59, tzinfo=dt.UTC)))
+        _Hist(baby_present=_Reading(1, 62.0, note="in crib", ts=dt.datetime(2026, 8, 6, 11, 59, tzinfo=dt.UTC)))
     )
     bp = payload["baby_present"]
     # The value must never travel alone.
@@ -111,8 +119,10 @@ def _make_sensor(history, monkeypatch, field="baby_present", labelled=True):
     upd.CoordinatorEntity = _CoordinatorEntity
 
     for name, mod in (
-        ("homeassistant", ha), ("homeassistant.components", comp),
-        ("homeassistant.components.sensor", sens), ("homeassistant.const", const),
+        ("homeassistant", ha),
+        ("homeassistant.components", comp),
+        ("homeassistant.components.sensor", sens),
+        ("homeassistant.const", const),
         ("homeassistant.helpers", helpers),
         ("homeassistant.helpers.update_coordinator", upd),
     ):
@@ -131,15 +141,21 @@ def _make_sensor(history, monkeypatch, field="baby_present", labelled=True):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, "cuboai_pkg.sensor", module)
     spec.loader.exec_module(module)
-    return module.CuboHistorySensor(
-        _FakeCoordinator(history), "DEV1", "Mia", field, "Baby Present", None, labelled
-    )
+    return module.CuboHistorySensor(_FakeCoordinator(history), "DEV1", "Mia", field, "Baby Present", None, labelled)
 
 
 def test_fresh_reading_is_available_and_uses_the_note(monkeypatch):
     s = _make_sensor(
-        {"baby_present": {"value": 1, "age_s": 65.0, "available": True,
-                          "stale": False, "note": "in crib", "ts_utc": None}},
+        {
+            "baby_present": {
+                "value": 1,
+                "age_s": 65.0,
+                "available": True,
+                "stale": False,
+                "note": "in crib",
+                "ts_utc": None,
+            }
+        },
         monkeypatch,
     )
     assert s.available is True
@@ -150,8 +166,16 @@ def test_fresh_reading_is_available_and_uses_the_note(monkeypatch):
 def test_a_forty_minute_old_reading_is_not_shown_as_current(monkeypatch):
     """The core guarantee: too old means unavailable, not a stale-looking value."""
     s = _make_sensor(
-        {"baby_present": {"value": 1, "age_s": 40 * 60, "available": True,
-                          "stale": True, "note": "in crib", "ts_utc": None}},
+        {
+            "baby_present": {
+                "value": 1,
+                "age_s": 40 * 60,
+                "available": True,
+                "stale": True,
+                "note": "in crib",
+                "ts_utc": None,
+            }
+        },
         monkeypatch,
     )
     assert s.available is False
@@ -160,16 +184,35 @@ def test_a_forty_minute_old_reading_is_not_shown_as_current(monkeypatch):
 def test_unknown_age_is_treated_as_untrustworthy(monkeypatch):
     """An age we cannot read is not the same as a fresh one."""
     s = _make_sensor(
-        {"baby_present": {"value": 1, "age_s": None, "available": True,
-                          "stale": False, "note": "in crib", "ts_utc": None}},
+        {
+            "baby_present": {
+                "value": 1,
+                "age_s": None,
+                "available": True,
+                "stale": False,
+                "note": "in crib",
+                "ts_utc": None,
+            }
+        },
         monkeypatch,
     )
     assert s.available is False
 
 
 def test_never_obtained_reading_is_unavailable(monkeypatch):
-    s = _make_sensor({"baby_present": {"value": None, "age_s": None, "available": False,
-                                       "stale": False, "note": None, "ts_utc": None}}, monkeypatch)
+    s = _make_sensor(
+        {
+            "baby_present": {
+                "value": None,
+                "age_s": None,
+                "available": False,
+                "stale": False,
+                "note": None,
+                "ts_utc": None,
+            }
+        },
+        monkeypatch,
+    )
     assert s.available is False
 
 
@@ -205,8 +248,7 @@ def test_unlabelled_baby_present_reports_its_number(monkeypatch):
     wins whenever the library has a phrase.
     """
     s = _make_sensor(
-        {"baby_present": {"value": 0, "age_s": 55.0, "available": True,
-                          "stale": False, "note": None, "ts_utc": None}},
+        {"baby_present": {"value": 0, "age_s": 55.0, "available": True, "stale": False, "note": None, "ts_utc": None}},
         monkeypatch,
     )
     assert s.available is True
@@ -217,8 +259,16 @@ def test_unlabelled_baby_present_reports_its_number(monkeypatch):
 def test_a_phrase_still_wins_over_the_number(monkeypatch):
     """1 and 2 are mapped, and "in crib" is far more use than "1"."""
     s = _make_sensor(
-        {"baby_present": {"value": 1, "age_s": 55.0, "available": True,
-                          "stale": False, "note": "in crib", "ts_utc": None}},
+        {
+            "baby_present": {
+                "value": 1,
+                "age_s": 55.0,
+                "available": True,
+                "stale": False,
+                "note": "in crib",
+                "ts_utc": None,
+            }
+        },
         monkeypatch,
     )
     assert s.native_value == "in crib"
@@ -229,8 +279,7 @@ def test_a_stale_reading_is_still_withheld(monkeypatch):
     """Showing the number is not the same as vouching for it: an old "in crib"
     presented as current is the failure this sensor was built to avoid."""
     s = _make_sensor(
-        {"baby_present": {"value": 0, "age_s": 3600.0, "available": True,
-                          "stale": True, "note": None, "ts_utc": None}},
+        {"baby_present": {"value": 0, "age_s": 3600.0, "available": True, "stale": True, "note": None, "ts_utc": None}},
         monkeypatch,
     )
     assert s.available is False
@@ -240,8 +289,9 @@ def test_numeric_field_still_shows_its_number(monkeypatch):
     """Noise is a 0-100 measurement: the number IS the meaning, so no phrase
     is expected and the value must not be suppressed."""
     s = _make_sensor(
-        {"noise": {"value": 25, "age_s": 55.0, "available": True,
-                   "stale": False, "note": None, "ts_utc": None}},
-        monkeypatch, field="noise", labelled=False,
+        {"noise": {"value": 25, "age_s": 55.0, "available": True, "stale": False, "note": None, "ts_utc": None}},
+        monkeypatch,
+        field="noise",
+        labelled=False,
     )
     assert s.native_value == 25

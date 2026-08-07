@@ -133,8 +133,7 @@ class Go2RTCManager:
             playback_script = os.path.join(script_dir, "cuboai_stream_playback.py")
             state_file = self.hass.config.path(f"cuboai_playback_{dev_id}.json")
             self._streams[f"cuboai_dvr_{dev_id}"] = [
-                f"exec:{env_vars}CUBOAI_PLAY_STATE={state_file} "
-                f"{py} {playback_script}#{{killsignal=SIGTERM}}",
+                f"exec:{env_vars}CUBOAI_PLAY_STATE={state_file} {py} {playback_script}#{{killsignal=SIGTERM}}",
             ]
 
     @property
