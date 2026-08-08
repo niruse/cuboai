@@ -86,6 +86,17 @@ landed.**
 
 - **In crib reads 0h.** Correct until the camera has actually reported someone
   in the crib. An empty room is a reading, not a failure.
+- **In crib / Sleeps stay at 0 forever?** The presence readings only exist when
+  the camera's **baby presence / sleep-safety detection is turned on** (in the
+  CuboAI app, or via the integration's Baby Presence switch). With it off the
+  camera never reports "in crib", so the tiles and the sleep (zzz) lane
+  legitimately read 0 — that is the camera's setting, not a dashboard fault.
+- **The `Caregiver?` lane at 0% is expected, not broken.** It matches the rare
+  state the firmware's opaque wellbeing bit *might* use for a caregiver visit
+  (the usual state is `flagged active`, the baseline). Whether the bit really
+  tracks visits is settled by one night when you know you went in — see the
+  comment on the lane in `cuboai.yaml`. Matching the baseline instead would
+  just mirror the Camera online lane.
 - **Every window also reports how long the sensor said nothing.** If that figure
   is large, the figures beside it cover only part of the window — an offline
   camera and an empty room otherwise look identical.

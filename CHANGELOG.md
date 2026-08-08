@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.1]
+
+### Fixed
+- **History sensors no longer flap unavailable on every failed DVR pull (~50% dead air on the dashboard timelines).** The library always had graceful degradation — a failed pull is supposed to re-serve the last-good record with a grown age and `stale: true` — but its cache lived on the TUTK session object, and every poll builds a fresh session, so the cache was always empty and one failed pull meant a full unavailable gap on all five history sensors. The coordinator now keeps a per-camera cache alive across polls and hands it to the pull; and on cycles where the camera connection itself failed, it rebuilds the payload from the last pulled record **re-aged to now** (also fixing a subtle opposite bug where a partially failed poll merged the old payload with a *frozen* age that would never expire). The 15-minute freshness gate is unchanged: transient failures are bridged, but carried data still expires honestly — a stale "baby present" can never masquerade as live.
+
+### Changed
+- **Example dashboard:** documented in `dashboards/README.md` that the In crib / Sleeps tiles and the sleep lane stay at 0 until the camera's baby-presence / sleep-safety detection is turned on, and that the `Caregiver?` lane at 0% is the expected exploratory baseline (it matches the rare wellbeing state, not the always-on `flagged active` one).
+
 ## [2.6.0]
 
 ### Fixed

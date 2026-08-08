@@ -61,8 +61,17 @@ This integration provides a massive suite of local control and real-time monitor
 - **Connection Details**: Connection Mode (LAN vs P2P) and Connected Users count
 - **Hardware Info**: Camera Stand Type and Session History
 
+### 🕘 DVR History Sensors (opt-in)
+- **Baby Present, Caregiver Activity, Noise Level, Motion, Privacy Mode**: read from the camera's own on-SD DVR log (~1 minute lag). Enable with the **History sensors** option. Every reading carries `age_seconds` / `stale` attributes, and an entity goes unavailable rather than present a stale reading as live — this is a baby monitor, after all.
+
+### 📼 Recorded Playback
+- **Recording camera entity** (`camera.<baby>_recording`) + the `cuboai.play_recording` service replay any moment from roughly the last **72 hours** of on-camera DVR footage — see [Recorded Playback](#-recorded-playback-on-camera-dvr).
+
 ### 🌟 Plus:
 - **Zero-Delay Local Streaming**: Video is fetched directly from the camera on your local network!
+- **Two-Way Audio & Picture-in-Picture**: talk to the room through the bundled Lovelace card's mic button; pop the video out into a floating window (native PiP on Android/Apple, overlay PiP with the BPM/temperature badges on desktop Chrome).
+- **NVR / RTSP Export**: publish a credential-protected RTSP URL that Frigate, Synology, HiLook or any recorder can consume — enable the NVR options and copy the `nvr_rtsp_url` attribute from the WebRTC Stream sensor.
+- **HomeKit-friendly H.264 Transcode**: a per-camera toggle (also the `cuboai.set_h264_transcode` service) for H.265 models (Cubo 3 / SW05) whose native video HomeKit and HA's HLS player cannot decode.
 - **Multi-Camera Support**: Add as many CuboAI cameras as you own!
 - **Secure Authentication**: Uses native AWS Cognito SRP authentication.
 
@@ -105,22 +114,28 @@ These settings can be changed seamlessly without needing to log out or remove th
 <img src="docs/images/config_options.png" width="400" />
 
 You can adjust:
+- **Cameras:** add or remove which of your account's cameras this entry manages.
 - **Download Images:** Toggle whether to save event thumbnails locally.
 - **Alerts Count:** How many recent alerts to track in the sensor.
 - **Max Saved Photos:** The maximum number of images to keep on disk.
 - **Hours Back:** How far back in time to fetch alerts on startup.
 - **Update Interval:** How often to poll the API for changes.
-- **Camera IP (Optional):** Your camera's local IP is **discovered automatically**, so you can leave this blank! You only need to manually enter the IP if your Home Assistant is on a different VLAN or complex network that prevents auto-discovery.
+- **Camera IP (per camera):** the local transport reaches the camera with a **unicast probe to its LAN IP — there is no broadcast auto-discovery**. The IP is auto-learned and saved after the first successful connection, but if local sensors and the stream stay unavailable (log shows a "no 0x2041" handshake failure and a warning pointing here), set it manually from your router's client list.
+- **RTSP Port:** the port the embedded go2rtc serves RTSP on (it self-heals to a free port if taken).
+- **History sensors:** enable the DVR history sensors (Baby Present, Caregiver Activity, Noise, Motion, Privacy).
+- **H.264 transcode (per camera):** transcode an H.265 camera's video to H.264 for HomeKit / HLS.
+- **NVR export / username / password:** protect and publish the RTSP stream for external recorders.
+- **Cache YouTube/Spotify songs:** keep downloaded lullaby audio on disk for instant replay.
+- **Enable debug logs:** one toggle for full diagnostics (integration + go2rtc + stream engine) — see Troubleshooting.
 
 ### ❌ Missing / Unsupported Features
 While we provide a massive suite of entities, some native CuboAI app features cannot be implemented in Home Assistant currently:
 
-> **Past video playback is no longer on this list.** It moved to a supported feature in **2.5.0** — see [Recorded Playback](#-recorded-playback-on-camera-dvr). Retention is roughly two days rather than the 18 hours previously stated here; measured on a real camera, 48 h back returns footage and 56 h does not, and it varies with the SD card and how much motion there was.
-
 - **Sleep reports (Total Sleep, Wake-ups, Longest Sleep, the routine chart):** CuboAI keeps these behind its paid tier — the app itself renders them as *"Report Preview — Activate Ultimate to see more"* — so the integration cannot fetch them either. The dashboard in this repo computes comparable figures locally from the camera's own DVR history instead.
 - **Body temperature history:** only available while a compatible thermometer is paired and reporting.
-- **Native Two-Way Audio (Without Custom Card):** Home Assistant's default WebRTC implementation does not natively support microphone backchannel audio without using our provided `cuboai-card.js` Custom Lovelace card.
 - **Pan / Tilt:** The CuboAI camera is fixed and does not physically support PTZ (Pan-Tilt-Zoom).
+
+Two-way audio **is** supported — through the bundled `cuboai-card.js` card's mic button (HA's stock camera card has no microphone backchannel). Past video playback is supported since **2.5.0** ([Recorded Playback](#-recorded-playback-on-camera-dvr)), with retention of roughly the last 72 hours depending on the SD card and motion.
 
 ---
 
@@ -186,11 +201,16 @@ For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai
 ### ✨ Features:
 - **Live Environmental Overlays**: Real-time Temperature & Humidity floating directly over the video feed!
 - **Baby Vitals**: Live BPM (Heart Rate) overlay directly on the video if you have the Sleep Sensor Pad!
+- **Two-Way Audio**: tap the mic button to talk to the room — the card negotiates the WebRTC microphone backchannel that stock HA cards can't.
+- **Picture-in-Picture**: pop the video into a floating window — native PiP on Android and Apple devices, and on desktop Chrome an overlay PiP that keeps the BPM/temperature badges visible in the floating window.
+- **Sound that just works**: listening runs over WebRTC (Opus) with an MSE fallback, so audio plays on Chrome, Safari and iOS alike; unmuting waits for your first tap so the browser never blocks it.
 - **Smart Fallback**: Automatically leverages the camera entity to enable fallback to MSE/HLS when you are outside your home network (so video always plays flawlessly over Home Assistant Cloud / Nabu Casa)!
 - **Advanced Lullaby Player**: A dynamic, sliding drawer menu to manage lullabies and speaker logic natively:
   - **Sources**: Play songs directly from **YouTube**, or use **Spotify** links (currently in testing mode).
   - **Library Management**: Create custom playlists, add your own songs, and use the built-in search logic to find tracks easily.
-  - **Playback Control**: Manage play time filters and the underlying speaker logic intuitively from the UI.
+  - **Playback Control**: Manage play time filters, shuffle/repeat (synced across your devices), and the underlying speaker logic intuitively from the UI.
+  - **Song Cache**: with the cache option on, downloaded songs replay instantly; the card's editor has a Clear Song Cache action (also a button entity + `cuboai.clear_youtube_cache`).
+- **Built-in Config Editor**: the card has a visual editor (camera picker, default mute, song filters, per-camera H.264 transcode toggle) — no YAML required.
   
   <p float="left">
     <img src="docs/images/lullaby_step_1.png" width="300" />
@@ -202,13 +222,11 @@ For the absolute best experience, we provide a **Custom Lovelace Card** (`cuboai
 To use the custom card, you must first install the **WebRTC Camera** custom card (by AlexxIT) from HACS, as our card uses it under the hood for ultra-low latency video.
 
 1. **Install WebRTC Camera:** Go to HACS -> Frontend -> Search for "WebRTC Camera" and install it.
-2. **Add CuboAI Card Resource:** 
-   - Navigate to **Settings** -> **Dashboards** -> **Resources** (You may need to click the 3 dots in the top right to see Resources).
-   - Click **Add Resource**.
-   - Set the URL to: `/local/cuboai-card.js?v=1`
-   - Set the Resource Type to: **JavaScript Module**.
-   - Click **Create**!
-3. **Important Cache Note:** If you ever update the integration, change the version number (e.g., `?v=2`) in the Resources menu to force Home Assistant to load the newest code!
+2. **That's it.** Since **2.4.8** the integration registers `cuboai-card.js` automatically (and keeps its cache-buster current on every update) — there is nothing to add under Settings → Dashboards → Resources.
+
+> ⚠️ **Upgrading from an old install?** If you once added `/local/cuboai-card.js?v=…` as a manual resource, **delete that resource** — a manually pinned URL is cached by the browser forever and keeps running old card code (the "`[CuboAI Patch] Prevented duplicate registration`" console message is the telltale). The integration re-points stale entries automatically on startup, but removing the manual resource is the clean fix.
+
+The same file also provides `custom:cuboai-timeline-card` (the day/night report timeline used by the bundled dashboard) — no separate resource needed for it either.
 
 ### 💻 Using the Card in your Dashboard
 
@@ -236,10 +254,10 @@ The camera records to its own storage. This integration can play that footage
 back **inside the card you already have** — no cloud subscription, and no second
 card on your dashboard.
 
-Retention is roughly **two days**, but it varies with the SD card and how much
-motion there was. Measured on one camera, one request an hour: 48 h back
-returned footage, 56 h did not. Requests older than the bar's span are refused
-with a message rather than left to time out.
+Retention is roughly the last **72 hours**, but it varies with the SD card and
+how much motion there was. Measured on one camera, one request an hour: 48 h
+back returned footage, 56 h did not. Requests older than the bar's span are
+refused with a message rather than left to time out.
 
 ### Using it
 
@@ -287,7 +305,8 @@ data:
 ```
 
 `start_time` accepts a relative amount ago or an absolute date/time. A naive
-string like `2026-08-06 02:00:00` is read in **your** timezone.
+string like `2026-08-06 02:00:00` is read in **your** timezone. `duration`
+defaults to **60** seconds and is capped at **900** (15 minutes) per request.
 
 ```yaml
 # Show the last ten minutes on a wall tablet when the doorbell rings.
@@ -404,6 +423,20 @@ a negative reading (the difference between "not in the crib" and "no idea"), and
 a span runs from a matching reading to the next reading of any kind, so gaps are
 not swallowed into one long block.
 
+#### Two lanes people ask about
+
+- **`Caregiver?` at 0% is expected, not broken.** The lane watches the
+  `Caregiver Activity` sensor — the firmware's opaque *wellbeing* bit. Its
+  everyday baseline state is `flagged active`; the lane matches the rare
+  `out of crib (caregiver?)` state that upstream *guesses* marks a visit (the
+  question mark is honest). Matching the baseline instead would simply mirror
+  the Camera online lane. Whether the bit really tracks visits is settled by
+  one night when you know you went in.
+- **`In crib` (with the sleep lane and the Sleeps count) stays at 0 until the
+  camera's baby-presence / sleep-safety detection is turned ON** — in the
+  CuboAI app or via the integration's Baby Presence switch. With it off the
+  camera never reports "in crib"; that is the camera's setting, not a fault.
+
 ### The figures
 
 `packages/cuboai_sleep.yaml` in this repo builds the same four metrics for
@@ -460,6 +493,9 @@ Alerts** — as a worked example.
 > **The example uses the entity IDs of a camera named `mia`.** Yours will differ.
 > Open Developer Tools → States, filter for `cuboai`, and replace `mia`
 > throughout both files with your own. Nothing will render until you do.
+> **[`dashboards/README.md`](dashboards/README.md) walks through exactly what to
+> replace** — including the area-prefix trap (HA prepends the room name to
+> entity ids) and which `mia_` sensors to leave alone. Read it before editing.
 
 **1. Copy both files into your config.**
 
@@ -519,7 +555,11 @@ the period they cover — otherwise they cannot be compared with one another.
 ### If a tab looks empty
 
 - `In crib` stays at zero until the camera has actually reported someone in the
-  crib. An empty room is a reading, not a fault.
+  crib. An empty room is a reading, not a fault — and **it can only ever report
+  one with baby-presence / sleep-safety detection turned on** (CuboAI app, or
+  the integration's Baby Presence switch).
+- `Caregiver?` at 0% is the expected baseline — see
+  [Two lanes people ask about](#two-lanes-people-ask-about).
 - Every window also publishes how long the sensor said *nothing*. If that is
   large, the figures beside it cover only part of the window — an offline camera
   and an empty room otherwise look identical.
@@ -529,6 +569,17 @@ the period they cover — otherwise they cannot be compared with one another.
 ---
 
 ## 🛠️ Troubleshooting
+
+### ⚠️ Upgrading to 2.6.0+ — NVR / RTSP users must re-copy their URL
+
+In **2.6.0** the live stream name changed from `cuboai_<device id>` to
+**`cuboai_combined_<device id>`** — one stream per camera is what fixed HomeKit
+"No Response" on the Cubo 3 (issue #85), and **no alias is offered** for the old
+name (an alias would silently re-create the double-session bug). If you ever
+pasted an RTSP URL into an external recorder (Frigate, Synology, HiLook, …), it
+now points at nothing and the recorder fails **silently**. Re-copy the address
+from the WebRTC Stream sensor's `nvr_rtsp_url` attribute. Everything inside Home
+Assistant (card, HLS, HomeKit, snapshots) migrated automatically.
 
 ### Debug logs
 

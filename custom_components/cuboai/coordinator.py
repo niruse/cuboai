@@ -62,8 +62,18 @@ def _history_payload(hist) -> dict:
     return out
 
 
-def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False, history_sensors=False):
-    """Synchronous function to fetch local data via TUTK."""
+def _fetch_local_data(
+    uid, account, password, camera_ip=None, fetch_extras=True, is_retry=False, history_sensors=False, history_cache=None
+):
+    """Synchronous function to fetch local data via TUTK.
+
+    history_cache is a dict the CALLER keeps alive across polls. Without it,
+    get_history_sensors() falls back to caching on the session object — and
+    since every poll builds a fresh session, its built-in "failed pull returns
+    the last-good reading re-aged" degradation never engages: one failed RDT
+    pull meant a full unavailable gap on every history sensor (observed as
+    ~50% dead air on the dashboard timelines).
+    """
     from .utils import log_to_file
 
     log_to_file(f"Starting _fetch_local_data for UID={uid}, IP={camera_ip}")
@@ -238,7 +248,7 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                         try:
                             from .tutk import cuboai_sensors as _sensors
 
-                            hist = _sensors.get_history_sensors(sess)
+                            hist = _sensors.get_history_sensors(sess, cache=history_cache)
                             data["history"] = _history_payload(hist)
                         except Exception as e:
                             log_to_file(f"Failed to get history sensors: {e}")
@@ -277,7 +287,14 @@ def _fetch_local_data(uid, account, password, camera_ip=None, fetch_extras=True,
                             log_to_file(f"Failed to load libgcompat.so: {gerr2}")
 
                     return _fetch_local_data(
-                        uid, account, password, camera_ip, fetch_extras, is_retry=True, history_sensors=history_sensors
+                        uid,
+                        account,
+                        password,
+                        camera_ip,
+                        fetch_extras,
+                        is_retry=True,
+                        history_sensors=history_sensors,
+                        history_cache=history_cache,
                     )
                 except Exception as retry_e:
                     log_to_file(f"Alpine retry failed: {retry_e}\n{traceback.format_exc()}")
@@ -306,6 +323,11 @@ class CuboAICoordinator(DataUpdateCoordinator):
         self._refresh_token = refresh_token
         self._user_agent = user_agent
         self._session: aiohttp.ClientSession | None = None
+        # Per-device history caches, kept alive ACROSS polls and handed to
+        # get_history_sensors() — this is what lets a failed DVR pull serve
+        # the last-good record re-aged instead of an unavailable gap. Only
+        # this coordinator's (serialized) updates touch them.
+        self._history_caches: dict[str, dict] = {}
 
         # Portable image storage path
         self._images_dir = self._get_images_dir()
@@ -522,6 +544,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                             fetch_extras,
                             False,
                             self.history_sensors_enabled,
+                            self._history_caches.setdefault(device_id, {}),
                         )
                         if uid
                         else _dummy_async(),
@@ -568,6 +591,25 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     new_options[f"camera_ip_{device_id}"] = fetched_ip
                     self.hass.config_entries.async_update_entry(self._entry, options=new_options)
                     _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
+
+            # This poll produced no FRESH history payload — either the whole
+            # local fetch failed (local_ok False resets "local" to {}), or the
+            # fetch worked but the history pull inside it failed (in which case
+            # the merge above carried the OLD payload with a FROZEN age_s that
+            # would never expire). Both get the same treatment: rebuild from
+            # the last pulled record, RE-AGED to now and marked stale. The
+            # sensors' own 15-minute freshness gate then expires it honestly —
+            # a transient failed poll no longer punches an unavailable gap
+            # into every timeline lane, but carried data can't outlive 15 min.
+            if self.history_sensors_enabled and not (local_ok and "history" in local_data):
+                try:
+                    from .tutk import cuboai_sensors as _sensors
+
+                    carried = _sensors.history_sensors_from_cache(self._history_caches.get(device_id))
+                    if carried is not None:
+                        cam_data.setdefault("local", {})["history"] = _history_payload(carried)
+                except Exception as e:
+                    log_to_file(f"[CuboAICoordinator] History carry-forward failed for {device_id}: {e}")
 
             if not local_ok and not camera_ip:
                 # The pure-Python transport reaches the camera with a UNICAST probe to

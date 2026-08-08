@@ -388,6 +388,23 @@ def history_sensors_from_point(point: "HistoryPoint", *, stale: bool = False) ->
         ts=point.ts_utc, age=point.age_s, stale=stale, fetched_at=_now())
 
 
+def history_sensors_from_cache(cache: Optional[dict]) -> Optional[HistorySensors]:
+    """The last successfully pulled s_log record re-wrapped as a HistorySensors,
+    RE-AGED to now and marked stale — or None if the cache holds no record.
+
+    This exists for the poll cycle where the camera connection itself failed,
+    so get_history_sensors() could not run at all: the caller (which owns a
+    persistent cache dict passed via get_history_sensors(cache=...)) can still
+    serve the last real reading with a truthful, growing age instead of going
+    dark. The age keeps growing on every call, so a freshness cutoff applied
+    by the consumer expires it naturally — carried data can never masquerade
+    as live."""
+    rec = (cache or {}).get(_HIST_CACHE_LATEST)
+    if rec is None:
+        return None
+    return _history_sensors_from_record(rec, _now(), stale=True)
+
+
 def _history_sensors_unavailable(now) -> HistorySensors:
     def U():
         return Reading(value=None, source='history', ts_utc=None, age_s=None, available=False,
