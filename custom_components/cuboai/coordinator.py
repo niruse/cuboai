@@ -668,18 +668,31 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     local_image_path = None
                     if self.download_images and alert.get("image"):
                         filename = f"{device_id}_{alert.get('id')}.jpg"
-                        try:
-                            await download_image(
-                                alert.get("image"),
-                                self._access_token,
-                                self._user_agent,
-                                self._images_dir,
-                                filename,
-                                session,
-                            )
+                        # Alert images are immutable — never re-download one we
+                        # already hold. Unconditional downloads meant every poll
+                        # re-fetched the WHOLE alert list's images (with
+                        # alerts_count 20, that is 20 cloud downloads a minute),
+                        # and with max_saved_photos below alerts_count the
+                        # pruner then deleted the oldest right after — a
+                        # permanent download-and-delete loop whose visible
+                        # symptom was broken thumbnails on older alerts.
+                        import os as _os
+
+                        if await aiofiles.os.path.exists(_os.path.join(self._images_dir, filename)):
                             local_image_path = f"{self._web_base}/{filename}"
-                        except Exception as e:
-                            log_to_file(f"[CuboAICoordinator] Image download failed for {device_id}: {e}")
+                        else:
+                            try:
+                                await download_image(
+                                    alert.get("image"),
+                                    self._access_token,
+                                    self._user_agent,
+                                    self._images_dir,
+                                    filename,
+                                    session,
+                                )
+                                local_image_path = f"{self._web_base}/{filename}"
+                            except Exception as e:
+                                log_to_file(f"[CuboAICoordinator] Image download failed for {device_id}: {e}")
 
                     alert_dicts.append(
                         {

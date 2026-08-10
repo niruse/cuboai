@@ -45,11 +45,14 @@ class TestH264Transcode:
     def test_all_streams_offer_opus_and_aac(self):
         # Every playable stream must offer BOTH Opus (WebRTC) and AAC (MSE —
         # Safari/iOS can't decode Opus, so Opus-only left the card silent).
-        # Applies regardless of the H.264 video toggle.
+        # Applies regardless of the H.264 video toggle — and to the DVR
+        # playback stream too: AAC-only there made WebRTC negotiation fail,
+        # and the MSE fallback renders BLACK on iOS.
         for options in ({}, {"h264_cameras": ["SW05BBB"]}):
             streams = _resolve(options)
             for dev in ("CB02AAA", "SW05BBB"):
-                line = _combined_ffmpeg(streams, dev)
-                # go2rtc multi-codec syntax is REPEATED params, not a comma
-                assert "#audio=opus#audio=aac" in line
-                assert "audio=opus,aac" not in line
+                for name in (f"cuboai_combined_{dev}", f"cuboai_dvr_{dev}"):
+                    line = next(s for s in streams[name] if s.startswith("ffmpeg:"))
+                    # go2rtc multi-codec syntax is REPEATED params, not a comma
+                    assert "#audio=opus#audio=aac" in line
+                    assert "audio=opus,aac" not in line

@@ -678,10 +678,15 @@ class CuboAICameraCard extends HTMLElement {
           // though -- paint() also runs on a 30s tick and on resize, and would
           // overwrite a time you were halfway through typing.
           if (document.activeElement !== when) when.value = asLocalInput(at);
-          stamp.textContent = live
-            ? 'Live'
-            : at.toLocaleString([], { month: '2-digit', day: '2-digit',
-                                      hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          // While playback runs, the 1s playback clock owns the stamp — the
+          // 30s repaint must not overwrite the running timecode with a static
+          // date label.
+          if (!this._dvrPlaying) {
+            stamp.textContent = live
+              ? 'Live'
+              : at.toLocaleString([], { month: '2-digit', day: '2-digit',
+                                        hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          }
         };
 
         const seek = (clientX) => {
@@ -701,6 +706,65 @@ class CuboAICameraCard extends HTMLElement {
           this._dvrEntity = entityId;
           this.content.setConfig(cfg);
           this.content.hass = this._hass;
+          // setConfig alone never re-dials: the player's onconnect() refuses
+          // while a ws/pc is active, and with `background: true` (which keeps
+          // sound alive minimized) there are no visibility disconnects left to
+          // apply the new entity by accident — the picture silently stayed
+          // live while the bar said "Playing". Force the same reload cycle the
+          // player's own stream-switch button uses (disconnect, then reconnect
+          // with the new config). One fixed 150ms delay was NOT enough: over a
+          // remote connection (4G / Nabu Casa) the old WebSocket takes longer
+          // than that to actually close, onconnect() still saw it and refused,
+          // and the picture froze on the last live frame. Poll until the old
+          // connection is really gone (up to ~5s), then dial.
+          if (this.content.ondisconnect && this.content.onconnect) {
+            this.content.ondisconnect();
+            let tries = 0;
+            const content = this.content;
+            clearInterval(this._dvrRedial);
+            this._dvrRedial = setInterval(() => {
+              tries += 1;
+              const busy = content.ws || content.pc;
+              if (!busy || tries >= 25) {
+                clearInterval(this._dvrRedial);
+                this._dvrRedial = null;
+                try { content.onconnect(); } catch (e) { /* best-effort */ }
+                // The swapped stream arrives into a video element whose
+                // autoplay moment was consumed by the live view, and the
+                // card's unmute logic deliberately skips play() when the user
+                // muted (or on Apple). Nothing else starts the new stream —
+                // MSE buffers fill while the element sits PAUSED on its last
+                // live frame (verified live: buffers full, paused: true; one
+                // play() un-froze it). Kick play() once the new source has
+                // data, keeping whatever mute state the user chose.
+                setTimeout(() => {
+                  const v = content.video;
+                  if (!v) return;
+                  // The reused video element also keeps the PREVIOUS stream's
+                  // mute state — a live view muted by the user stayed muted
+                  // through the swap, so recorded playback ran silent. Order
+                  // matters and iOS dictates it: an UNMUTED play() outside a
+                  // live tap is rejected there and can blank the picture
+                  // entirely. So: always START muted (never black), then try
+                  // lifting the mute; where the platform refuses, playback
+                  // continues muted and the speaker icon (a real tap) brings
+                  // the sound — same UX as the live view.
+                  const go = () => {
+                    v.muted = true;
+                    const p = v.play();
+                    Promise.resolve(p).then(() => {
+                      if (muted) return;      // swap asked for silence — keep it
+                      v.muted = false;
+                      const q = v.play();
+                      if (q && q.catch) q.catch(() => { v.muted = true; v.play().catch(() => {}); });
+                    }).catch(() => {});
+                  };
+                  v.addEventListener('loadeddata', go, { once: true });
+                  if (v.readyState >= 2) go();
+                }, 300);
+              }
+            }, 200);
+          }
           return true;
         };
 
@@ -708,6 +772,7 @@ class CuboAICameraCard extends HTMLElement {
           frac = 1;
           this._dvrPlaying = false;
           clearInterval(this._dvrWait); this._dvrWait = null;
+          clearInterval(this._dvrClock); this._dvrClock = null;
           const live = cuboaiFindCameraState(this._hass, (this._config || {}).device_id);
           if (live) showEntity(live.entityId, this.isMuted);
           this._dvrEntity = null;
@@ -767,6 +832,38 @@ class CuboAICameraCard extends HTMLElement {
               showEntity(rec.entityId, false);   // recorded audio, not the mic
               stamp.textContent = 'Playing ' +
                 at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              // Official-app-style running timecode: the label and the
+              // playhead track the FOOTAGE moment (seek time + seconds the
+              // video element actually played), instead of freezing at the
+              // request time while minutes of footage roll by — which read
+              // as "the time bar is wrong".
+              const playedFrom = at.getTime();
+              clearInterval(this._dvrClock);
+              this._dvrClock = setInterval(() => {
+                if (!this._dvrPlaying) { clearInterval(this._dvrClock); this._dvrClock = null; return; }
+                // The camera's SD card does not hold every minute (retention
+                // and coverage vary). A moment with no data makes the DVR
+                // producer exit empty and the player shows a raw error
+                // overlay and retries forever. Say what happened instead,
+                // and go back to live.
+                const modeEl = this.content && this.content.querySelector && this.content.querySelector('.mode');
+                if (modeEl && /error/i.test(modeEl.innerText || '')) {
+                  clearInterval(this._dvrClock); this._dvrClock = null;
+                  stamp.textContent = 'Nothing recorded at that moment — try another time';
+                  setTimeout(() => { if (this._dvrPlaying) goLive(); }, 2500);
+                  return;
+                }
+                const v = this.content && this.content.video;
+                if (!v || v.readyState < 2) return;
+                const shownMs = playedFrom + v.currentTime * 1000;
+                const f = 1 - (edgeAt() - shownMs) / spanMs;
+                if (f >= 0 && f <= 1) {
+                  frac = f;
+                  head.style.left = (frac * (track.clientWidth || 300)) + 'px';
+                }
+                stamp.textContent = 'Playing ' + new Date(shownMs)
+                  .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              }, 1000);
             } else if (waited >= 30000) {
               clearInterval(this._dvrWait);
               this._dvrWait = null;

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.3]
+
+### Fixed — DVR playback actually plays now (the whole chain)
+- **The card showed "Playing" but the picture stayed live.** Swapping the player's config never re-dialed it: the player's `onconnect()` refuses while a connection is active, and the swap had only ever worked by accident through the visibility observers tearing streams down — observers that 2.4.10's `background: true` (audio keeps playing minimized) rightly disabled. The card now drives the player's own reload cycle when switching between live and recording, polling until the old connection has really closed (a fixed 150 ms delay left remote/4G viewers with a dead player frozen on the last live frame).
+- **The swapped stream never started playing.** The video element's autoplay moment is consumed by the live view, and the card's unmute logic deliberately skips `play()` when the user muted (or on Apple) — so MSE buffers filled while the picture stood still. The card now kicks `play()` when the new source has data, muted-first (an unmuted programmatic start is rejected on iOS and can blank the picture), then lifts the mute where the platform allows; otherwise the speaker tap brings sound, same as live.
+- **DVR video was black or a single stale frame on iPhone while audio ran fine.** Two independent causes, both fixed:
+  - The DVR stream offered AAC-only audio, so WebRTC negotiation failed and viewers fell back to MSE — which iOS renders black for this stream. The DVR stream now carries the same self-referencing ffmpeg leg as the live stream (`#audio=opus#audio=aac`), so playback rides the identical WebRTC path the live view already uses everywhere.
+  - The playback engine never emitted a single flagged keyframe (`kf 0/0` in its own health log): DVR replay does not set the FRAMEINFO keyframe bit, and the NAL fallback tested HEVC types only — never H.264. After a seek it began muxing mid-GOP with no parameter sets, so go2rtc's WebRTC offer carried no `sprop-parameter-sets` and Safari could not initialize its decoder (Chrome concealed it). The engine now recognizes H.264 IDR/SPS/PPS, starts output at a keyframe (mirroring the live engine's clean-GOP gate), flags real IDRs into the TS random-access indicator — the DVR stream now declares `H264 Main/4.1` identically to live — and re-arms the gate after mid-stream holes so a lost frame causes a ~1-3 s still instead of freezing the video for good.
+- **Scrubbing to a moment the SD card doesn't hold showed a raw error overlay and retried forever.** The camera rotates per-day recordings (heavy recording can shrink retention to roughly the current camera-local day), so empty moments are a fact of life; the card now says *"Nothing recorded at that moment — try another time"* and returns to live. Seek accuracy itself is verified frame-for-frame against the official app — there was no timezone bug.
+- **Older alert thumbnails were broken.** Every poll re-downloaded the full alert list's images and then pruned back to `max_saved_photos` — with a photo cap below `alerts_count`, older alerts always pointed at a just-deleted file (and the loop cost ~one cloud download per alert per minute). Images are immutable and are now downloaded once; the README documents keeping the photo cap at or above the alert count.
+- **go2rtc could hop off its API port on reload/restart and strand the WebRTC frontend.** Hardened three ways: the desired port is a single constant (no scattered literals), the orphan sweep also clears our own instance dying silently on the port (matched by exact binary path, so foreign processes stay untouched) and any orphan left on the previous self-healed port, and the port-release grace is 15 s (a phone streaming through a reload holds the socket well past the old 5 s).
+
+### Added
+- **Running playback timecode**: during playback the label ticks with the actual footage moment and the playhead walks the bar, official-app style.
+- **Alert lanes on every report tab** (previously Nighttime only), and the retention knobs to keep last night's markers visible the next day are documented.
+
+### Changed
+- **The `Caregiver?` timeline lane is removed from the example dashboard** — a real, known 2 a.m. caregiver visit produced zero of the wellbeing states the lane matched, settling that experiment; visits are clearly visible as strong motion, and the **Moving lane now matches `strong (2)` / `strong (3)`** as well as `moving` (it previously missed most real activity).
+
 ## [2.6.2]
 
 ### Fixed

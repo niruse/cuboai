@@ -117,7 +117,9 @@ You can adjust:
 - **Cameras:** add or remove which of your account's cameras this entry manages.
 - **Download Images:** Toggle whether to save event thumbnails locally.
 - **Alerts Count:** How many recent alerts to track in the sensor.
-- **Max Saved Photos:** The maximum number of images to keep on disk.
+- **Max Saved Photos:** The maximum number of alert images kept on disk. Keep
+  it **at or above Alerts Count** — a lower cap prunes photos of alerts the
+  sensor still lists, which shows up as broken thumbnails on older alerts.
 - **Hours Back:** How far back in time to fetch alerts on startup.
 - **Update Interval:** How often to poll the API for changes.
 - **Camera IP (per camera):** the local transport reaches the camera with a **unicast probe to its LAN IP — there is no broadcast auto-discovery**. The IP is auto-learned and saved after the first successful connection, but if local sensors and the stream stay unavailable (log shows a "no 0x2041" handshake failure and a warning pointing here), set it manually from your router's client list.
@@ -282,6 +284,20 @@ Live                                            ● LIVE
 Releasing the playhead plays 15 minutes from that point, in the same card. The
 picture switches back to live when you press LIVE.
 
+While playback runs, the label under the bar is a **running timecode** — it
+ticks with the footage moment (seek time + seconds actually played) and the
+playhead walks along the bar with it, like the official app.
+
+**Empty moments are normal.** The camera's SD card does not hold every minute:
+retention varies with how much was recorded (with baby-presence detection on,
+it can be as short as roughly the current camera-local day — the camera
+rotates its per-day recordings, so "yesterday evening" can disappear at
+midnight while the whole current day plays fine). Scrubbing to a moment the
+card doesn't hold shows *"Nothing recorded at that moment — try another time"*
+and returns to live by itself. Seek times are exact — a request for 02:50
+plays the camera's own 02:50 footage, verified frame-for-frame against the
+official app.
+
 ### Card options
 
 ```yaml
@@ -425,17 +441,28 @@ not swallowed into one long block.
 
 #### Two lanes people ask about
 
-- **`Caregiver?` at 0% is expected, not broken.** The lane watches the
-  `Caregiver Activity` sensor — the firmware's opaque *wellbeing* bit. Its
-  everyday baseline state is `flagged active`; the lane matches the rare
-  `out of crib (caregiver?)` state that upstream *guesses* marks a visit (the
-  question mark is honest). Matching the baseline instead would simply mirror
-  the Camera online lane. Whether the bit really tracks visits is settled by
-  one night when you know you went in.
-- **`In crib` (with the sleep lane and the Sleeps count) stays at 0 until the
-  camera's baby-presence / sleep-safety detection is turned ON** — in the
-  CuboAI app or via the integration's Baby Presence switch. With it off the
-  camera never reports "in crib"; that is the camera's setting, not a fault.
+- **There is no `Caregiver?` lane, on purpose.** The firmware's *wellbeing*
+  bit was the only candidate signal, and the experiment is settled: a real,
+  known 2 a.m. caregiver visit produced **zero** of the `out of crib
+  (caregiver?)` states upstream guessed would mark one — the bit just churned
+  its two noise states straight through the visit. A visit **is** clearly
+  visible as strong motion, so the example dashboard's Moving lane matches
+  `moving`, `strong (2)` and `strong (3)` and covers it. (The Caregiver
+  Activity sensor still exists and records, in case a firmware update ever
+  gives the bit meaning.)
+- **`In crib` (with the sleep lane and the Sleeps count) can stay at 0** —
+  presence readings depend on the camera actually detecting someone; if the
+  lane never fills, check the camera's baby-presence / sleep-safety settings
+  in the CuboAI app. An empty room is a reading, not a fault.
+
+#### Seeing *last night's* alerts the next day
+
+The alert lanes can only draw alerts the integration still holds:
+`alerts_count` of them, from the last `hours_back` hours (defaults 5 and 12).
+With the defaults, last night's alerts age out by the following afternoon and
+the lane goes empty. If you want the Nighttime tab to keep its alert markers
+through the next day, raise both in **Settings → CuboAI → Configure** — e.g.
+`alerts_count: 20` and `hours_back: 24`.
 
 ### The figures
 

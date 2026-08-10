@@ -1804,9 +1804,23 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
     set (external interrupt, e.g. a SIGINT handler). Returns a stats dict. The caller owns
     pbsess.start()/close() (so live is always restored)."""
     import cuboai_pts, cuboai_mpegts
-    def _nal_kf(au):                                    # same NAL keyframe test as the live streamer
-        return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
-                and ((au[4] >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21))
+    def _nal_kf(au):
+        # NAL keyframe test for BOTH codecs. The HEVC set matches the live
+        # streamer; the H.264 case (IDR 5 / SPS 7 / PPS 8) is essential here:
+        # DVR replay carries NO FRAMEINFO keyframe bit (observed: 'kf 0/0'
+        # over a 100 s session), so without a working NAL test not one AU is
+        # ever flagged — the muxer starts mid-GOP, the TS random-access
+        # indicator never fires, go2rtc never latches SPS/PPS, and Safari/iOS
+        # WebRTC shows a single stale frame or nothing (no sprop-parameter-
+        # sets in the SDP) while Chrome conceals it. The only cross-codec
+        # overlap (an HEVC type-20 byte also passing the H.264 test) is
+        # itself a keyframe, so the union cannot misfire.
+        if len(au) < 5 or au[:4] != b'\x00\x00\x00\x01':
+            return False
+        b = au[4]
+        if ((b >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21):
+            return True                                 # HEVC VPS/SPS/PPS + IRAP
+        return (b & 0x1f) in (5, 7, 8)                  # H.264 IDR/SPS/PPS
     tl = cuboai_pts.AVTimeline()
 
     def _sniff_codec(au, info):
@@ -1833,8 +1847,15 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         return None
 
     mux = None                                          # built once the codec is known
+    synced = False                                      # startup IDR gate, mirroring the live clean_gop:
+                                                        # a seek lands mid-GOP (the 0x31a START target is
+                                                        # second-granular, GOP-blind), and frames that
+                                                        # reference an unseen keyframe must be dropped, not
+                                                        # muxed — output begins at a keyframe AU, which
+                                                        # carries its parameter sets in-band.
     _log = log or (lambda *a: None)
-    t0 = time.time(); last_au = t0; nv = na = 0; kf = 0
+    t0 = time.time(); last_au = t0; nv = na = 0; kf = 0; _sync_drop = 0
+    _last_reader_drops = getattr(pbsess, 'dropped', 0)  # mid-stream hole detector (see below)
     v_ts_n = 0                                         # count of recorded video AUs carrying a ts_sec
     v_lo = v_hi = None                                 # running recorded-ts span (min/max + record_seconds)
     while True:
@@ -1852,6 +1873,27 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         now = int(time.time() * 1000)
         try:
             if kind == 'video':
+                is_kf = bool((info or {}).get('is_keyframe')) or _nal_kf(unit)
+                # Mid-stream hole → desync, exactly like the live clean_gop
+                # (cuboai_stream_video.py): a dropped/incomplete AU (reader's
+                # `dropped` moved) or an AU with no FRAMEINFO means frames
+                # that may reference something the decoder never saw. Chrome
+                # conceals those; iOS freezes the video for good while audio
+                # keeps playing ("plays then stops moving"). Re-arm the gate
+                # and wait for the next IDR instead of muxing broken slices.
+                _rd = getattr(pbsess, 'dropped', _last_reader_drops)
+                if synced and (_rd != _last_reader_drops or info is None):
+                    synced = False
+                    _sync_drop = 0
+                    _log(f"[clean_gop] playback hole (reader drops {_last_reader_drops}->{_rd}, "
+                         f"frameinfo={'absent' if info is None else 'present'}) — awaiting IDR")
+                _last_reader_drops = _rd
+                if not synced:
+                    if not is_kf:
+                        _sync_drop += 1
+                        continue                       # awaiting IDR
+                    synced = True
+                    _log(f"[clean_gop] playback synced at keyframe after dropping {_sync_drop} AU(s)")
                 if mux is None:
                     # Build the muxer from the first AU whose codec we can name,
                     # rather than assuming. An AU we cannot classify is skipped
@@ -1862,11 +1904,14 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
                     _log(f"[mpegts] muxing {codec}+aac -> MPEG-TS")
                     mux = cuboai_mpegts.TSMuxer(codec=codec, audio_codec='aac')
                 p = tl.video(info, nal_keyframe=_nal_kf(unit))
-                writer.write(mux.mux_au(unit, p['pts_90k'], keyframe=p['keyframe'], now_ms=now))
+                # keyframe= drives the TS random-access indicator; FRAMEINFO's
+                # bit never fires on DVR replay, so real IDRs must count too —
+                # that indicator is what lets go2rtc latch SPS/PPS mid-stream.
+                writer.write(mux.mux_au(unit, p['pts_90k'], keyframe=(p['keyframe'] or is_kf), now_ms=now))
                 if raw_video_writer is not None:
                     raw_video_writer.write(unit)       # diagnostic tee: raw Annex-B AUs
                 nv += 1
-                if p['keyframe']: kf += 1
+                if p['keyframe'] or is_kf: kf += 1
                 if info and info.get('ts_sec'):
                     ts = info['ts_sec']; v_ts_n += 1
                     v_lo = ts if v_lo is None else min(v_lo, ts)

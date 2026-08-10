@@ -341,11 +341,23 @@ class TestUntouchedStreams:
         assert "#backchannel=1" in sources[0] and "#audio=pcma" in sources[0]
 
     @pytest.mark.parametrize("dev_id", DEV_IDS)
-    def test_dvr_stream_unchanged(self, dev_id):
+    def test_dvr_stream_holds_the_invariants(self, dev_id):
+        """The DVR stream gained a transcode leg (Opus for WebRTC — AAC-only
+        made negotiation fail and the MSE fallback renders black on iOS), but
+        the #85 invariants still hold: exactly ONE exec (the playback script,
+        never the live video engine), and the ffmpeg leg is a SELF-reference —
+        a cross-stream reference is the 5s-DESCRIBE-vs-10s-start race that
+        bb4bf13 shipped and 3942771 reverted."""
         sources = _resolve()[f"cuboai_dvr_{dev_id}"]
-        assert len(sources) == 1
-        assert "cuboai_stream_playback.py" in sources[0]
-        assert "CUBOAI_PLAY_STATE=" in sources[0]
+        execs = [s for s in sources if s.startswith("exec:")]
+        assert len(execs) == 1
+        assert "cuboai_stream_playback.py" in execs[0]
+        assert "CUBOAI_PLAY_STATE=" in execs[0]
+        assert "cuboai_stream_video.py" not in " ".join(sources)
+        ffmpegs = [s for s in sources if s.startswith("ffmpeg:")]
+        assert len(ffmpegs) == 1
+        assert ffmpegs[0].startswith(f"ffmpeg:cuboai_dvr_{dev_id}#")
+        assert "#audio=opus#audio=aac" in ffmpegs[0]
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,15 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 
+#: The go2rtc API port the integration aims for. Not user-configurable (unlike
+#: rtsp_port), but NOT a promise either: _resolve_ports self-heals to a nearby
+#: free port when it's taken and publishes the result as api_port_effective in
+#: hass.data — which every consumer (camera entities, sensors, the card) reads
+#: instead of assuming this value. Code touching the API port must use this
+#: constant or api_port_effective, never a bare 1985.
+DESIRED_API_PORT = 1985
+
+
 def _port_bindable(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -156,8 +165,17 @@ class Go2RTCManager:
             # watching, so an idle DVR stream costs nothing.
             playback_script = os.path.join(script_dir, "cuboai_stream_playback.py")
             state_file = self.hass.config.path(f"cuboai_playback_{dev_id}.json")
+            # The self-referencing ffmpeg leg matters here exactly like on the
+            # live stream: the DVR exec emits H264 + AAC only, and with no Opus
+            # on offer the WebRTC negotiation fails — every viewer fell back to
+            # MSE, which iOS renders as a BLACK picture (time advancing, no
+            # frames). With Opus offered, playback rides the same WebRTC path
+            # the live view already uses on every platform. (Safe per the #85
+            # invariant: a SELF-reference dials after this stream's own exec,
+            # so its DESCRIBE always hits a warm producer.)
             self._streams[f"cuboai_dvr_{dev_id}"] = [
                 f"exec:{env_vars}CUBOAI_PLAY_STATE={state_file} {py} {playback_script}#{{killsignal=SIGTERM}}",
+                f"ffmpeg:cuboai_dvr_{dev_id}#video=copy{audio_codecs}",
             ]
 
     @property
@@ -178,29 +196,34 @@ class Go2RTCManager:
         producers inside the ORPHAN — the endless 'Using native library'
         loop that piles up processes until the host locks up (issue #84).
 
-        Only a holder that (a) answers the go2rtc API and (b) serves
-        cuboai_* streams is touched, and processes are matched by our exact
-        binary path — a foreign go2rtc is left alone (the port fallback in
-        _resolve_ports handles it instead).
+        A responsive holder is identified by (a) answering the go2rtc API and
+        (b) serving cuboai_* streams. A holder that does NOT answer is not
+        automatically foreign: a DYING go2rtc (mid-teardown with exec children,
+        e.g. across an HA restart while a phone was streaming) holds the port
+        with its API already dead — observed live, and treating it as foreign
+        meant hopping ports on restart, stranding the WebRTC frontend. Process
+        termination matches our EXACT binary path, so sweeping in that case is
+        safe: a genuinely foreign holder never matches and is left alone (the
+        port fallback in _resolve_ports covers it).
         """
         import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
         if await self.hass.async_add_executor_job(_port_bindable, api_port):
             return  # port is free — nothing is squatting on it
+        streams = None
         try:
             session = async_get_clientsession(self.hass)
             async with session.get(
                 f"http://127.0.0.1:{api_port}/api/streams",
                 timeout=aiohttp.ClientTimeout(total=3),
             ) as resp:
-                if resp.status != 200:
-                    return
-                streams = await resp.json(content_type=None)
+                if resp.status == 200:
+                    streams = await resp.json(content_type=None)
         except Exception:
-            return  # not a go2rtc API — leave the holder alone
-        if not isinstance(streams, dict) or not any(str(s).startswith("cuboai_") for s in streams):
-            return  # a foreign go2rtc — the API port fallback covers it
+            streams = None  # unresponsive: free port, foreign process, or OUR dying instance
+        if isinstance(streams, dict) and not any(str(s).startswith("cuboai_") for s in streams):
+            return  # answers the API but with foreign streams — leave it alone
 
         killed = await self.hass.async_add_executor_job(self._terminate_stale_processes)
         if killed:
@@ -290,7 +313,7 @@ class Go2RTCManager:
 
         desired_rtsp = int(self._options.get("rtsp_port", 8555))
         desired_webrtc = 8556
-        desired_api = 1985
+        desired_api = DESIRED_API_PORT
 
         def _resolve():
             rtsp = desired_rtsp
@@ -336,7 +359,7 @@ class Go2RTCManager:
         """Generate the go2rtc.yaml file."""
         rtsp_port = getattr(self, "_rtsp_port", None) or self._options.get("rtsp_port", 8555)
         webrtc_port = getattr(self, "_webrtc_port", 8556)
-        api_port = getattr(self, "_api_port", 1985)
+        api_port = getattr(self, "_api_port", DESIRED_API_PORT)
         config = {
             "api": {
                 # All interfaces: the frontend card / webrtc integration reach this
@@ -426,14 +449,26 @@ class Go2RTCManager:
 
         # Reclaim ports from an orphaned go2rtc of a previous HA run before
         # probing, so we bind our usual ports instead of hopping (issue #84).
-        await self._reclaim_stale_instance(1985)
+        # The desired port is not the only place an orphan can sit: a previous
+        # run may itself have SELF-HEALED to another port (api_port_effective),
+        # and an orphan there would otherwise never be reclaimed — it would
+        # keep its TUTK sessions against the camera forever while we happily
+        # bind the desired port.
+        await self._reclaim_stale_instance(DESIRED_API_PORT)
+        last_effective = self.hass.data.get(DOMAIN, {}).get("api_port_effective")
+        if last_effective and last_effective != DESIRED_API_PORT:
+            await self._reclaim_stale_instance(last_effective)
 
         # A just-terminated go2rtc (orphan kill, or our own stop() on reload)
-        # needs a moment for the OS to RELEASE port 1985 — probing immediately
-        # sees it still bound and hops to 1986, which strands the frontend and
-        # HomeKit on the old port ("Cannot connect to …:1985"). Wait briefly so
-        # we bind our standard port. Returns instantly when 1985 is already free.
-        await self._wait_for_port_free(1985)
+        # needs a moment for the OS to RELEASE the port — probing immediately
+        # sees it still bound and hops (e.g. 1985→1986), which strands the
+        # WebRTC frontend and HomeKit on the old port ("Cannot connect to
+        # …:1985" — their go2rtc URL is fixed config that knows nothing of the
+        # hop). 15s, not the 5s default: with live consumers attached (a phone
+        # streaming), the dying instance holds the port well past 5s — observed
+        # live on a reload. Returns instantly when the port is already free, so
+        # the longer ceiling costs nothing on a clean start.
+        await self._wait_for_port_free(DESIRED_API_PORT, timeout=15.0)
 
         await self._resolve_ports()
         await self._resolve_codecs()

@@ -1804,11 +1804,20 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
     set (external interrupt, e.g. a SIGINT handler). Returns a stats dict. The caller owns
     pbsess.start()/close() (so live is always restored)."""
     import cuboai_pts, cuboai_mpegts
-    def _nal_kf(au):                                    # same NAL keyframe test as the live streamer
-        return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
-                and ((au[4] >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21))
+    def _nal_kf(au):
+        # NAL keyframe test for BOTH codecs (see playback_engine copy — the
+        # one that actually runs — for the full story: DVR replay never sets
+        # the FRAMEINFO keyframe bit, so this test is the only keyframe
+        # signal, and it must include H.264 IDR/SPS/PPS).
+        if len(au) < 5 or au[:4] != b'\x00\x00\x00\x01':
+            return False
+        b = au[4]
+        if ((b >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21):
+            return True
+        return (b & 0x1f) in (5, 7, 8)
     tl = cuboai_pts.AVTimeline()
     mux = cuboai_mpegts.TSMuxer(codec='hevc', audio_codec='aac')
+    synced = False                                      # startup IDR gate (mirror of playback_engine copy)
     _log = log or (lambda *a: None)
     t0 = time.time(); last_au = t0; nv = na = 0; kf = 0
     v_ts_n = 0                                         # count of recorded video AUs carrying a ts_sec
@@ -1828,12 +1837,17 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         now = int(time.time() * 1000)
         try:
             if kind == 'video':
+                is_kf = bool((info or {}).get('is_keyframe')) or _nal_kf(unit)
+                if not synced:
+                    if not is_kf:
+                        continue                       # mid-GOP after seek — wait for the first IDR
+                    synced = True
                 p = tl.video(info, nal_keyframe=_nal_kf(unit))
-                writer.write(mux.mux_au(unit, p['pts_90k'], keyframe=p['keyframe'], now_ms=now))
+                writer.write(mux.mux_au(unit, p['pts_90k'], keyframe=(p['keyframe'] or is_kf), now_ms=now))
                 if raw_video_writer is not None:
                     raw_video_writer.write(unit)       # diagnostic tee: raw Annex-B AUs
                 nv += 1
-                if p['keyframe']: kf += 1
+                if p['keyframe'] or is_kf: kf += 1
                 if info and info.get('ts_sec'):
                     ts = info['ts_sec']; v_ts_n += 1
                     v_lo = ts if v_lo is None else min(v_lo, ts)

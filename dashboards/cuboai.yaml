@@ -156,7 +156,7 @@ views:
               - entity: sensor.cuboai_mia_cuboai_motion_mia
                 label: Moving
                 icon: mdi:motion-sensor
-                match: moving
+                match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
@@ -167,16 +167,12 @@ views:
                 color: "#5e5ce6"
               # An empty chart and a camera that was offline look identical
               # without this row.
-              # Upstream's own phrase for 0 carries a question mark, and so
-              # does this label. It is the only field that plausibly matches the
-              # app's "Caregiver visit" series; whether it really does is
-              # settled by one night when you know you went in, not by naming it
-              # confidently on a chart.
-              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
-                label: Caregiver?
-                icon: mdi:account-child
-                match: out of crib (caregiver?)
-                color: "#d67ab1"
+              # The Caregiver? lane was removed 2026-08-10: a REAL, known 2 am
+              # caregiver visit produced zero 'out of crib (caregiver?)' states
+              # (the wellbeing bit churned its usual two values right through
+              # it), settling the experiment the old comment here proposed. The
+              # visit IS clearly visible as strong motion - so the Moving lane
+              # matches the strong states now and covers it.
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv
@@ -282,7 +278,7 @@ views:
               - entity: sensor.cuboai_mia_cuboai_motion_mia
                 label: Moving
                 icon: mdi:motion-sensor
-                match: moving
+                match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
@@ -293,21 +289,25 @@ views:
                 color: "#5e5ce6"
               # An empty chart and a camera that was offline look identical
               # without this row.
-              # Upstream's own phrase for 0 carries a question mark, and so
-              # does this label. It is the only field that plausibly matches the
-              # app's "Caregiver visit" series; whether it really does is
-              # settled by one night when you know you went in, not by naming it
-              # confidently on a chart.
-              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
-                label: Caregiver?
-                icon: mdi:account-child
-                match: out of crib (caregiver?)
-                color: "#d67ab1"
+              # The Caregiver? lane was removed 2026-08-10: a REAL, known 2 am
+              # caregiver visit produced zero 'out of crib (caregiver?)' states
+              # (the wellbeing bit churned its usual two values right through
+              # it), settling the experiment the old comment here proposed. The
+              # visit IS clearly visible as strong motion - so the Moving lane
+              # matches the strong states now and covers it.
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv
                 match: online
                 color: "#30d158"
+              # Same point-event alert lane as the Nighttime tab, same
+              # caveat: only the most recent alerts the integration keeps
+              # (alerts_count, within hours_back) can appear.
+              - entity: sensor.cuboai_last_alert_mia
+                label: Alerts
+                icon: mdi:bell-ring
+                events: alerts
+                color: "#ff453a"
 
   # ── Summary ─────────────────────────────────────────────────────────────
   - title: Summary
@@ -376,7 +376,7 @@ views:
               - entity: sensor.cuboai_mia_cuboai_motion_mia
                 label: Moving
                 icon: mdi:motion-sensor
-                match: moving
+                match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
@@ -385,21 +385,25 @@ views:
                 icon: mdi:volume-high
                 above: 26
                 color: "#5e5ce6"
-              # Upstream's own phrase for 0 carries a question mark, and so
-              # does this label. It is the only field that plausibly matches the
-              # app's "Caregiver visit" series; whether it really does is
-              # settled by one night when you know you went in, not by naming it
-              # confidently on a chart.
-              - entity: sensor.cuboai_mia_cuboai_caregiver_activity_mia
-                label: Caregiver?
-                icon: mdi:account-child
-                match: out of crib (caregiver?)
-                color: "#d67ab1"
+              # The Caregiver? lane was removed 2026-08-10: a REAL, known 2 am
+              # caregiver visit produced zero 'out of crib (caregiver?)' states
+              # (the wellbeing bit churned its usual two values right through
+              # it), settling the experiment the old comment here proposed. The
+              # visit IS clearly visible as strong motion - so the Moving lane
+              # matches the strong states now and covers it.
               - entity: sensor.cuboai_camera_state_mia
                 label: Camera online
                 icon: mdi:cctv
                 match: online
                 color: "#30d158"
+              # Same point-event alert lane as the Nighttime tab, same
+              # caveat: only the most recent alerts the integration keeps
+              # (alerts_count, within hours_back) can appear.
+              - entity: sensor.cuboai_last_alert_mia
+                label: Alerts
+                icon: mdi:bell-ring
+                events: alerts
+                color: "#ff453a"
 
           - type: history-graph
             hours_to_show: 168
