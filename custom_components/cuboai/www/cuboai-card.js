@@ -576,6 +576,10 @@ class CuboAICameraCard extends HTMLElement {
         // right-hand edge stops short of "now" rather than offering a moment
         // the camera will refuse.
         const EDGE_LAG_S = 120;
+        // Painted faintly on the ruler so a phone screenshot settles "which
+        // card build is this client actually running" — hours of cache-forensics
+        // this session were exactly that question. Keep in sync with manifest.
+        const CARD_VERSION = 'v2.6.5';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -666,6 +670,11 @@ class CuboAICameraCard extends HTMLElement {
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, 46);
           const end = edgeAt(), start = end - spanNow();
+          g.fillStyle = 'rgba(255,255,255,0.28)';
+          g.font = '9px sans-serif';
+          g.textAlign = 'right';
+          g.fillText(CARD_VERSION, w - 3, 44);
+          g.textAlign = 'left';
           // Dim the learned dead zone (rotated-away footage) before drawing
           // ticks over it, so scrubbing there is visibly a long shot.
           const cov = covGet(this._dvrDev || (this._config || {}).device_id);
