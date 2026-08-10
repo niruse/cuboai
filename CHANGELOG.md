@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.5]
+
+### Changed
+- **The scrub bar now clamps itself to the window that actually plays** — the same window the official app's bar shows. Live measurement showed the camera's playable window *slides* (~18-20 h under heavy recording, oldest hours pruned in bursts), so no fixed span can be right. Once a seek comes back "Nothing recorded", the bar's left edge moves to the oldest playable moment it has learned and keeps tracking it per camera; `timeline_hours` (default 24) is the upper bound. A successful seek older than the mark (privacy-mode gap, not deletion) resets the clamp.
+
 ## [2.6.4]
 
 ### Fixed

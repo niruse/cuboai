@@ -617,9 +617,23 @@ class CuboAICameraCard extends HTMLElement {
 
         // frac 0..1 across the visible span; 1 = the recent edge.
         let frac = 1;
-        const spanMs = HOURS * 3600 * 1000;
+        const FULL_SPAN_MS = HOURS * 3600 * 1000;
         const edgeAt = () => Date.now() - EDGE_LAG_S * 1000;
-        const timeAt = (f) => new Date(edgeAt() - (1 - f) * spanMs);
+        // The bar CLAMPS itself to what the camera actually still holds: once
+        // a seek has come back empty (emptyMax learned, see covNote below),
+        // the left edge moves to that moment — the same window the official
+        // app's own bar shows — and keeps tracking it as the camera prunes
+        // oldest hours (observed sliding ~18-20h under heavy recording).
+        // timeline_hours is the UPPER bound, not a promise.
+        const spanNow = () => {
+          const cov = covGet(this._dvrDev || (this._config || {}).device_id);
+          if (cov && cov.emptyMax != null) {
+            const s = edgeAt() - cov.emptyMax;
+            if (s > 3600 * 1000 && s < FULL_SPAN_MS) return s;
+          }
+          return FULL_SPAN_MS;
+        };
+        const timeAt = (f) => new Date(edgeAt() - (1 - f) * spanNow());
 
         // Learned DVR coverage. The camera drops whole day-files under space
         // pressure, so part of the bar can be dead space that only reveals
@@ -651,12 +665,12 @@ class CuboAICameraCard extends HTMLElement {
           const g = ruler.getContext('2d');
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, 46);
-          const end = edgeAt(), start = end - spanMs;
+          const end = edgeAt(), start = end - spanNow();
           // Dim the learned dead zone (rotated-away footage) before drawing
           // ticks over it, so scrubbing there is visibly a long shot.
           const cov = covGet(this._dvrDev || (this._config || {}).device_id);
           if (cov && cov.emptyMax != null && cov.emptyMax > start) {
-            const x = Math.min(w, ((cov.emptyMax - start) / spanMs) * w);
+            const x = Math.min(w, ((cov.emptyMax - start) / spanNow()) * w);
             g.fillStyle = 'rgba(255, 99, 99, 0.12)';
             g.fillRect(0, 0, x, 46);
           }
@@ -666,16 +680,16 @@ class CuboAICameraCard extends HTMLElement {
           // roughly every sixth one.
           const MIN_PX = 8;
           const STEPS = [5, 15, 30, 60, 120, 180, 360, 720, 1440].map((m) => m * 60000);
-          const step = STEPS.find((s) => (s / spanMs) * w >= MIN_PX) || STEPS[STEPS.length - 1];
-          const labelEvery = Math.max(1, Math.round((w / 6) / ((step / spanMs) * w)));
-          const overADay = spanMs > 26 * 3600 * 1000;
+          const step = STEPS.find((s) => (s / spanNow()) * w >= MIN_PX) || STEPS[STEPS.length - 1];
+          const labelEvery = Math.max(1, Math.round((w / 6) / ((step / spanNow()) * w)));
+          const overADay = spanNow() > 26 * 3600 * 1000;
 
           const first = Math.ceil(start / step) * step;
           g.textAlign = 'center';
           g.font = '10px system-ui, sans-serif';
           let i = 0;
           for (let t = first; t <= end; t += step, i++) {
-            const x = ((t - start) / spanMs) * w;
+            const x = ((t - start) / spanNow()) * w;
             const at = new Date(t);
             const major = i % labelEvery === 0;
             g.strokeStyle = major ? 'rgba(255,255,255,.85)' : 'rgba(255,255,255,.35)';
@@ -706,7 +720,7 @@ class CuboAICameraCard extends HTMLElement {
           const live = frac > 0.999;
           // Bound the picker to what the camera still holds, and keep it in
           // step with the playhead so the two controls never disagree.
-          when.min = asLocalInput(new Date(edgeAt() - spanMs));
+          when.min = asLocalInput(new Date(edgeAt() - spanNow()));
           when.max = asLocalInput(new Date(edgeAt()));
           // Filled even while live: an empty box gives you nothing to adjust
           // from and no hint of the format it wants. Never while it has focus
@@ -916,7 +930,7 @@ class CuboAICameraCard extends HTMLElement {
                   drawRuler();
                 }
                 const shownMs = playedFrom + v.currentTime * 1000;
-                const f = 1 - (edgeAt() - shownMs) / spanMs;
+                const f = 1 - (edgeAt() - shownMs) / spanNow();
                 if (f >= 0 && f <= 1) {
                   frac = f;
                   head.style.left = (frac * (track.clientWidth || 300)) + 'px';
@@ -966,14 +980,14 @@ class CuboAICameraCard extends HTMLElement {
           if (!when.value) return;
           const at = new Date(when.value);        // parsed as local time
           if (isNaN(at)) return;
-          const end = edgeAt(), start = end - spanMs;
+          const end = edgeAt(), start = end - spanNow();
           if (at.getTime() >= end) return goLive();
           if (at.getTime() < start) {
             // Say so rather than seek into nothing and time out after 30s.
             stamp.textContent = 'Older than the camera still holds';
             return;
           }
-          frac = 1 - (end - at.getTime()) / spanMs;
+          frac = 1 - (end - at.getTime()) / spanNow();
           paint();
           playFrom(at);
         };
@@ -983,10 +997,10 @@ class CuboAICameraCard extends HTMLElement {
         const fine = document.createElement('div');
         fine.style.cssText = 'display:flex;gap:6px;padding:6px 12px 0;';
         const nudge = (secs) => {
-          const end = edgeAt(), start = end - spanMs;
+          const end = edgeAt(), start = end - spanNow();
           const from = when.value ? new Date(when.value).getTime() : timeAt(frac).getTime();
           const t = Math.min(Math.max(from + secs * 1000, start), end);
-          frac = 1 - (end - t) / spanMs;
+          frac = 1 - (end - t) / spanNow();
           paint();
           stamp.textContent = 'Loading ' + new Date(t).toLocaleTimeString([],
             { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '…';
