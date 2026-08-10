@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.4]
+
+### Fixed
+- **Scrubbing while playback was running showed the OLD moment's footage under the NEW label** — the root of every "the time bar is wrong" report. go2rtc reuses a running producer for new consumers, so a new seek only rewrote the request file; the running engine never re-read it, and the viewer got the previous session's footage labeled with the new time (observed live: footage of "now" labeled with a two-day-old timestamp). The playback producer now watches its request file and exits the moment the target changes — go2rtc respawns it on demand and the fresh process seeks the fresh target (verified live: old producer exits and the new moment plays within ~2 s).
+
+### Changed
+- **The scrub bar tells the truth about retention.** Empirically (probes held still across a full day): the camera stores whole per-day recording files and deletes the oldest day when the SD card fills — with baby-presence detection recording heavily, everything before local midnight can already be gone. The bar's default span is now **24 hours** (`timeline_hours` raises it for cards that demonstrably hold more), and the bar **learns its dead zone**: a seek that comes back "Nothing recorded" dims the region before that moment in red, per camera, and a later successful seek older than the mark clears it (privacy-mode gaps are not deletion). The README documents the day-file retention model.
+
 ## [2.6.3]
 
 ### Fixed — DVR playback actually plays now (the whole chain)

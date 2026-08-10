@@ -558,12 +558,16 @@ class CuboAICameraCard extends HTMLElement {
       // entity plays it. Hidden unless the integration exposes that entity, so
       // older installs are unaffected.
       if (!this.dvrBar && this._config && this._config.show_timeline !== false) {
-        // Measured against a real camera on 2026-08-07, one probe an hour: 48h
-        // back returns frames, 56h does not. The service description's "about
-        // 72 hours" is optimistic, and a bar that wide is a third dead space
-        // that fails silently when you scrub into it. Retention depends on the
-        // card and how much motion there was, so this is a default, not a fact.
-        const HOURS = Number(this._config.timeline_hours) || 48;   // span shown
+        // Measured against a real camera, twice, with opposite results: on
+        // 2026-08-07 (light recording) 48h back returned frames; on 2026-08-10
+        // (baby-presence detection on, heavy recording) everything before
+        // roughly LOCAL MIDNIGHT was gone, and the boundary held still all
+        // day — the camera stores whole per-day files and drops the oldest
+        // day under space pressure. Retention is therefore "some whole days,
+        // possibly just today", so the default span is one day; raise
+        // timeline_hours if your SD card demonstrably holds more. The bar
+        // also LEARNS its dead zone (see covNote below) and dims it.
+        const HOURS = Number(this._config.timeline_hours) || 24;   // span shown
         // A minute of footage then silence looked like playback had failed.
         // Fifteen minutes is long enough to watch something; the bar restarts
         // it wherever you drop the playhead next.
@@ -617,6 +621,29 @@ class CuboAICameraCard extends HTMLElement {
         const edgeAt = () => Date.now() - EDGE_LAG_S * 1000;
         const timeAt = (f) => new Date(edgeAt() - (1 - f) * spanMs);
 
+        // Learned DVR coverage. The camera drops whole day-files under space
+        // pressure, so part of the bar can be dead space that only reveals
+        // itself when a seek comes back empty. Remember, per camera, the
+        // newest moment known EMPTY (emptyMax) and the oldest known to PLAY
+        // (okMin); the ruler dims everything at or before emptyMax. A later
+        // success older than emptyMax contradicts it (the gap was privacy
+        // mode, not rotation) and clears the mark.
+        const covKey = (dev) => `cuboai_dvr_gap_${dev}`;
+        const covGet = (dev) => {
+          try { return JSON.parse(localStorage.getItem(covKey(dev)) || 'null'); } catch (e) { return null; }
+        };
+        const covNote = (dev, kind, tMs) => {
+          if (!dev) return;
+          const c = covGet(dev) || { emptyMax: null, okMin: null };
+          if (kind === 'ok') {
+            c.okMin = c.okMin == null ? tMs : Math.min(c.okMin, tMs);
+            if (c.emptyMax != null && c.emptyMax >= tMs) c.emptyMax = null;
+          } else if (c.okMin == null || tMs < c.okMin) {
+            c.emptyMax = c.emptyMax == null ? tMs : Math.max(c.emptyMax, tMs);
+          }
+          try { localStorage.setItem(covKey(dev), JSON.stringify(c)); } catch (e) { /* private mode */ }
+        };
+
         const drawRuler = () => {
           const w = track.clientWidth || 300;
           const dpr = window.devicePixelRatio || 1;
@@ -625,6 +652,14 @@ class CuboAICameraCard extends HTMLElement {
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, 46);
           const end = edgeAt(), start = end - spanMs;
+          // Dim the learned dead zone (rotated-away footage) before drawing
+          // ticks over it, so scrubbing there is visibly a long shot.
+          const cov = covGet(this._dvrDev || (this._config || {}).device_id);
+          if (cov && cov.emptyMax != null && cov.emptyMax > start) {
+            const x = Math.min(w, ((cov.emptyMax - start) / spanMs) * w);
+            g.fillStyle = 'rgba(255, 99, 99, 0.12)';
+            g.fillRect(0, 0, x, 46);
+          }
           // Tick spacing has to follow the span. Fifteen minutes was right for
           // a 12-hour bar and is 288 unreadable ticks across three days, so
           // pick the finest step that still leaves ticks ~8px apart, and label
@@ -798,6 +833,7 @@ class CuboAICameraCard extends HTMLElement {
             stamp.textContent = 'No CuboAI camera found';
             return;
           }
+          this._dvrDev = dev;   // lets the ruler find this camera's learned coverage
           // The service takes an absolute time as well as "10m"-style offsets.
           this._hass.callService('cuboai', 'play_recording', {
             device_id: dev,
@@ -830,6 +866,10 @@ class CuboAICameraCard extends HTMLElement {
               clearInterval(this._dvrWait);
               this._dvrWait = null;
               showEntity(rec.entityId, false);   // recorded audio, not the mic
+              // Success is NOT noted here: the engine reports "started" even
+              // for a moment it then finds empty. The playback clock notes
+              // 'ok' only once >5s of footage has really played.
+              this._dvrOkNoted = false;
               stamp.textContent = 'Playing ' +
                 at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
               // Official-app-style running timecode: the label and the
@@ -862,12 +902,19 @@ class CuboAICameraCard extends HTMLElement {
                     playFrom(new Date(playedFrom + playedS * 1000));
                   } else {
                     stamp.textContent = 'Nothing recorded at that moment — try another time';
+                    covNote(dev, 'empty', at.getTime());
+                    drawRuler();
                     setTimeout(() => { if (this._dvrPlaying) goLive(); }, 2500);
                   }
                   return;
                 }
                 const v = this.content && this.content.video;
                 if (!v || v.readyState < 2) return;
+                if (!this._dvrOkNoted && v.currentTime > 5) {
+                  this._dvrOkNoted = true;
+                  covNote(dev, 'ok', playedFrom);
+                  drawRuler();
+                }
                 const shownMs = playedFrom + v.currentTime * 1000;
                 const f = 1 - (edgeAt() - shownMs) / spanMs;
                 if (f >= 0 && f <= 1) {
@@ -881,6 +928,8 @@ class CuboAICameraCard extends HTMLElement {
               clearInterval(this._dvrWait);
               this._dvrWait = null;
               stamp.textContent = 'Nothing recorded at that moment';
+              covNote(dev, 'empty', at.getTime());
+              drawRuler();
             }
           }, 500);
         };

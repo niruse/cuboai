@@ -121,6 +121,32 @@ def main() -> int:
             _log(f"could not read the playback request: {err}")
             return 2
 
+        # A NEW seek while this producer is still running must not be served
+        # by the OLD session: go2rtc reuses a live producer for new consumers,
+        # so the service writing a new target into the state file changed
+        # nothing — the viewer got the previous request's footage under the
+        # new label (observed live: footage of "now" labeled with a two-day-old
+        # timestamp). Watch the state file; when it changes, stop cleanly —
+        # go2rtc respawns this producer on demand and the fresh process reads
+        # the fresh target.
+        try:
+            _state_mtime = os.path.getmtime(state_path)
+
+            def _watch_state():
+                while not _stop.is_set():
+                    _time.sleep(0.5)
+                    try:
+                        if os.path.getmtime(state_path) != _state_mtime:
+                            _log("seek target changed — exiting so go2rtc respawns for the new request")
+                            _stop.set()
+                            return
+                    except OSError:
+                        pass  # transient rewrite window
+
+            threading.Thread(target=_watch_state, daemon=True).start()
+        except OSError:
+            pass
+
     # The engine reads its A/V gates at construction, so the same production
     # profile the live producer installs has to be in the environment BEFORE
     # get_session() — without it the playback channel opens but assembles no

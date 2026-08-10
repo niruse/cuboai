@@ -256,10 +256,14 @@ The camera records to its own storage. This integration can play that footage
 back **inside the card you already have** — no cloud subscription, and no second
 card on your dashboard.
 
-Retention is roughly the last **72 hours**, but it varies with the SD card and
-how much motion there was. Measured on one camera, one request an hour: 48 h
-back returned footage, 56 h did not. Requests older than the bar's span are
-refused with a message rather than left to time out.
+Retention is **whole camera-local days, possibly just today**: the camera
+records into per-day files and deletes the oldest day when the SD card fills,
+so the boundary sits at a local midnight and holds still all day. How many
+days survive depends on how much is recorded — measured on one camera it was
+~2 days while recording lightly, and only the current day once baby-presence
+detection (which records heavily) was on. A moment the card no longer holds
+shows "Nothing recorded at that moment" and the bar dims the region it has
+learned is gone.
 
 ### Using it
 
@@ -304,9 +308,21 @@ official app.
 type: custom:cuboai-camera-card
 # Everything below is optional.
 show_timeline: true          # false hides the scrub bar entirely
-timeline_hours: 48           # span of the bar; match your camera's retention
+timeline_hours: 24           # span of the bar; raise it if your card holds more
 timeline_play_seconds: 900   # how much footage one request plays
 ```
+
+**Why the bar defaults to one day.** The camera stores its recordings as
+whole per-day files and deletes the oldest day when the SD card fills.
+Measured on a real camera: with light recording it held ~2 days; with
+baby-presence detection on (heavy recording), everything before roughly
+local midnight was already gone — and that boundary stays put all day
+rather than sliding. So the honest default is one day; set
+`timeline_hours: 48` (or more) only if scrubbing that far back actually
+plays on your card. The bar also **learns**: when a seek comes back
+"Nothing recorded", the region before that moment is dimmed red so the
+dead zone is visible; a later successful seek older than the mark clears
+it (the gap was privacy mode, not deletion).
 
 ### The service
 
