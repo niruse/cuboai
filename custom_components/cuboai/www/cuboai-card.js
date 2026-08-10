@@ -849,8 +849,21 @@ class CuboAICameraCard extends HTMLElement {
                 const modeEl = this.content && this.content.querySelector && this.content.querySelector('.mode');
                 if (modeEl && /error/i.test(modeEl.innerText || '')) {
                   clearInterval(this._dvrClock); this._dvrClock = null;
-                  stamp.textContent = 'Nothing recorded at that moment — try another time';
-                  setTimeout(() => { if (this._dvrPlaying) goLive(); }, 2500);
+                  // Two very different reasons land here. The service plays at
+                  // most 900 s of footage per request — when a chunk ends, the
+                  // producer exits and the player errors exactly like an empty
+                  // moment does. If real footage played, CONTINUE from where it
+                  // stopped (the next chunk keeps the session rolling past the
+                  // 15-minute cap); only an error with nothing played means the
+                  // SD card holds nothing there.
+                  const vv = this.content && this.content.video;
+                  const playedS = vv ? vv.currentTime : 0;
+                  if (playedS > 5) {
+                    playFrom(new Date(playedFrom + playedS * 1000));
+                  } else {
+                    stamp.textContent = 'Nothing recorded at that moment — try another time';
+                    setTimeout(() => { if (this._dvrPlaying) goLive(); }, 2500);
+                  }
                   return;
                 }
                 const v = this.content && this.content.video;
