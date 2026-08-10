@@ -251,7 +251,17 @@ def _fetch_local_data(
                             hist = _sensors.get_history_sensors(sess, cache=history_cache)
                             data["history"] = _history_payload(hist)
                         except Exception as e:
-                            log_to_file(f"Failed to get history sensors: {e}")
+                            # Through the real logger, not log_to_file: this
+                            # failure makes the history sensors go dark, and
+                            # being invisible with the debug option off is how
+                            # it hid for weeks.
+                            import traceback
+
+                            _LOGGER.warning(
+                                "History pull failed (entities fall back to carry-forward): %s\n%s",
+                                e,
+                                traceback.format_exc(),
+                            )
 
                     return data
             except Exception as conn_e:
@@ -608,8 +618,13 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     carried = _sensors.history_sensors_from_cache(self._history_caches.get(device_id))
                     if carried is not None:
                         cam_data.setdefault("local", {})["history"] = _history_payload(carried)
+                        _LOGGER.debug("History carry-forward served for %s", device_id)
+                    else:
+                        _LOGGER.warning("History missing from poll for %s and carry-forward cache is empty", device_id)
                 except Exception as e:
-                    log_to_file(f"[CuboAICoordinator] History carry-forward failed for {device_id}: {e}")
+                    import traceback
+
+                    _LOGGER.warning("History carry-forward failed for %s: %s\n%s", device_id, e, traceback.format_exc())
 
             if not local_ok and not camera_ip:
                 # The pure-Python transport reaches the camera with a UNICAST probe to

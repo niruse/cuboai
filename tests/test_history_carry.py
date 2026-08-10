@@ -91,6 +91,45 @@ def test_carried_age_keeps_growing_past_the_freshness_cutoff(monkeypatch):
     assert hist.baby_present.age_s > 900
 
 
+def test_an_older_fallback_pull_never_beats_the_cached_record(monkeypatch):
+    # A transient growing-hour failure makes the pull fall back to the tail of
+    # a COMPLETED hour — a "successful" pull of a record older than the one
+    # already cached (>15 min at :15+ past the hour), which expired the entity
+    # for one cycle every few minutes. Newest record must win: served AND kept.
+    m = _load_sensors_module(monkeypatch)
+    now = dt.datetime.now(dt.UTC)
+    fresh = _Record(now - dt.timedelta(seconds=90), {"bp": 1, "na": 20, "mo": 0, "bw": 1, "be": 0, "pr": 0})
+    old_fallback = _Record(now - dt.timedelta(seconds=1300), {"bp": 2, "na": 30, "mo": 0, "bw": 1, "be": 0, "pr": 0})
+
+    cache = {m._HIST_CACHE_LATEST: fresh}
+    monkeypatch.setattr(m, "_pace_allows", lambda *a: True)
+    monkeypatch.setattr(m, "_pull_latest_record", lambda *a, **k: (old_fallback, None))
+
+    hist = m.get_history_sensors(object(), cache=cache)
+    # Served: the newer cached record (marked stale — it wasn't from this pull)
+    assert hist.baby_present.value == 1
+    assert hist.baby_present.age_s < 900
+    assert hist.stale is True
+    # Kept: the cache still holds the newer record, not the old fallback.
+    assert cache[m._HIST_CACHE_LATEST] is fresh
+
+
+def test_a_newer_pull_still_wins_and_updates_the_cache(monkeypatch):
+    m = _load_sensors_module(monkeypatch)
+    now = dt.datetime.now(dt.UTC)
+    older = _Record(now - dt.timedelta(seconds=600), {"bp": 2, "na": 25, "mo": 0, "bw": 1, "be": 0, "pr": 0})
+    newer = _Record(now - dt.timedelta(seconds=30), {"bp": 1, "na": 20, "mo": 0, "bw": 1, "be": 0, "pr": 0})
+
+    cache = {m._HIST_CACHE_LATEST: older}
+    monkeypatch.setattr(m, "_pace_allows", lambda *a: True)
+    monkeypatch.setattr(m, "_pull_latest_record", lambda *a, **k: (newer, None))
+
+    hist = m.get_history_sensors(object(), cache=cache)
+    assert hist.baby_present.value == 1
+    assert hist.stale is False
+    assert cache[m._HIST_CACHE_LATEST] is newer
+
+
 def test_reaged_payload_flattens_with_the_grown_age(monkeypatch):
     # End-to-end through the coordinator's flattener: the payload the entities
     # read carries the recomputed age and the stale flag.

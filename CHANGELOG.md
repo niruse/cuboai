@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.2]
+
+### Fixed
+- **History sensors blinked unavailable for ~1 minute every few minutes — the last of the timeline dead-air.** Caught live with new instrumentation: when the growing hour's DVR pull transiently fails, the library falls back to the tail of a *completed* hour — a "successful" pull of a record that can be far older than the one already cached (at :20 past the hour it is 20 minutes old, past the 15-minute freshness cutoff), so the entities honestly expired it for one cycle and even the cache got overwritten with the older record. Now the **newest record wins**, both for what is served and what is cached; a fallback pull older than the cached reading re-serves the cached one (marked stale). Gaps now only occur when there is genuinely no fresh data for over 15 minutes.
+- **History-path failures are no longer silent**: the history pull and carry-forward error paths now log through the integration logger (visible without the debug option) — being invisible is how both this and the 2.6.1 bug went unnoticed.
+
 ## [2.6.1]
 
 ### Fixed
