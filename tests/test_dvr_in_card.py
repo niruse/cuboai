@@ -172,19 +172,22 @@ class TestCardKeepsPlaybackInPlace:
         assert "liveBtn.addEventListener('click', goLive)" in code
 
     def test_the_bar_matches_what_the_camera_actually_keeps(self):
-        """Measured, not taken from the docs.
+        """Measured, and re-measured — which is why this is a RANGE, not a number.
 
-        Probed against a real camera on 2026-08-07, one request an hour: 48h
-        back returns frames, 56h does not. The service description claims
-        "about 72 hours", and a 72h bar is a third dead space that fails
-        silently when you scrub into it -- while a 12h bar, which is what this
-        started as, hid three quarters of what is there.
+        2026-08-07 (light recording): 48h back returned frames, 56h did not.
+        2026-08-10 (baby-presence detection on, recording heavily): the whole
+        playable window had collapsed to a sliding ~18-20h, matching the
+        official app's own bar. No fixed span can be right for both, so the
+        default is a small honest window the learned clamp narrows further,
+        and `timeline_hours` raises for cards that hold more. Guard the band:
+        wide enough to be useful, never the 72h the service description
+        claims (a bar that is mostly dead space fails silently when scrubbed).
         """
         code = _card_code()
         hours = re.search(r"Number\(this\._config\.timeline_hours\) \|\| (\d+)", code)
         assert hours, "the span default is gone"
         span = int(hours.group(1))
-        assert 24 <= span <= 48, f"span is {span}h; 48h is the measured edge"
+        assert 6 <= span <= 48, f"span is {span}h; outside the measured band"
 
     def test_a_moment_can_be_typed_not_only_aimed_at(self):
         """At phone width the bar is ~366px across two days -- about eight

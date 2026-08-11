@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.7]
+
+### Changed
+- **The scrub bar spans 8 hours by default** (2.6.6 took it from 24 to 12; this goes further). A night is about eight hours, so the bar now covers the period people actually scrub through, at a resolution where a phone-width drag lands on the minute you meant instead of a ten-minute guess. `timeline_hours` raises it for cards that hold more, and the learned clamp still narrows it when a seek proves where the footage ends.
+- The card-span test now guards a measured BAND (6-48 h) rather than one number — the camera's real retention was measured at ~48 h under light recording and a sliding ~18-20 h under heavy recording, so no single value can be correct.
+
 ## [2.6.6]
 
 ### Changed
