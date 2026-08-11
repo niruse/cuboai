@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.8]
+
+### Changed
+- **The scrub bar spans 6 hours by default.** Measured again on a live camera: at 05:37 the oldest playable footage was 23:36 — six hours. Retention keeps shrinking as the camera records more, so the bar now defaults to the window that is actually there; `timeline_hours` raises it for cards that hold more, and the learned clamp narrows it further when a seek proves where the footage ends.
+
 ## [2.6.7]
 
 ### Changed
