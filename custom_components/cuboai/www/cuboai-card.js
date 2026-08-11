@@ -567,7 +567,7 @@ class CuboAICameraCard extends HTMLElement {
         // possibly just today", so the default span is one day; raise
         // timeline_hours if your SD card demonstrably holds more. The bar
         // also LEARNS its dead zone (see covNote below) and dims it.
-        const HOURS = Number(this._config.timeline_hours) || 6;    // span shown
+        const HOURS = Number(this._config.timeline_hours) || 18;   // span shown
         // A minute of footage then silence looked like playback had failed.
         // Fifteen minutes is long enough to watch something; the bar restarts
         // it wherever you drop the playhead next.
@@ -579,7 +579,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.8';
+        const CARD_VERSION = 'v2.6.9';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.9]
+
+### Changed
+- **The scrub bar spans 18 hours by default**, correcting 2.6.8's 6 h (that release misread a 24-hour-clock report and set the span to a quarter of the real window). Measured on the live camera: at 05:37 the oldest playable footage was 11:36 the previous day — 18 hours, matching the sliding ~18-20 h window measured under heavy recording. `timeline_hours` adjusts it, and the learned clamp narrows it when a seek proves where the footage ends.
+
 ## [2.6.8]
 
 ### Changed
