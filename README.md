@@ -306,7 +306,7 @@ official app.
 type: custom:cuboai-camera-card
 # Everything below is optional.
 show_timeline: true          # false hides the scrub bar entirely
-timeline_hours: 24           # span of the bar; raise it if your card holds more
+timeline_hours: 12           # span of the bar; raise it if your card holds more
 timeline_play_seconds: 900   # how much footage one request plays
 ```
 
@@ -314,7 +314,7 @@ timeline_play_seconds: 900   # how much footage one request plays
 oldest recordings as the SD card fills — measured live, the playable window
 under heavy recording slides around **18-20 hours**, matching the official
 app's own playback bar. The card's bar starts at `timeline_hours` (default
-24 — an upper bound, not a promise) and, once a seek has come back "Nothing
+12 — an upper bound, not a promise) and, once a seek has come back "Nothing
 recorded", clamps its left edge to the oldest playable moment it has learned
 — from then on it shows the same window the official app does, per camera,
 and keeps tracking it as the camera prunes. A later successful seek older

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.6]
+
+### Changed
+- **The scrub bar spans 12 hours by default** (was 24). A day-wide bar is mostly dead space on a camera whose SD card holds a sliding ~18-20 h, and on a phone it made every scrub a coarse guess. `timeline_hours` still raises it, and the learned clamp still narrows it further once a seek proves where the footage ends.
+- **The card paints its version faintly on the ruler** (bottom-right). Which build a client is actually running was the question behind hours of cache forensics; now a screenshot answers it.
+
 ## [2.6.5]
 
 ### Changed
