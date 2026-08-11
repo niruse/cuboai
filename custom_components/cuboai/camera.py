@@ -336,7 +336,18 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             async_call_later(self.hass, 20, _delayed_diag)
 
-        return f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}"
+        # An H.265 camera with the H.264 toggle on hands consumers the
+        # DEDICATED transcode stream (issue #85). The combined stream carries
+        # the camera's native video too, and a plain RTSP consumer — which is
+        # what HA's stream worker and therefore HomeKit is — takes the native
+        # HEVC and fails to decode it. cuboai_h264_ has H.264 as its only
+        # video, so there is nothing else to pick. It is a pure transcode of
+        # the stream just pre-warmed above (no second camera session), and
+        # that pre-warm is what keeps its nested ffmpeg from timing out on a
+        # cold start.
+        h264 = self._device_id in (self.coordinator.config_entry.options.get("h264_cameras") or [])
+        name = f"cuboai_h264_{self._device_id}" if h264 else f"cuboai_combined_{self._device_id}"
+        return f"rtsp://{auth}127.0.0.1:{rtsp_port}/{name}"
 
     @property
     def device_info(self):

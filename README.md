@@ -71,7 +71,7 @@ This integration provides a massive suite of local control and real-time monitor
 - **Zero-Delay Local Streaming**: Video is fetched directly from the camera on your local network!
 - **Two-Way Audio & Picture-in-Picture**: talk to the room through the bundled Lovelace card's mic button; pop the video out into a floating window (native PiP on Android/Apple, overlay PiP with the BPM/temperature badges on desktop Chrome).
 - **NVR / RTSP Export**: publish a credential-protected RTSP URL that Frigate, Synology, HiLook or any recorder can consume — enable the NVR options and copy the `nvr_rtsp_url` attribute from the WebRTC Stream sensor.
-- **HomeKit-friendly H.264 Transcode**: a per-camera toggle (also the `cuboai.set_h264_transcode` service) for H.265 models (Cubo 3 / SW05) whose native video HomeKit and HA's HLS player cannot decode.
+- **HomeKit-friendly H.264 Transcode**: a per-camera toggle (also the `cuboai.set_h264_transcode` service) for H.265 models (Cubo 3 / SW05) whose native video HomeKit and HA's HLS player cannot decode. With it on, the camera publishes a dedicated H.264-only stream (`cuboai_h264_<id>`) and points HomeKit/HLS at it — a stream that still carried the camera's native HEVC alongside the transcode would hand HomeKit the HEVC. It reuses the same camera session, so the camera is still opened only once.
 - **Multi-Camera Support**: Add as many CuboAI cameras as you own!
 - **Secure Authentication**: Uses native AWS Cognito SRP authentication.
 

@@ -157,6 +157,34 @@ class Go2RTCManager:
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
+            # HomeKit/HLS H.264 output for an HEVC camera (issue #85, part 2).
+            #
+            # The transcode leg inside cuboai_combined_ is NOT enough on its
+            # own: that stream also carries the camera's NATIVE video from the
+            # exec producer, and a plain RTSP consumer (HA's stream worker,
+            # which is what HomeKit rides) takes what is offered first — the
+            # HEVC. The reporter's own diagnostics show it exactly:
+            #     producer(mpegts)      tracks=[hevc:264pkts, aac:274pkts]
+            #     producer(ffmpeg h264) tracks=[]  recv=None      <- never used
+            #     consumer(rtsp ...)    tracks=[hevc:264pkts, aac:274pkts]
+            # So the toggle was applied, ffmpeg was spawned with libx264, and
+            # HomeKit still got HEVC and said "No Response".
+            #
+            # A consumer that must have H.264 therefore needs a stream whose
+            # ONLY video is H.264. This one qualifies — and it does NOT
+            # violate the one-engine invariant above, because it declares no
+            # exec: its single source is a CROSS-stream reference that reuses
+            # the combined stream's existing producer. (The reverted bb4bf13
+            # chained streams the other way round and raced a cold start:
+            # the nested ffmpeg gives up after 5s while the engine needs ~10s.
+            # Here the consumer is camera.stream_source(), which PRE-WARMS the
+            # combined stream and only returns a URL once a frame has arrived,
+            # so this DESCRIBE always meets a warm producer.)
+            if force_h264:
+                self._streams[f"cuboai_h264_{dev_id}"] = [
+                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac",
+                ]
+
             # Recorded footage from the camera's own DVR. Declared here rather
             # than added over go2rtc's API, which rejects `exec:` sources (it
             # would be a remote-execution hole). Which moment to play is passed

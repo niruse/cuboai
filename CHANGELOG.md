@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.10]
+
+### Fixed
+- **HomeKit still said "No Response" on an H.265 camera even with the H.264 toggle on (issue #85, part 2).** v2.6.0 correctly gave every consumer ONE stream — but that stream also carries the camera's *native* video, and a plain RTSP consumer (HA's stream worker, which HomeKit rides) takes what is offered first: the HEVC. The reporter's diagnostics show it exactly — `producer(ffmpeg h264) tracks=[] recv=None` sitting idle while `consumer(rtsp) tracks=[hevc:264pkts]`. The transcode was spawned, applied and never consumed.
+  A consumer that *must* have H.264 now gets a stream whose only video is H.264: with the toggle on, the camera declares `cuboai_h264_<id>` and `stream_source()` points HomeKit/HLS at it. It declares **no exec** — its single source is a cross-stream reference that reuses the combined stream's producer, so the one-engine invariant that #85 was originally about still holds (verified live: the new stream serves `h264 + aac` to its consumer while exactly one camera engine runs across all streams). The cold-start race that sank the reverted `bb4bf13` cannot happen here either, because `stream_source()` pre-warms the combined stream and only returns a URL once a frame has arrived.
+
 ## [2.6.9]
 
 ### Changed

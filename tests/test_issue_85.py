@@ -389,3 +389,60 @@ def test_the_probe_is_cheaper_than_the_thing_it_guards():
     src = (Path(__file__).parent.parent / "custom_components" / "cuboai" / "camera.py").read_text(encoding="utf-8")
     probe = src[src.index("_producer_is_warm") : src.index("async def async_camera_image")]
     assert "ClientTimeout(total=2)" in probe, "probe should be short"
+
+
+# =============================================================================
+# 6. HomeKit gets H.264, not just a transcode nobody consumes (issue #85, pt 2)
+# =============================================================================
+
+
+class TestHomeKitActuallyReceivesH264:
+    """v2.6.0 gave every consumer ONE stream — correct, and not enough.
+
+    That stream also carries the camera's NATIVE video, so a plain RTSP
+    consumer (HA's stream worker, which HomeKit rides) takes the HEVC and
+    fails to decode it. The reporter's diagnostics showed the transcode leg
+    sitting idle with `tracks=[] recv=None` while the RTSP consumer pulled
+    `hevc:264pkts`. A consumer that MUST have H.264 needs a stream whose only
+    video is H.264.
+    """
+
+    def test_no_h264_stream_unless_the_toggle_is_on(self):
+        streams = _resolve()
+        assert not [k for k in streams if k.startswith("cuboai_h264_")]
+
+    def test_toggled_camera_gets_an_h264_only_stream(self):
+        streams = _resolve({"h264_cameras": ["SW05BBB"]})
+        sources = streams["cuboai_h264_SW05BBB"]
+        assert len(sources) == 1
+        assert sources[0].startswith("ffmpeg:cuboai_combined_SW05BBB#")
+        assert "video=h264" in sources[0]
+        # No second video codec to pick from — that is the whole point.
+        assert "video=copy" not in sources[0]
+        # The untoggled camera is untouched.
+        assert "cuboai_h264_CB02AAA" not in streams
+
+    def test_the_h264_stream_never_spawns_a_second_camera_session(self):
+        """The #85 invariant, which the reverted bb4bf13 broke.
+
+        A cross-stream reference is only safe because it declares NO exec: it
+        reuses the combined stream's producer. Two execs against one camera is
+        the double-session bug this whole issue was about.
+        """
+        streams = _resolve({"h264_cameras": ["SW05BBB", "CB02AAA"]})
+        for dev in ("CB02AAA", "SW05BBB"):
+            assert not [s for s in streams[f"cuboai_h264_{dev}"] if s.startswith("exec:")]
+            video_execs = [
+                s
+                for name, srcs in streams.items()
+                if name.endswith(dev)
+                for s in srcs
+                if s.startswith("exec:") and "cuboai_stream_video.py" in s
+            ]
+            assert len(video_execs) == 1, f"{dev} runs the video engine {len(video_execs)}x"
+
+    def test_stream_source_points_homekit_at_the_h264_stream(self):
+        """The plumbing only matters if the consumer is sent to it."""
+        code = (Path(__file__).parent.parent / "custom_components" / "cuboai" / "camera.py").read_text(encoding="utf-8")
+        assert 'f"cuboai_h264_{self._device_id}" if h264' in code
+        assert "h264_cameras" in code
