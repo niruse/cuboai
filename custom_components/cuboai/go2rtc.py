@@ -498,6 +498,21 @@ class Go2RTCManager:
         # the longer ceiling costs nothing on a clean start.
         await self._wait_for_port_free(DESIRED_API_PORT, timeout=15.0)
 
+        # The SAME race applies to the RTSP port, and it hurts more: an NVR
+        # stores the port in its channel config, so a hop is permanent and
+        # silent — the recorder simply reports the host unreachable forever
+        # (observed live: a restart moved RTSP 8557 -> 8558 and stayed there,
+        # while the integration's own sensors correctly followed the new port
+        # and only the external recorder was stranded).
+        #
+        # Wait only for the port our OWN previous instance was using. Waiting
+        # on the desired port unconditionally would burn the full timeout on
+        # every start for the common case where 8555 belongs to Home
+        # Assistant's built-in go2rtc and is never coming free.
+        previous_rtsp = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
+        if previous_rtsp:
+            await self._wait_for_port_free(int(previous_rtsp), timeout=15.0)
+
         await self._resolve_ports()
         await self._resolve_codecs()
         await self._generate_config()

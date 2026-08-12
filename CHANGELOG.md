@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.14]
+
+### Fixed
+- **The RTSP port could hop on restart and strand an external recorder permanently.** 2.6.5 added a wait for the *API* port to be released before probing, because a dying go2rtc holds its ports for several seconds — but the same guard was never applied to the **RTSP** port. So on a restart the old instance was often still holding it, the probe found it busy, and go2rtc self-healed to the next port. Home Assistant follows that automatically (the sensors and the card read the effective port), so nothing inside HA breaks and the hop goes unnoticed — but an **NVR stores the port in its channel config**, so it silently reports the host unreachable, forever. Observed live: a restart moved RTSP 8557 → 8558 and stayed there, and the recorder's channel died with `netUnreachable` while every HA consumer carried on happily.
+  Startup now waits (up to 15 s) for the port **our own previous instance** was using before probing. Deliberately only that port: waiting on the desired port unconditionally would burn the timeout on every start for the common case where 8555 belongs to Home Assistant's built-in go2rtc and is never coming free.
+
 ## [2.6.13]
 
 Documentation release — no code changes. Cut so the corrected NVR guidance ships with a version number and HACS installs it.
