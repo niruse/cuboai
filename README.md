@@ -433,42 +433,53 @@ go2rtc serves three streams per camera. Only the first belongs in an NVR:
 | **401 / authentication failed** | The NVR password changed; re-copy the URL, which embeds the current credentials. |
 | **Connects, but no picture on an H.265 camera** (Cubo 3 / SW05) | The recorder cannot decode HEVC. Turn on **H.264 transcode** for that camera, then re-copy the URL — it will now name the `cuboai_h264_` stream. |
 | **Picture, but the recorder complains about audio** | Use `nvr_rtsp_url_video_only`. |
-| **Connects, streams for ~30-60 s, then drops — over and over** | Your recorder keeps the RTSP session alive with `GET_PARAMETER`, which go2rtc does not answer. See below. |
+| **Recorder says offline and `go2rtc.log` shows nothing at all** | Almost always a wrong stream path — go2rtc logs nothing for a name it doesn't have. See below. |
+| **Connects, streams for ~30-60 s, then drops repeatedly** | Possibly the `GET_PARAMETER` keepalive go2rtc ignores — but confirm the path first. See below. |
 
-### ⚠️ Hikvision / HiLook NVRs: known incompatible
+### 🔎 The recorder shows "offline" and the log shows nothing at all
 
-Hikvision and HiLook recorders keep an RTSP session alive by sending
-`GET_PARAMETER` at a fixed interval. The embedded go2rtc server does not
-implement it — it does not even reply with an error — so the recorder decides
-the session is dead and resets it. Measured on a real HiLook: it connected,
-received H.264 video happily for 33 seconds, then dropped, on repeat.
+**go2rtc does not log a request for a stream name it does not have.** No 404
+line, no client address, nothing — so a recorder with one wrong character in
+its path is completely invisible on the server side, and it is very easy to
+conclude the recorder never made contact.
 
-Proof, if you want to check your own setup — mid-session, after `PLAY`:
+This is the single most likely cause of an NVR that will not come online, and
+it is worth ruling out before suspecting the network. Verified on a HiLook
+NVR-216MH-C/16P (firmware V3.4.97): the channel had been re-entered by hand
+after the 2.6.0 stream rename and had ended up as
 
 ```
-DESCRIBE          -> RTSP/1.0 200 OK
-SETUP             -> RTSP/1.0 200 OK
-PLAY              -> RTSP/1.0 200 OK
-GET_PARAMETER     -> (no reply at all)
+/combined_<device id>         <- missing the "cuboai_" prefix
 ```
 
-Nothing in this integration can fix that; it is upstream in go2rtc
-([AlexxIT/go2rtc#289](https://github.com/AlexxIT/go2rtc/issues/289)). What
-does work today:
+which produced `ipcStreamFail` on the NVR and total silence in `go2rtc.log`.
+Correcting the path brought the channel online immediately and it then ran
+continuously with no drops.
 
-- **Frigate, Synology Surveillance Station, Blue Iris, VLC, ffmpeg** — these
-  keep alive with `OPTIONS` (which go2rtc answers) or tolerate silence, and
-  record this stream without trouble.
-- **A bridging RTSP server** (MediaMTX and similar) can pull from go2rtc and
-  re-serve to the NVR with full keepalive support, at the cost of running
-  another service.
-- Changing the recorder's transfer protocol (RTP over UDP instead of RTP over
-  RTSP) is worth a try — some firmware then keeps alive with RTCP instead —
-  but it is not a reliable fix.
+**How to check it properly, in order:**
 
-Symptom-wise this is easy to recognise in `go2rtc.log`: a `new consumer` line,
-then `connection reset by peer` from the NVR's address roughly half a minute
-later, with no 404 or 401 anywhere (the path and credentials were fine).
+1. **Compare the recorder's stored path against the sensor, character by
+   character.** On Hikvision/HiLook, Configuration → Custom Protocol → *Stream
+   Path*; the truth is the `nvr_rtsp_url` attribute on the WebRTC Stream
+   sensor. Renames happen on upgrade ([2.6.0](#-upgrading-to-260--nvr--rtsp-users-must-re-copy-their-url))
+   and whenever the H.264 toggle changes.
+2. **Test the exact URL from a computer** (`ffprobe`, VLC). If it plays there
+   and the recorder still fails, the recorder's stored value differs from what
+   you think it is.
+3. **Only then look at the log** — and confirm the *address*. A `new consumer`
+   line carries no IP; check `remote_addr` under
+   `http://<HA-IP>:1985/api/streams?src=<stream>`. It is easy to mistake your
+   own test pull (VLC, ffprobe) for the recorder and chase a phantom.
+
+### A note on RTSP keepalives
+
+go2rtc's RTSP server answers `OPTIONS` but ignores `GET_PARAMETER` entirely —
+mid-session it sends no reply at all, not even an error
+([AlexxIT/go2rtc#289](https://github.com/AlexxIT/go2rtc/issues/289)). Some RTSP
+clients use `GET_PARAMETER` as their keepalive, so this *can* matter. It did
+**not** affect the HiLook above, which kept a session open indefinitely once
+its path was correct — so do not assume it is your problem: confirm the path
+first, and look for a drop at a regular interval (~30–60 s) before blaming it.
 
 ### A note on load
 
