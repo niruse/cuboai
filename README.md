@@ -70,7 +70,7 @@ This integration provides a massive suite of local control and real-time monitor
 ### 🌟 Plus:
 - **Zero-Delay Local Streaming**: Video is fetched directly from the camera on your local network!
 - **Two-Way Audio & Picture-in-Picture**: talk to the room through the bundled Lovelace card's mic button; pop the video out into a floating window (native PiP on Android/Apple, overlay PiP with the BPM/temperature badges on desktop Chrome).
-- **NVR / RTSP Export**: publish a credential-protected RTSP URL that Frigate, Synology, HiLook or any recorder can consume — enable the NVR options and copy the `nvr_rtsp_url` attribute from the WebRTC Stream sensor.
+- **NVR / RTSP Export**: publish a credential-protected RTSP URL that Frigate, Synology, HiLook or any recorder can consume — see [RTSP — recording to an NVR](#-rtsp--recording-to-an-nvr-frigate-synology-hilook-blue-iris-).
 - **HomeKit-friendly H.264 Transcode**: a per-camera toggle (also the `cuboai.set_h264_transcode` service) for H.265 models (Cubo 3 / SW05) whose native video HomeKit and HA's HLS player cannot decode. With it on, the camera publishes a dedicated H.264-only stream (`cuboai_h264_<id>`) and points HomeKit/HLS at it — a stream that still carried the camera's native HEVC alongside the transcode would hand HomeKit the HEVC. It reuses the same camera session, so the camera is still opened only once.
 - **Multi-Camera Support**: Add as many CuboAI cameras as you own!
 - **Secure Authentication**: Uses native AWS Cognito SRP authentication.
@@ -126,7 +126,7 @@ You can adjust:
 - **RTSP Port:** the port the embedded go2rtc serves RTSP on (it self-heals to a free port if taken).
 - **History sensors:** enable the DVR history sensors (Baby Present, Caregiver Activity, Noise, Motion, Privacy).
 - **H.264 transcode (per camera):** transcode an H.265 camera's video to H.264 for HomeKit / HLS.
-- **NVR export / username / password:** protect and publish the RTSP stream for external recorders.
+- **NVR export / username / password:** protect and publish the RTSP stream for external recorders — see [RTSP — recording to an NVR](#-rtsp--recording-to-an-nvr-frigate-synology-hilook-blue-iris-).
 - **Cache YouTube/Spotify songs:** keep downloaded lullaby audio on disk for instant replay.
 - **Enable debug logs:** one toggle for full diagnostics (integration + go2rtc + stream engine) — see Troubleshooting.
 
@@ -358,6 +358,88 @@ You do **not** need to put it on a dashboard — the card drives it for you. It
 idles with no picture until something asks for a moment.
 
 ---
+
+---
+
+## 📡 RTSP — recording to an NVR (Frigate, Synology, HiLook, Blue Iris, …)
+
+The integration runs its own go2rtc server, so the camera's live feed is
+available as a plain RTSP stream that any recorder or player (VLC included)
+can consume. **The URL is published as an entity attribute — copy it from
+there rather than typing one out**, because both the port and the stream name
+can legitimately differ from the examples below.
+
+### 1. Turn the export on
+
+Settings → Devices & Services → **CuboAI → Configure**:
+
+- **Expose RTSP stream for NVR** — on.
+- **NVR username / password** — strongly recommended. Leave the password empty
+  and the stream is **open to everyone on your network**; the sensor will say
+  so plainly (`nvr_auth: none (open stream)`).
+
+### 2. Copy the URL from the sensor
+
+Developer Tools → **States** → `sensor.cuboai_<baby>_cuboai_webrtc_stream_<baby>`:
+
+| Attribute | What it is |
+|---|---|
+| `nvr_rtsp_url` | **The one to paste into your recorder** — reachable from your LAN, credentials included when set |
+| `nvr_rtsp_url_video_only` | Same, with `?video` — video only, no audio track |
+| `rtsp_url` | The same stream via `127.0.0.1`; only useful *inside* the HA host |
+| `nvr_auth` | `basic` if protected, `none (open stream)` if not |
+| `web_player_url` | A browser test page served by go2rtc |
+
+They look like this:
+
+```
+rtsp://user:password@192.168.1.50:8557/cuboai_combined_CB02XXXXXXXXXXXX
+rtsp://user:password@192.168.1.50:8557/cuboai_combined_CB02XXXXXXXXXXXX?video
+```
+
+**Use `?video` if your recorder refuses the stream.** The default URL carries
+the two-way-audio (PCMA backchannel) track, and several NVRs — Hikvision and
+HiLook in particular — reject a stream with a sendonly audio media instead of
+just ignoring it.
+
+### 3. Two things that are not what you would guess
+
+- **The port is usually `8557`, not `8555`.** Home Assistant's own built-in
+  go2rtc normally holds `8555`, so the integration self-heals to the next free
+  port — that is expected, not a fault. See
+  [Streaming ports & conflicts](#-streaming-ports--conflicts).
+- **The stream name is not fixed.** It is `cuboai_combined_<device id>`
+  normally, and `cuboai_h264_<device id>` when the per-camera **H.264
+  transcode** is on (issue #85). A URL copied before you flipped that toggle
+  will 404 afterwards. This is exactly why the attribute is the source of
+  truth: it always names the stream the integration is currently serving.
+
+### Which stream is which
+
+go2rtc serves three streams per camera. Only the first belongs in an NVR:
+
+| Stream | For |
+|---|---|
+| `cuboai_combined_<id>` (or `cuboai_h264_<id>`) | **The live view** — this is the one to record |
+| `cuboai_dvr_<id>` | Recorded playback; idle until `cuboai.play_recording` asks for a moment |
+| `cuboai_speaker_<id>` | The speaker/TTS backchannel, not a video source |
+
+### If the recorder cannot connect
+
+| Symptom | Cause |
+|---|---|
+| **404 / "stream not found"** | Wrong stream name — re-copy `nvr_rtsp_url`. Renames happen on upgrade ([2.6.0](#-upgrading-to-260--nvr--rtsp-users-must-re-copy-their-url)) and when the H.264 toggle changes. |
+| **Connection refused / reset** | Wrong port (see above), or you used the `127.0.0.1` URL from another machine — that address only works on the HA host itself. |
+| **401 / authentication failed** | The NVR password changed; re-copy the URL, which embeds the current credentials. |
+| **Connects, but no picture on an H.265 camera** (Cubo 3 / SW05) | The recorder cannot decode HEVC. Turn on **H.264 transcode** for that camera, then re-copy the URL — it will now name the `cuboai_h264_` stream. |
+| **Picture, but the recorder complains about audio** | Use `nvr_rtsp_url_video_only`. |
+
+### A note on load
+
+Every consumer shares **one** camera session — recording does not open a second
+connection to the camera, which is deliberate ([issue #85](https://github.com/niruse/cuboai/issues/85):
+a second session broke HomeKit on the Cubo 3). Recording continuously is fine;
+the camera is opened once no matter how many things are watching.
 
 ## 📈 Sleep windows and the timeline chart
 
