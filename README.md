@@ -428,13 +428,46 @@ go2rtc serves three streams per camera. Only the first belongs in an NVR:
 
 | Symptom | Cause |
 |---|---|
-| **404 / "stream not found"** | Wrong stream name — re-copy `nvr_rtsp_url`. Renames happen on upgrade ([2.6.0](#-upgrading-to-260--nvr--rtsp-users-must-re-copy-their-url)) and when the H.264 toggle changes. |
+| **404 / "stream not found"** | Wrong stream name — re-copy `nvr_rtsp_url`. Renames happen on upgrade ([2.6.0](#-upgrading-to-260--nvr--rtsp-users-must-re-copy-their-url)) and when the H.264 toggle changes. On recorders that take a *path field* rather than a URL, re-read the stored value from the device: a lost prefix looks identical to a network fault. |
 | **Connection refused / reset** | Wrong port (see above), or you used the `127.0.0.1` URL from another machine — that address only works on the HA host itself. |
 | **401 / authentication failed** | The NVR password changed; re-copy the URL, which embeds the current credentials. |
 | **Connects, but no picture on an H.265 camera** (Cubo 3 / SW05) | The recorder cannot decode HEVC. Turn on **H.264 transcode** for that camera, then re-copy the URL — it will now name the `cuboai_h264_` stream. |
 | **Picture, but the recorder complains about audio** | Use `nvr_rtsp_url_video_only`. |
 | **Recorder says offline and `go2rtc.log` shows nothing at all** | Almost always a wrong stream path — go2rtc logs nothing for a name it doesn't have. See below. |
 | **Connects, streams for ~30-60 s, then drops repeatedly** | Possibly the `GET_PARAMETER` keepalive go2rtc ignores — but confirm the path first. See below. |
+
+### Hikvision / HiLook NVRs — verified working settings
+
+These recorders do **not** take a URL. They take a *protocol definition* with
+the address, port and path in **separate fields**, which is exactly why a
+mistyped or truncated path is the most common failure (see below). Verified end
+to end on an NVR-216MH-C/16P running firmware V3.4.97:
+
+Configuration → Camera → **Custom Protocol** (create one, e.g. named `CuboAI`):
+
+| Field | Value |
+|---|---|
+| Type | `RTSP` |
+| Transmission Protocol | `RTP Over RTSP` (TCP) |
+| Port | the RTSP port from the sensor — usually **8557**, not 554 |
+| Stream Path | `/cuboai_combined_<device id>` — the **whole** name, leading slash, no host, no port |
+
+Set the **same path for both Main Stream and Sub Stream** (the NVR asks for
+both; a blank sub-stream can keep the channel offline).
+
+Then add the camera: Configuration → Camera → **IP Camera → Custom Add**, with
+protocol `CuboAI`, the HA host's IP, and the same port. Leave the password
+empty if the stream is unauthenticated.
+
+Two facts worth knowing about these units:
+
+- The path field accepts a `?video` suffix, so
+  `/cuboai_combined_<device id>?video` is valid if you want to drop the audio
+  track — but plain H.264 + AAC records fine, so only reach for it if the NVR
+  complains about audio.
+- The request they emit puts **no port in the RTSP URL** (`rtsp://<ip>/<path>`)
+  even though they connect on the right port. That is normal and go2rtc
+  handles it.
 
 ### 🔎 The recorder shows "offline" and the log shows nothing at all
 
