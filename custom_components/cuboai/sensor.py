@@ -4,7 +4,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, live_stream_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -487,12 +487,20 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"cuboai_webrtc_stream_{device_id}"
         self._attr_icon = "mdi:cctv"
 
+    def _entry_options(self):
+        """The config entry's options, however this coordinator exposes them."""
+        entry = getattr(self.coordinator, "config_entry", None) or getattr(self.coordinator, "_entry", None)
+        return getattr(entry, "options", {}) or {}
+
     @property
     def native_value(self):
         # The one live-view stream name per camera (#85). There used to be a
         # plain "cuboai_<id>" alongside it; declaring two names opened two
         # concurrent TUTK sessions and broke HomeKit on Cubo 3 (SW05).
-        return f"cuboai_combined_{self._device_id}"
+        # With the H.264 toggle on this resolves to the transcode stream —
+        # advertising the combined one there sends NVRs (and anyone reading
+        # this sensor to debug HomeKit) to the HEVC they cannot decode.
+        return live_stream_name(self._device_id, self._entry_options())
 
     @property
     def extra_state_attributes(self):
@@ -515,11 +523,12 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
         # Like rtsp_port above, the API port self-heals on conflicts (issue #84)
         api_port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
+        stream = live_stream_name(self._device_id, self._entry_options())
         attrs = {
             "go2rtc_server": f"http://127.0.0.1:{api_port}",
-            "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/cuboai_combined_{self._device_id}",
-            "web_player_url": f"http://127.0.0.1:{api_port}/stream.html?src=cuboai_combined_{self._device_id}",
-            "stream_id": f"cuboai_combined_{self._device_id}",
+            "rtsp_url": f"rtsp://{auth}127.0.0.1:{rtsp_port}/{stream}",
+            "web_player_url": f"http://127.0.0.1:{api_port}/stream.html?src={stream}",
+            "stream_id": stream,
         }
 
         if nvr_enabled:
@@ -535,7 +544,7 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
                 host = urlparse(get_url(self.hass, allow_external=False, allow_ip=True)).hostname
             except Exception:
                 pass
-            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/cuboai_combined_{self._device_id}"
+            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/{stream}"
             attrs["nvr_rtsp_url"] = base
             attrs["nvr_rtsp_url_video_only"] = base + "?video"
             attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"

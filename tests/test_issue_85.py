@@ -293,12 +293,22 @@ class TestNoOrphanedConsumers:
             "cuboai_combined_<dev_id>:\n" + "\n".join(offenders)
         )
 
-    def test_webrtc_sensor_state_is_the_combined_stream(self):
+    def test_webrtc_sensor_state_follows_the_one_rule(self):
         """A user-visible sensor STATE, documented in the README as the stream
-        ID to embed. Grep patterns aimed at rtsp_url/stream_id miss it."""
+        ID to embed. Grep patterns aimed at rtsp_url/stream_id miss it.
+
+        It must follow the SAME rule stream_source() uses: advertising the
+        combined stream while HomeKit was sent to the H.264 one is what made
+        #85 look unfixed after v2.6.10 — the reporter read this sensor to
+        check which stream HomeKit received, and it said the wrong thing."""
         sensor = object.__new__(CuboWebRTCStreamSensor)
         sensor._device_id = "DEV1"
+        sensor.coordinator = MagicMock()
+        sensor.coordinator.config_entry.options = {}
         assert sensor.native_value == "cuboai_combined_DEV1"
+
+        sensor.coordinator.config_entry.options = {"h264_cameras": ["DEV1"]}
+        assert sensor.native_value == "cuboai_h264_DEV1"
 
     def test_webrtc_sensor_attributes_all_point_at_combined(self):
         sensor = object.__new__(CuboWebRTCStreamSensor)
@@ -444,5 +454,9 @@ class TestHomeKitActuallyReceivesH264:
     def test_stream_source_points_homekit_at_the_h264_stream(self):
         """The plumbing only matters if the consumer is sent to it."""
         code = (Path(__file__).parent.parent / "custom_components" / "cuboai" / "camera.py").read_text(encoding="utf-8")
-        assert 'f"cuboai_h264_{self._device_id}" if h264' in code
-        assert "h264_cameras" in code
+        assert "live_stream_name(self._device_id, self.coordinator.config_entry.options)" in code
+        # and the rule itself resolves the way HomeKit needs
+        from custom_components.cuboai.const import live_stream_name
+
+        assert live_stream_name("DEV1", {"h264_cameras": ["DEV1"]}) == "cuboai_h264_DEV1"
+        assert live_stream_name("DEV1", {}) == "cuboai_combined_DEV1"

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.11]
+
+### Fixed
+- **HomeKit still got HEVC after v2.6.10, and the sensor said why (issue #85, part 3).** v2.6.10 published the H.264-only stream and pointed `stream_source()` at it — but every OTHER consumer of the stream name kept the hardcoded `cuboai_combined_<id>`: the WebRTC Stream sensor's state, its `stream_id` / `rtsp_url` / `web_player_url`, the **NVR copy-paste URLs**, and the `[stream diag]` logging that was supposed to prove which stream HomeKit received. The reporter read that sensor to check the fix and was told the old name — while an NVR pointed at those URLs would record HEVC despite the toggle.
+  There is now ONE rule in one place (`const.live_stream_name`), and every consumer uses it. `stream_source()` also logs the name it hands out, so "which stream did HomeKit actually get" is answerable from the log instead of inferred.
+
+### Changed
+- The test harness loads the REAL `const` module instead of a hand-written stub that listed only `DOMAIN` — the stub silently broke every entity test the moment `const` grew a function.
+
 ## [2.6.10]
 
 ### Fixed

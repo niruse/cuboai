@@ -131,9 +131,15 @@ def _make_sensor(history, monkeypatch, field="baby_present", labelled=True):
     pkg = types.ModuleType("cuboai_pkg")
     pkg.__path__ = [str(REPO / "custom_components" / "cuboai")]
     monkeypatch.setitem(sys.modules, "cuboai_pkg", pkg)
-    constmod = types.ModuleType("cuboai_pkg.const")
-    constmod.DOMAIN = "cuboai"
+    # Load the REAL const module rather than a hand-written stub: a stub that
+    # lists only DOMAIN silently rots the moment const grows something the
+    # entities import (it did — `live_stream_name` broke every test here).
+    const_spec = importlib.util.spec_from_file_location(
+        "cuboai_pkg.const", REPO / "custom_components" / "cuboai" / "const.py"
+    )
+    constmod = importlib.util.module_from_spec(const_spec)
     monkeypatch.setitem(sys.modules, "cuboai_pkg.const", constmod)
+    const_spec.loader.exec_module(constmod)
 
     spec = importlib.util.spec_from_file_location(
         "cuboai_pkg.sensor", REPO / "custom_components" / "cuboai" / "sensor.py"

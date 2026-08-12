@@ -4,7 +4,7 @@ from homeassistant.components.camera import Camera
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, live_stream_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             session = async_get_clientsession(self.hass)
             async with session.get(
-                f"{self._go2rtc_api_base()}/api/streams?src=cuboai_combined_{self._device_id}",
+                f"{self._go2rtc_api_base()}/api/streams?src={live_stream_name(self._device_id, self.coordinator.config_entry.options)}",
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 raw = await resp.text()
@@ -252,9 +252,14 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                 summary = " | ".join(parts) if parts else redacted[:1500]
             except ValueError:
                 summary = redacted[:1500]
-            _LOGGER.info("[stream diag %s] cuboai_combined_%s: %s", moment, self._device_id, summary)
+            _LOGGER.info(
+                "[stream diag %s] %s: %s",
+                moment,
+                live_stream_name(self._device_id, self.coordinator.config_entry.options),
+                summary,
+            )
         except Exception as e:
-            _LOGGER.info("[stream diag %s] cuboai_combined_%s: probe failed: %s", moment, self._device_id, e)
+            _LOGGER.info("[stream diag %s] %s: probe failed: %s", moment, self._device_id, e)
 
     async def stream_source(self) -> str | None:
         """Return the stream source."""
@@ -345,9 +350,13 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # the stream just pre-warmed above (no second camera session), and
         # that pre-warm is what keeps its nested ffmpeg from timing out on a
         # cold start.
-        h264 = self._device_id in (self.coordinator.config_entry.options.get("h264_cameras") or [])
-        name = f"cuboai_h264_{self._device_id}" if h264 else f"cuboai_combined_{self._device_id}"
-        return f"rtsp://{auth}127.0.0.1:{rtsp_port}/{name}"
+        name = live_stream_name(self._device_id, self.coordinator.config_entry.options)
+        url = f"rtsp://{auth}127.0.0.1:{rtsp_port}/{name}"
+        # Log the URL actually handed over: issue #85 round 3 was spent proving
+        # which stream HomeKit received, because the sensor advertised a
+        # different one than stream_source() returned.
+        _LOGGER.info("Stream source for %s -> %s", self._device_id, name)
+        return url
 
     @property
     def device_info(self):
