@@ -393,8 +393,11 @@ Developer Tools → **States** → `sensor.cuboai_<baby>_cuboai_webrtc_stream_<b
 They look like this:
 
 ```
+rtsp://user:password@<HA-IP>:<rtsp-port>/cuboai_combined_<device id>
+rtsp://user:password@<HA-IP>:<rtsp-port>/cuboai_combined_<device id>?video
+
+# e.g. — but copy YOUR values from the sensor, never these:
 rtsp://user:password@192.168.1.50:8557/cuboai_combined_CB02XXXXXXXXXXXX
-rtsp://user:password@192.168.1.50:8557/cuboai_combined_CB02XXXXXXXXXXXX?video
 ```
 
 **Use `?video` if your recorder refuses the stream.** The default URL carries
@@ -404,9 +407,13 @@ just ignoring it.
 
 ### 3. Two things that are not what you would guess
 
-- **The port is usually `8557`, not `8555`.** Home Assistant's own built-in
-  go2rtc normally holds `8555`, so the integration self-heals to the next free
-  port — that is expected, not a fault. See
+- **The port is whatever go2rtc actually bound — read it, don't assume it.**
+  It starts from the `rtsp_port` option (default `8555`), but Home Assistant's
+  own built-in go2rtc normally holds `8555`, so the integration self-heals to
+  the next free port; `8557` is the common outcome, not a constant. The
+  resolved value is published in `nvr_rtsp_url` and in the camera's
+  `rtsp_port` attribute — those are the source of truth, and they follow the
+  port automatically if it ever changes. See
   [Streaming ports & conflicts](#-streaming-ports--conflicts).
 - **The stream name is not fixed.** It is `cuboai_combined_<device id>`
   normally, and `cuboai_h264_<device id>` when the per-camera **H.264
@@ -449,7 +456,7 @@ Configuration → Camera → **Custom Protocol** (create one, e.g. named `CuboAI
 |---|---|
 | Type | `RTSP` |
 | Transmission Protocol | `RTP Over RTSP` (TCP) |
-| Port | the RTSP port from the sensor — usually **8557**, not 554 |
+| Port | **whatever `nvr_rtsp_url` shows** — copy it from the sensor. Commonly `8557` (HA's own go2rtc usually holds `8555`), and never `554` unless you set that yourself. |
 | Stream Path | `/cuboai_combined_<device id>` — the **whole** name, leading slash, no host, no port |
 
 Set the **same path for both Main Stream and Sub Stream** (the NVR asks for
@@ -501,7 +508,9 @@ continuously with no drops.
    you think it is.
 3. **Only then look at the log** — and confirm the *address*. A `new consumer`
    line carries no IP; check `remote_addr` under
-   `http://<HA-IP>:1985/api/streams?src=<stream>`. It is easy to mistake your
+   `http://<HA-IP>:<api-port>/api/streams?src=<stream>` (the API port is
+   `1985` unless it self-healed too — the WebRTC Stream sensor's
+   `go2rtc_server` attribute always has the live value). It is easy to mistake your
    own test pull (VLC, ffprobe) for the recorder and chase a phantom.
 
 ### A note on RTSP keepalives
