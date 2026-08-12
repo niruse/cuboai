@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.12]
+
+### Changed
+- **Self-review follow-ups to the #85 fix.** The stream-source log is now debug-gated (one INFO per stream request was noise for anyone not debugging), the `[stream diag]` failure line names the same stream its success line does, and the pre-warm's deliberate use of the *source* stream — the single most dangerous line in that path to "tidy up", since pointing it at the H.264 stream reintroduces the reverted `bb4bf13` cold-start deadlock — is now commented and pinned by a mutation-tested guard.
+
 ## [2.6.11]
 
 ### Fixed

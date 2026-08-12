@@ -259,7 +259,12 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                 summary,
             )
         except Exception as e:
-            _LOGGER.info("[stream diag %s] %s: probe failed: %s", moment, self._device_id, e)
+            _LOGGER.info(
+                "[stream diag %s] %s: probe failed: %s",
+                moment,
+                live_stream_name(self._device_id, self.coordinator.config_entry.options),
+                e,
+            )
 
     async def stream_source(self) -> str | None:
         """Return the stream source."""
@@ -297,6 +302,12 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             session = async_get_clientsession(self.hass)
             async with session.get(
+                # DELIBERATELY the combined stream, even when the H.264
+                # toggle sends consumers to cuboai_h264_: that stream is a
+                # transcode OF this one, so this is what has to be warm.
+                # Pre-warming the h264 stream instead would dial a cold
+                # combined through ffmpeg, which gives up after 5s while the
+                # engine needs ~10s — the bb4bf13 failure all over again.
                 f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_combined_{self._device_id}",
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
@@ -355,7 +366,9 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # Log the URL actually handed over: issue #85 round 3 was spent proving
         # which stream HomeKit received, because the sensor advertised a
         # different one than stream_source() returned.
-        _LOGGER.info("Stream source for %s -> %s", self._device_id, name)
+        (_LOGGER.info if self._debug_logs_enabled() else _LOGGER.debug)(
+            "Stream source for %s -> %s", self._device_id, name
+        )
         return url
 
     @property
