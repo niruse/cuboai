@@ -433,6 +433,42 @@ go2rtc serves three streams per camera. Only the first belongs in an NVR:
 | **401 / authentication failed** | The NVR password changed; re-copy the URL, which embeds the current credentials. |
 | **Connects, but no picture on an H.265 camera** (Cubo 3 / SW05) | The recorder cannot decode HEVC. Turn on **H.264 transcode** for that camera, then re-copy the URL — it will now name the `cuboai_h264_` stream. |
 | **Picture, but the recorder complains about audio** | Use `nvr_rtsp_url_video_only`. |
+| **Connects, streams for ~30-60 s, then drops — over and over** | Your recorder keeps the RTSP session alive with `GET_PARAMETER`, which go2rtc does not answer. See below. |
+
+### ⚠️ Hikvision / HiLook NVRs: known incompatible
+
+Hikvision and HiLook recorders keep an RTSP session alive by sending
+`GET_PARAMETER` at a fixed interval. The embedded go2rtc server does not
+implement it — it does not even reply with an error — so the recorder decides
+the session is dead and resets it. Measured on a real HiLook: it connected,
+received H.264 video happily for 33 seconds, then dropped, on repeat.
+
+Proof, if you want to check your own setup — mid-session, after `PLAY`:
+
+```
+DESCRIBE          -> RTSP/1.0 200 OK
+SETUP             -> RTSP/1.0 200 OK
+PLAY              -> RTSP/1.0 200 OK
+GET_PARAMETER     -> (no reply at all)
+```
+
+Nothing in this integration can fix that; it is upstream in go2rtc
+([AlexxIT/go2rtc#289](https://github.com/AlexxIT/go2rtc/issues/289)). What
+does work today:
+
+- **Frigate, Synology Surveillance Station, Blue Iris, VLC, ffmpeg** — these
+  keep alive with `OPTIONS` (which go2rtc answers) or tolerate silence, and
+  record this stream without trouble.
+- **A bridging RTSP server** (MediaMTX and similar) can pull from go2rtc and
+  re-serve to the NVR with full keepalive support, at the cost of running
+  another service.
+- Changing the recorder's transfer protocol (RTP over UDP instead of RTP over
+  RTSP) is worth a try — some firmware then keeps alive with RTCP instead —
+  but it is not a reliable fix.
+
+Symptom-wise this is easy to recognise in `go2rtc.log`: a `new consumer` line,
+then `connection reset by peer` from the NVR's address roughly half a minute
+later, with no 404 or 401 anywhere (the path and credentials were fine).
 
 ### A note on load
 
