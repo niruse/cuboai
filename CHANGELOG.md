@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.13]
+
+Documentation release — no code changes. Cut so the corrected NVR guidance ships with a version number and HACS installs it.
+
+### Changed
+- **Full RTSP / NVR section in the README**: enabling the export, copying `nvr_rtsp_url` from the WebRTC Stream sensor as the source of truth, the `?video` variant for recorders that reject the two-way-audio track, which of the three streams belongs in a recorder, a symptom→cause table, and the fact that recording shares the single camera session rather than opening a second one.
+- **Verified Hikvision / HiLook settings**, proven end to end on an NVR-216MH-C/16P (firmware V3.4.97): custom protocol RTSP / RTP over RTSP, the RTSP port read from the sensor, and the **full** stream path including its `cuboai_` prefix on both main and sub stream. Also records that these recorders take separate address/port/path *fields* rather than a URL, and emit an RTSP URL with no port in it — both normal, and both easy to misread as faults.
+- **Ports are documented as resolved values, not constants.** `rtsp_port` starts at 8555 and self-heals (8557 is the common outcome, not a rule); the API port hops from 1985. Examples use `<HA-IP>:<rtsp-port>` placeholders and point at `nvr_rtsp_url` / `go2rtc_server` for the live values — a hardcoded port is what silently breaks a recorder the day go2rtc moves.
+
+### Fixed
+- **Retracted a wrong troubleshooting claim.** 2.6.12's README stated Hikvision/HiLook NVRs were incompatible with the embedded go2rtc, citing a measured 33-second session drop. That measurement was test traffic from a laptop, not the NVR. The actual cause of the reported failure was a stream path missing its `cuboai_` prefix — and because **go2rtc logs nothing for a request naming an unknown stream** (no 404, no client address), the recorder was invisible server-side and looked like it had never connected. Fixing the path brought the channel online immediately with no drops. The `GET_PARAMETER` keepalive gap in go2rtc is real (probed live; upstream issue #289) but did not affect that NVR, so it is now documented as something to check *after* the path, with the diagnostic that actually matters: confirm `remote_addr` in `/api/streams` before attributing traffic to a device.
+
 ## [2.6.12]
 
 ### Changed
