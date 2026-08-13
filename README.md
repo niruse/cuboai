@@ -853,3 +853,9 @@ We welcome:
 - 🧠 Suggestions
 
 Submit a PR or [open an issue](https://github.com/niruse/cuboai/issues)
+
+**Adding a sensor for something the camera knows but this integration doesn't show yet?**
+See [docs/camera-probe.md](docs/camera-probe.md) — how to check whether an endpoint returns real
+data before you write an entity for it, which endpoints answer on firmware 2.0.2273, and the
+safety rules for probing a live baby monitor (short version: never sweep even IOCTL codes blindly —
+SET codes are even too, and a blind scan will change your camera's settings).
