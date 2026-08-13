@@ -7,6 +7,7 @@ Covers:
 - Camera entities stop offering stream sources when go2rtc is not running
 """
 
+import asyncio
 import json
 import socket
 import sys
@@ -217,3 +218,78 @@ class TestCameraGating:
         # No alerts either → returns None, and crucially no HTTP call was made
         cam.coordinator.data = {"cameras": {}}
         assert await cam.async_camera_image() is None
+
+
+# =============================================================================
+# The WebRTC Camera integration's URL must follow a port self-heal
+# =============================================================================
+
+
+class TestWebRTCIntegrationUrlFollowsThePort:
+    """A port hop broke ONLY the custom card, and took hours to spot.
+
+    Every consumer inside this integration reads `api_port_effective`, so a
+    self-heal is invisible to them. AlexxIT's WebRTC Camera integration stores
+    the go2rtc URL as a fixed string in its config entry — when our API port
+    moved 1985 -> 1986 the card showed 'Cannot connect to host <ip>:1985'
+    while HLS, snapshots and HomeKit all kept working, because they go via the
+    RTSP port instead.
+    """
+
+    def _mgr_with_entry(self, url):
+        from unittest.mock import MagicMock
+
+        from custom_components.cuboai.go2rtc import Go2RTCManager
+
+        mgr = Go2RTCManager(MagicMock())
+        entry = MagicMock()
+        entry.data = {"url": url} if url else {}
+        entry.entry_id = "abc"
+        mgr.hass.config_entries.async_entries.return_value = [entry]
+        return mgr, entry
+
+    def test_a_stale_url_on_our_port_range_is_rewritten(self):
+        mgr, entry = self._mgr_with_entry("http://192.168.1.50:1985")
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        args, kwargs = mgr.hass.config_entries.async_update_entry.call_args
+        assert kwargs["data"]["url"] == "http://192.168.1.50:1986"
+
+    def test_a_correct_url_is_left_alone(self):
+        mgr, _ = self._mgr_with_entry("http://192.168.1.50:1986")
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        mgr.hass.config_entries.async_update_entry.assert_not_called()
+
+    def test_someone_elses_go2rtc_is_never_touched(self):
+        """A URL outside the range we hand out belongs to another server."""
+        for url in ("http://otherhost:1984", "http://192.168.1.99:8555", "http://nas.local:2986"):
+            mgr, _ = self._mgr_with_entry(url)
+            asyncio.run(mgr._sync_webrtc_integration_url(1986))
+            mgr.hass.config_entries.async_update_entry.assert_not_called(), url
+
+    def test_no_url_means_its_own_embedded_server(self):
+        mgr, _ = self._mgr_with_entry(None)
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        mgr.hass.config_entries.async_update_entry.assert_not_called()
+
+    def test_missing_integration_is_not_an_error(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.cuboai.go2rtc import Go2RTCManager
+
+        mgr = Go2RTCManager(MagicMock())
+        mgr.hass.config_entries.async_entries.side_effect = Exception("unknown domain")
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))  # must not raise
+
+    def test_the_sync_is_actually_wired_into_port_resolution(self):
+        """Guard the CALL SITE, not just the helper.
+
+        The helper can be perfect and still never run. A mutation that deletes
+        the call from _resolve_ports left every other test in this class green,
+        which is exactly how a fix silently stops working.
+        """
+        import inspect
+
+        from custom_components.cuboai.go2rtc import Go2RTCManager
+
+        src = inspect.getsource(Go2RTCManager._resolve_ports)
+        assert "_sync_webrtc_integration_url(api_port)" in src

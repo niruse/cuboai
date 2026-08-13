@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.15]
+
+### Fixed
+- **A go2rtc API-port self-heal broke the custom card — and only the card.** When port 1985 is briefly held at startup (typically by our own instance from the previous run), go2rtc moves to 1986. Everything in this integration follows automatically, because it reads the effective port — but AlexxIT's **WebRTC Camera integration stores the go2rtc URL as a fixed string in its config entry**, so it kept dialling the old port and the card showed `Cannot connect to host <ip>:1985`. Snapshots, HLS, HomeKit and the NVR all kept working (they use the RTSP port), which makes this look like a card bug rather than a port hop.
+  Port resolution now updates that integration's stored URL to the effective port and reloads it. Only a URL whose port is inside the range this manager hands out is touched — a URL pointing at somebody else's go2rtc is left alone.
+
 ## [2.6.14]
 
 ### Fixed

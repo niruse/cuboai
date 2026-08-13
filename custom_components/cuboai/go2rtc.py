@@ -381,7 +381,58 @@ class Go2RTCManager:
         domain_data = self.hass.data.setdefault(DOMAIN, {})
         domain_data["rtsp_port_effective"] = rtsp_port
         domain_data["api_port_effective"] = api_port
+        await self._sync_webrtc_integration_url(api_port)
         return rtsp_port, webrtc_port
+
+    async def _sync_webrtc_integration_url(self, api_port: int) -> None:
+        """Follow our API port in the WebRTC Camera integration's stored URL.
+
+        AlexxIT's WebRTC Camera integration can be pointed at this go2rtc by
+        URL, and that URL is a FIXED string in its config entry. Our own
+        consumers read `api_port_effective` and follow a self-heal
+        automatically — that integration cannot, so a hop leaves the card
+        showing 'Cannot connect to host <ip>:1985' while every other camera
+        surface in Home Assistant keeps working (verified live: the hop broke
+        only the card).
+
+        Only a URL that clearly points at US is touched: the port must be in
+        the range this manager hands out. A URL on any other port belongs to a
+        different go2rtc and is left alone.
+        """
+        try:
+            from urllib.parse import urlparse, urlunparse
+
+            entries = self.hass.config_entries.async_entries("webrtc")
+        except Exception:
+            return  # integration not installed — nothing to keep in sync
+
+        for entry in entries:
+            url = (entry.data or {}).get("url")
+            if not url:
+                continue  # using its own embedded go2rtc, not ours
+            try:
+                parsed = urlparse(url)
+                port = parsed.port
+            except Exception:
+                continue
+            if port is None or not (DESIRED_API_PORT <= port <= DESIRED_API_PORT + 100):
+                continue  # not a port we manage: someone else's server
+            if port == api_port:
+                continue  # already correct
+            new_netloc = f"{parsed.hostname}:{api_port}"
+            if parsed.username:
+                cred = parsed.username + (f":{parsed.password}" if parsed.password else "")
+                new_netloc = f"{cred}@{new_netloc}"
+            new_url = urlunparse(parsed._replace(netloc=new_netloc))
+            _LOGGER.warning(
+                "WebRTC Camera integration points at %s but our go2rtc API self-healed to "
+                "port %s — updating it to %s so the card keeps working.",
+                url,
+                api_port,
+                new_url,
+            )
+            self.hass.config_entries.async_update_entry(entry, data={**entry.data, "url": new_url})
+            self.hass.async_create_task(self.hass.config_entries.async_reload(entry.entry_id))
 
     async def _generate_config(self):
         """Generate the go2rtc.yaml file."""
