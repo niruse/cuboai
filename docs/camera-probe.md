@@ -45,9 +45,12 @@ try:
             _pl = bytes.fromhex(_case.get("hex", ""))
             _tag = _case.get("tag", "")
             try:
+                _t0 = _pt.monotonic()
                 _rt, _rd = sess.ioctl(_code, _pl)
-                _LOGGER.warning("CUBOAI_PROBE %s code=0x%x resp=%s len=%s",
-                                _tag, _code, _rt, len(_rd or b""))
+                # dt matters: a code that answers returns in ~0.02s, a silent one
+                # burns the full ioctl timeout before raising.
+                _LOGGER.warning("CUBOAI_PROBE %s code=0x%x resp=%s len=%s dt=%.2fs",
+                                _tag, _code, _rt, len(_rd or b""), _pt.monotonic() - _t0)
                 _outp = "/config/cuboai_probe_out.json"
                 _acc = {}
                 if _po.path.exists(_outp):
