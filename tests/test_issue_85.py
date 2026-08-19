@@ -461,21 +461,29 @@ class TestHomeKitActuallyReceivesH264:
         assert live_stream_name("DEV1", {"h264_cameras": ["DEV1"]}) == "cuboai_h264_DEV1"
         assert live_stream_name("DEV1", {}) == "cuboai_combined_DEV1"
 
-    def test_the_prewarm_stays_on_the_source_stream(self):
-        """The single most dangerous line to "tidy up".
+    def test_the_prewarm_order_is_combined_first(self):
+        """The single most dangerous lines to "tidy up".
 
-        stream_source() pre-warms cuboai_combined_ even when it then hands out
-        cuboai_h264_. That looks inconsistent and is the whole reason the
-        cross-stream reference is safe: the h264 stream is a transcode OF the
-        combined one, so the combined one must be warm before its nested
-        ffmpeg dials it. Point the pre-warm at cuboai_h264_ and it dials a COLD
-        combined through an ffmpeg that gives up after 5s while the engine
-        needs ~10s — precisely the bb4bf13 failure that had to be reverted.
+        stream_source() pre-warms cuboai_combined_ FIRST, unconditionally, and
+        only then the stream it actually hands out (cuboai_h264_ when the
+        toggle is on). Both halves matter:
+
+        * combined first: the h264 stream is a transcode OF the combined one,
+          so warming h264 against a cold combined dials the engine through the
+          nested ffmpeg's timeout — the bb4bf13 failure that had to be
+          reverted.
+        * then the handed-out stream too (#85 round 4): returning the h264 URL
+          with only combined warm leaves the transcode producer cold, and a
+          fresh HomeKit DESCRIBE raced its startup into a 404.
         """
         import inspect
 
         from custom_components.cuboai import camera as camera_platform
 
         src = inspect.getsource(camera_platform.CuboLocalCamera.stream_source)
-        assert "frame.jpeg?src=cuboai_combined_{self._device_id}" in src
+        combined_warm = src.index('_prewarm_stream(f"cuboai_combined_{self._device_id}"')
+        handed_out_warm = src.index("_prewarm_stream(name")
+        assert combined_warm < handed_out_warm, "combined must be warmed before the handed-out stream"
+        # The combined warm must be unconditional — never replaced by a direct
+        # h264-only warm.
         assert "frame.jpeg?src=cuboai_h264_" not in src

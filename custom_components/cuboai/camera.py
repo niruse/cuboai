@@ -266,6 +266,51 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
                 e,
             )
 
+    async def _prewarm_stream(self, stream: str, timeout: int) -> bool:
+        """Block until go2rtc serves a frame from `stream` (best-effort).
+
+        frame.jpeg forces go2rtc to start the stream's producers and only
+        answers once video is actually flowing, so a consumer connecting right
+        after gets packets immediately instead of racing a cold start. Returns
+        True when a frame arrived; failures are logged at warning because they
+        are the precursor of the consumer-side timeout/404 (#85).
+        """
+        import time
+
+        t0 = time.monotonic()
+        try:
+            import aiohttp
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"{self._go2rtc_api_base()}/api/frame.jpeg?src={stream}",
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                await resp.read()
+                if resp.status == 200:
+                    _LOGGER.debug("Stream pre-warm of %s ready in %.1fs", stream, time.monotonic() - t0)
+                    return True
+                _LOGGER.warning(
+                    "Stream pre-warm of %s returned HTTP %s after %.1fs — the producer "
+                    "delivered no frame; the RTSP consumer will likely time out. Turn on "
+                    "'Enable debug logs' in the CuboAI options and check "
+                    "custom_components/cuboai/bin/go2rtc.log.",
+                    stream,
+                    resp.status,
+                    time.monotonic() - t0,
+                )
+        except Exception as e:
+            _LOGGER.warning(
+                "Stream pre-warm of %s failed after %.1fs (%s) — the producer delivered no "
+                "frame; the RTSP consumer will likely time out. Turn on 'Enable debug logs' "
+                "in the CuboAI options and check custom_components/cuboai/bin/go2rtc.log.",
+                stream,
+                time.monotonic() - t0,
+                e,
+            )
+        return False
+
     async def stream_source(self) -> str | None:
         """Return the stream source."""
         # go2rtc failed to start (port conflict, missing binary, ...): report
@@ -287,55 +332,25 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
 
-        # Pre-warm the go2rtc producer: on a cold start the pure-python engine
-        # needs several seconds to connect to the camera and deliver the first
-        # HEVC keyframe — longer than the HLS stream worker's demux timeout,
-        # which then logs "Error demuxing stream (Operation timed out)" and
-        # retries. Requesting a frame first blocks until the producer is live,
-        # so the RTSP consumer gets packets immediately. Best-effort only.
-        import time
-
-        t0 = time.monotonic()
-        try:
-            import aiohttp
-            from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-            session = async_get_clientsession(self.hass)
-            async with session.get(
-                # DELIBERATELY the combined stream, even when the H.264
-                # toggle sends consumers to cuboai_h264_: that stream is a
-                # transcode OF this one, so this is what has to be warm.
-                # Pre-warming the h264 stream instead would dial a cold
-                # combined through ffmpeg, which gives up after 5s while the
-                # engine needs ~10s — the bb4bf13 failure all over again.
-                f"{self._go2rtc_api_base()}/api/frame.jpeg?src=cuboai_combined_{self._device_id}",
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                await resp.read()
-                if resp.status == 200:
-                    _LOGGER.debug("Stream pre-warm for %s ready in %.1fs", self._device_id, time.monotonic() - t0)
-                else:
-                    # A failed pre-warm is the precursor of the stream worker's
-                    # "Error demuxing stream while finding first packet" timeout —
-                    # surface it at warning so the sequence shows without debug logging.
-                    _LOGGER.warning(
-                        "Stream pre-warm for %s returned HTTP %s after %.1fs — the producer "
-                        "delivered no frame; the RTSP consumer will likely time out. Turn on "
-                        "'Enable debug logs' in the CuboAI options and check "
-                        "custom_components/cuboai/bin/go2rtc.log.",
-                        self._device_id,
-                        resp.status,
-                        time.monotonic() - t0,
-                    )
-        except Exception as e:
-            _LOGGER.warning(
-                "Stream pre-warm for %s failed after %.1fs (%s) — the producer delivered no "
-                "frame; the RTSP consumer will likely time out. Turn on 'Enable debug logs' "
-                "in the CuboAI options and check custom_components/cuboai/bin/go2rtc.log.",
-                self._device_id,
-                time.monotonic() - t0,
-                e,
-            )
+        # Pre-warm the go2rtc producers: on a cold start the pure-python
+        # engine needs several seconds to connect to the camera and deliver
+        # the first keyframe — longer than the HLS stream worker's demux
+        # timeout, which then logs "Error demuxing stream (Operation timed
+        # out)" and retries; HomeKit's own ffmpeg gives up even harder, with
+        # DESCRIBE -> 404 (#85 round 4). Requesting a frame first blocks
+        # until the producer is live, so the RTSP consumer gets packets
+        # immediately. Best-effort only.
+        #
+        # ORDER MATTERS: the combined stream first (it owns the camera
+        # session — warming cuboai_h264_ against a cold combined would dial
+        # the engine through the nested ffmpeg's timeout, the bb4bf13
+        # failure), THEN the stream actually being handed out when the H.264
+        # toggle is on, so its transcode has already locked onto an IDR and
+        # is emitting H.264 before HomeKit's DESCRIBE arrives.
+        name = live_stream_name(self._device_id, self.coordinator.config_entry.options)
+        await self._prewarm_stream(f"cuboai_combined_{self._device_id}", timeout=15)
+        if name != f"cuboai_combined_{self._device_id}":
+            await self._prewarm_stream(name, timeout=12)
 
         # With debug logs on, capture go2rtc's view of the stream right now
         # (post-pre-warm: producer codecs — is the H.264 transcode applied?)
@@ -358,10 +373,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # what HA's stream worker and therefore HomeKit is — takes the native
         # HEVC and fails to decode it. cuboai_h264_ has H.264 as its only
         # video, so there is nothing else to pick. It is a pure transcode of
-        # the stream just pre-warmed above (no second camera session), and
-        # that pre-warm is what keeps its nested ffmpeg from timing out on a
-        # cold start.
-        name = live_stream_name(self._device_id, self.coordinator.config_entry.options)
+        # the stream pre-warmed above (no second camera session).
         url = f"rtsp://{auth}127.0.0.1:{rtsp_port}/{name}"
         # Log the URL actually handed over: issue #85 round 3 was spent proving
         # which stream HomeKit received, because the sensor advertised a

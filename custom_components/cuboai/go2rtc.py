@@ -132,12 +132,15 @@ class Go2RTCManager:
             # And do NOT "share" the producer by pointing one stream's source
             # at another with a cross-stream ffmpeg: reference. That was tried
             # (commit bb4bf13) and reverted (3942771): the reference does
-            # resolve and reuse does begin, but the nested ffmpeg has a fixed
-            # 5-SECOND RTSP read timeout while the pure-python engine needs
+            # resolve and reuse does begin, but the nested ffmpeg defaults to
+            # a 5-SECOND RTSP dial timeout while the pure-python engine needs
             # ~10s from cold, so on a cold start it times out and go2rtc
-            # reports producer(None) medias=[] tracks=[]. It only "worked"
-            # when the stream happened to be warm — a race, not a fix. A
-            # longer timeout is not the answer either; one stream name is.
+            # reports producer(None) medias=[] tracks=[]. One live stream
+            # name remains the rule; the sanctioned self/cross references
+            # below additionally carry #timeout=20 (go2rtc's ffmpeg source
+            # honors it since 1.9.x) so a cold engine can no longer starve
+            # them (#85 round 4: HomeKit DESCRIBE -> 404 when the pre-warm
+            # had failed and the nested ffmpeg lost the 5s race).
             #
             # The three sources below are ordered and must stay ordered:
             #   1. exec: the pure-python engine, native A/V MPEG-TS producer.
@@ -153,7 +156,7 @@ class Go2RTCManager:
             #      it to the camera speaker.
             self._streams[f"cuboai_combined_{dev_id}"] = [
                 f"exec:{env_vars}{py} {video_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{audio_codecs}",
+                f"ffmpeg:cuboai_combined_{dev_id}#video={video_codec}{audio_codecs}#timeout=20",
                 f"exec:{env_vars}{py} {backchannel_script}#{{killsignal=SIGTERM}}#backchannel=1#audio=pcma",
             ]
 
@@ -174,15 +177,19 @@ class Go2RTCManager:
             # ONLY video is H.264. This one qualifies — and it does NOT
             # violate the one-engine invariant above, because it declares no
             # exec: its single source is a CROSS-stream reference that reuses
-            # the combined stream's existing producer. (The reverted bb4bf13
-            # chained streams the other way round and raced a cold start:
-            # the nested ffmpeg gives up after 5s while the engine needs ~10s.
-            # Here the consumer is camera.stream_source(), which PRE-WARMS the
-            # combined stream and only returns a URL once a frame has arrived,
-            # so this DESCRIBE always meets a warm producer.)
+            # the combined stream's existing producer. Two guards keep its
+            # cold start honest (#85 round 4 — a fresh HomeKit request hit
+            # DESCRIBE -> 404 because this producer had nothing yet):
+            #   1. camera.stream_source() pre-warms the combined stream AND
+            #      then THIS stream, so by the time the URL is handed out the
+            #      transcode has already found an IDR and is emitting H.264.
+            #   2. #timeout=20 on the reference (default 5s): even when the
+            #      pre-warm fails or expires, the nested ffmpeg now outlasts
+            #      the engine's ~10s cold start plus the up-to-one-GOP wait
+            #      for a decodable keyframe instead of dying into a 404.
             if force_h264:
                 self._streams[f"cuboai_h264_{dev_id}"] = [
-                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac",
+                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20",
                 ]
 
             # Recorded footage from the camera's own DVR. Declared here rather
@@ -203,7 +210,7 @@ class Go2RTCManager:
             # so its DESCRIBE always hits a warm producer.)
             self._streams[f"cuboai_dvr_{dev_id}"] = [
                 f"exec:{env_vars}CUBOAI_PLAY_STATE={state_file} {py} {playback_script}#{{killsignal=SIGTERM}}",
-                f"ffmpeg:cuboai_dvr_{dev_id}#video=copy{audio_codecs}",
+                f"ffmpeg:cuboai_dvr_{dev_id}#video=copy{audio_codecs}#timeout=20",
             ]
 
     @property
