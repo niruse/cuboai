@@ -276,6 +276,60 @@ def refresh_access_token_only(refresh_token, user_agent):
 
 
 # --- Camera Profiles ---
+def _paired_camera_sources(data):
+    """Pair each device in /user/cameras `data` with its baby `profiles` entry.
+
+    The device list (`data`) is the authoritative camera list: an account whose
+    baby profile was never created (observed on new CuboAi 3 units, issue #94)
+    has an empty `profiles` array while `data` carries the full TUTK
+    credentials. Profiles only enrich a device (baby name, ip hints); the
+    newest profile per device wins (issue #84). A profile whose device is
+    missing from `data` is still emitted, as before.
+
+    Returns an ordered list of (device_id, device_item, profile, profile_data).
+    """
+    profile_by_device = {}
+    for profile in data.get("profiles", []):
+        try:
+            parsed = json.loads(profile.get("profile", "{}"))
+        except Exception:
+            parsed = {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        profile_by_device[profile.get("device_id")] = (profile, parsed)
+
+    pairs = []
+    seen = set()
+    for item in data.get("data", []):
+        device_id = item.get("device_id")
+        if not device_id or device_id in seen:
+            continue
+        seen.add(device_id)
+        profile, parsed = profile_by_device.get(device_id, ({}, {}))
+        pairs.append((device_id, item, profile, parsed))
+    for device_id, (profile, parsed) in profile_by_device.items():
+        if device_id and device_id not in seen:
+            pairs.append((device_id, {}, profile, parsed))
+    return pairs
+
+
+def _camera_ip_from_sources(device_item, profile, profile_data):
+    """The LAN-ip hint chain shared by the sync and async camera-list paths."""
+    camera_ip_raw = (
+        device_item.get("ip")
+        or device_item.get("local_ip")
+        or device_item.get("lan_ip")
+        or profile.get("ip")
+        or profile.get("local_ip")
+        or profile.get("lan_ip")
+        or profile_data.get("ip")
+        or profile_data.get("local_ip")
+        or profile_data.get("lan_ip")
+    )
+    # Haystack order keeps profile-sourced IPs winning the loose scan, as before.
+    return _extract_lan_ip(camera_ip_raw, json.dumps([profile, device_item]))
+
+
 def get_camera_profiles(access_token, user_agent):
     url = "https://api.getcubo.com/prod/user/cameras"
     headers = {
@@ -288,32 +342,14 @@ def get_camera_profiles(access_token, user_agent):
     data = response.json()
     cameras = []
 
-    device_data_map = {item.get("device_id"): item for item in data.get("data", [])}
-
-    for profile in data.get("profiles", []):
+    for device_id, device_item, profile, profile_data in _paired_camera_sources(data):
         try:
-            profile_data = json.loads(profile.get("profile", "{}"))
             baby_name = profile_data.get("baby", "Unknown")
-            device_id = profile.get("device_id")
-
-            device_item = device_data_map.get(device_id, {})
             uid = device_item.get("license_id", "")
             account = device_item.get("dev_admin_id", "")
             password = device_item.get("dev_admin_pwd", "")
 
-            camera_ip_raw = (
-                device_item.get("ip")
-                or device_item.get("local_ip")
-                or device_item.get("lan_ip")
-                or profile.get("ip")
-                or profile.get("local_ip")
-                or profile.get("lan_ip")
-                or profile_data.get("ip")
-                or profile_data.get("local_ip")
-                or profile_data.get("lan_ip")
-            )
-
-            camera_ip = _extract_lan_ip(camera_ip_raw, json.dumps(profile))
+            camera_ip = _camera_ip_from_sources(device_item, profile, profile_data)
 
             # Note the state but DO NOT exclude the camera: a transiently
             # offline device (or a failed state query) during a config or

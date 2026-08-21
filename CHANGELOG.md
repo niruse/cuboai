@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.17]
+
+### Fixed
+- **"No cameras found for account" on accounts with no baby profile (issue #94).** The
+  `/user/cameras` response has two arrays: `data` (the devices, with the TUTK credentials)
+  and `profiles` (the baby profiles). The parser built the camera list by iterating
+  `profiles` and only joined `data` in — so an account whose baby profile was never
+  created (observed on a new CuboAi 3 / SW05: `profiles` comes back empty while `data`
+  carries the camera) produced zero cameras, and setup failed right after a fully
+  successful login. Diagnosed from the reporter's Proxyman capture of the iOS app, which
+  showed the camera present in `data` — thanks @Vstappers69.
+  The parser is now inverted: `data` is the authoritative device list and `profiles` only
+  enriches it (baby name, IP hints). Accounts with profiles are unaffected — the baby name
+  still comes from the profile, the newest profile per device still wins (issue #84), and a
+  profile without a matching device entry is still emitted, exactly as before. A camera
+  with no profile gets the existing "Unknown" default name.
+
+## [2.6.16]
+
+### Fixed
+- **HomeKit "No Response" on a fresh h264 stream request (issue #85, round 4).** A fresh
+  DESCRIBE on `cuboai_h264_<id>` could hit go2rtc's 5-second ffmpeg dial window while the
+  transcode chain was still cold-starting (dial the combined stream, wait for a decodable
+  IDR, spin up libx264) and get a 404. Two guards, either alone closes it:
+  `stream_source()` now pre-warms the stream it actually returns (combined first, then the
+  handed-out stream — order matters), and every nested ffmpeg leg carries `#timeout=20` so
+  a failed pre-warm degrades to a slow dial instead of an instant 404.
+
 ## [2.6.15]
 
 ### Fixed
