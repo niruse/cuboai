@@ -115,9 +115,8 @@ async def get_camera_profiles(
     Returns:
         List of dicts containing device_id, baby_name, uid, account, password
     """
-    import json
-
     from ..utils import log_to_file
+    from .cuboai_functions import _camera_ip_from_sources, _paired_camera_sources
 
     url = f"{API_BASE}/user/cameras"
     headers = _get_common_headers(access_token, user_agent)
@@ -129,35 +128,15 @@ async def get_camera_profiles(
             resp.raise_for_status()
             data = await resp.json()
 
-        device_data_map = {item.get("device_id"): item for item in data.get("data", [])}
-
         cameras = []
-        for profile in data.get("profiles", []):
+        for device_id, device_item, profile, profile_data in _paired_camera_sources(data):
             try:
-                profile_data = json.loads(profile.get("profile", "{}"))
                 baby_name = profile_data.get("baby", "Unknown")
-                device_id = profile.get("device_id")
-
-                device_item = device_data_map.get(device_id, {})
                 uid = device_item.get("license_id", "")
                 account = device_item.get("dev_admin_id", "")
                 password = device_item.get("dev_admin_pwd", "")
 
-                camera_ip_raw = (
-                    device_item.get("ip")
-                    or device_item.get("local_ip")
-                    or device_item.get("lan_ip")
-                    or profile.get("ip")
-                    or profile.get("local_ip")
-                    or profile.get("lan_ip")
-                    or profile_data.get("ip")
-                    or profile_data.get("local_ip")
-                    or profile_data.get("lan_ip")
-                )
-
-                from .cuboai_functions import _extract_lan_ip
-
-                camera_ip = _extract_lan_ip(camera_ip_raw, json.dumps(profile))
+                camera_ip = _camera_ip_from_sources(device_item, profile, profile_data)
 
                 # Note the state but DO NOT exclude the camera: transiently
                 # offline devices (or a failed state query) must not vanish
@@ -183,14 +162,10 @@ async def get_camera_profiles(
                 )
             except Exception:
                 continue
-        # One camera per device: the API returns one profile per BABY profile,
-        # so a renamed/re-created baby yields the same device_id twice and every
-        # platform then collides on its unique_ids (issue #84). The newest
-        # profile (last in the list) wins.
-        deduped: dict = {}
-        for cam in cameras:
-            deduped[cam["device_id"]] = cam
-        return list(deduped.values())
+        # One camera per device_id (issue #84) is guaranteed by
+        # _paired_camera_sources: duplicate baby profiles collapse to the
+        # newest, and each data item is emitted at most once.
+        return cameras
     finally:
         if close_session:
             await session.close()
