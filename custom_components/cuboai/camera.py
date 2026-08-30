@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from homeassistant.components.camera import Camera
@@ -48,6 +49,12 @@ class _ColdProducer(Exception):
 
 
 class CuboLocalCamera(CoordinatorEntity, Camera):
+    # How long the warm-and-hold consumer keeps the producer chain alive after
+    # the most recent stream request. Long enough to cover HomeKit's retry tap
+    # and HA's stream-worker reconnects; short enough that an abandoned view
+    # doesn't keep a transcode running for long.
+    WARM_HOLD_SECONDS = 60
+
     def __init__(self, coordinator, camera):
         super().__init__(coordinator)
         Camera.__init__(self)
@@ -57,6 +64,8 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         self._attr_name = f"{self._baby_name} Local Camera"
         self._attr_unique_id = f"cuboai_local_camera_{self._device_id}"
         self._attr_is_streaming = True
+        self._warm_hold_task = None
+        self._warm_hold_deadline = 0.0
 
     def _effective_rtsp_port(self) -> int:
         """The port go2rtc actually bound (it self-heals on conflicts, e.g.
@@ -311,8 +320,84 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             )
         return False
 
+    def _kick_warm_hold(self, name: str) -> None:
+        """Start (or extend) the warm-and-hold task for the handed-out stream.
+
+        #85 round 5, flip-proven on a live box: go2rtc reaps a producer the
+        INSTANT its last consumer detaches — a frame.jpeg pre-warm's warmth
+        therefore lives exactly zero seconds beyond the pre-warm itself
+        (producer(None) six milliseconds after 'ready' in the reporter's log).
+        Worse, awaiting two pre-warms inside stream_source() blocked it for
+        ~15s on a cold engine, longer than HomeKit's session budget — the Home
+        app gave up before the URL was even returned, so no RTSP consumer ever
+        appeared. Warmth must instead OUTLIVE the warm-up: a background task
+        warms the chain, then stays attached as a consumer until the deadline,
+        so the producers are alive when (and after) the real consumer dials.
+        """
+        import time
+
+        self._warm_hold_deadline = time.monotonic() + self.WARM_HOLD_SECONDS
+        if self._warm_hold_task is None or self._warm_hold_task.done():
+            self._warm_hold_task = self.hass.async_create_task(self._warm_hold(name))
+
+    async def _warm_hold(self, name: str) -> None:
+        """Warm the producer chain, then hold it open until the deadline.
+
+        ORDER MATTERS on the warm-up: the combined stream first (it owns the
+        camera session — warming cuboai_h264_ against a cold combined would
+        dial the engine through the nested ffmpeg's timeout, the bb4bf13
+        failure), THEN the handed-out stream so its transcode has locked onto
+        an IDR. The hold then attaches to the handed-out stream, which keeps
+        the whole chain alive: the transcode is a consumer of combined, so
+        holding cuboai_h264_ pins both producers.
+        """
+        import time
+
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        try:
+            await self._prewarm_stream(f"cuboai_combined_{self._device_id}", timeout=15)
+            if name != f"cuboai_combined_{self._device_id}":
+                await self._prewarm_stream(name, timeout=12)
+
+            session = async_get_clientsession(self.hass)
+            url = f"{self._go2rtc_api_base()}/api/stream.mp4?src={name}"
+            while time.monotonic() < self._warm_hold_deadline:
+                try:
+                    async with session.get(
+                        url,
+                        timeout=aiohttp.ClientTimeout(total=None, connect=25, sock_read=30),
+                    ) as resp:
+                        if resp.status != 200:
+                            _LOGGER.debug(
+                                "Warm-hold of %s got HTTP %s — retrying while deadline holds", name, resp.status
+                            )
+                            await asyncio.sleep(2)
+                            continue
+                        _LOGGER.debug("Warm-hold of %s attached", name)
+                        async for _chunk in resp.content.iter_chunked(65536):
+                            if time.monotonic() >= self._warm_hold_deadline:
+                                break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    _LOGGER.debug("Warm-hold of %s dropped (%s) — retrying while deadline holds", name, e)
+                    await asyncio.sleep(2)
+            _LOGGER.debug("Warm-hold of %s released", name)
+        except asyncio.CancelledError:
+            pass
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._warm_hold_task is not None:
+            self._warm_hold_task.cancel()
+            self._warm_hold_task = None
+
     async def stream_source(self) -> str | None:
-        """Return the stream source."""
+        """Return the stream source. MUST return fast: HomeKit's session setup
+        awaits this, and its budget is ~10s total — blocking here (the 2.6.16
+        behavior: up to ~15s of sequential pre-warms on a cold engine) makes
+        the Home app abandon the session before ffmpeg is even spawned."""
         # go2rtc failed to start (port conflict, missing binary, ...): report
         # "no stream source" once instead of letting the stream worker hammer
         # ports that may belong to another process (issue #84).
@@ -332,25 +417,13 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
             auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
 
-        # Pre-warm the go2rtc producers: on a cold start the pure-python
-        # engine needs several seconds to connect to the camera and deliver
-        # the first keyframe — longer than the HLS stream worker's demux
-        # timeout, which then logs "Error demuxing stream (Operation timed
-        # out)" and retries; HomeKit's own ffmpeg gives up even harder, with
-        # DESCRIBE -> 404 (#85 round 4). Requesting a frame first blocks
-        # until the producer is live, so the RTSP consumer gets packets
-        # immediately. Best-effort only.
-        #
-        # ORDER MATTERS: the combined stream first (it owns the camera
-        # session — warming cuboai_h264_ against a cold combined would dial
-        # the engine through the nested ffmpeg's timeout, the bb4bf13
-        # failure), THEN the stream actually being handed out when the H.264
-        # toggle is on, so its transcode has already locked onto an IDR and
-        # is emitting H.264 before HomeKit's DESCRIBE arrives.
+        # Warm the producers in the BACKGROUND and keep them held (see
+        # _kick_warm_hold). The consumer that dials next either finds a live
+        # producer (hold already attached) or rides go2rtc's on-demand start —
+        # every internal ffmpeg leg carries #timeout=20 (#85 round 4), so a
+        # cold dial waits instead of 404ing.
         name = live_stream_name(self._device_id, self.coordinator.config_entry.options)
-        await self._prewarm_stream(f"cuboai_combined_{self._device_id}", timeout=15)
-        if name != f"cuboai_combined_{self._device_id}":
-            await self._prewarm_stream(name, timeout=12)
+        self._kick_warm_hold(name)
 
         # With debug logs on, capture go2rtc's view of the stream right now
         # (post-pre-warm: producer codecs — is the H.264 transcode applied?)

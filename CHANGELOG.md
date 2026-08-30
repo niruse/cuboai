@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.18]
+
+### Fixed
+- **HomeKit "No Response" persisted after the round-4 fix — pre-warm warmth evaporated instantly, and the pre-warm itself blocked past HomeKit's budget (issue #85, round 5).** Two defects, both proven live:
+  1. go2rtc reaps a producer the *instant* its last consumer detaches — measured on a real box: the transcode producer is already gone at t+0s after `frame.jpeg` returns. So the round-4 pre-warm guaranteed nothing for the consumer that dialed next (the reporter's log showed `producer(None …)` six milliseconds after "pre-warm ready").
+  2. `stream_source()` *awaited* two sequential pre-warms — ~15s on a cold engine — while HomeKit's session setup waits on it with a ~10s budget. The Home app abandoned the session before the URL was even returned, which is why the reporter's +20s diagnostic showed no producer *and no consumer*: nothing ever dialed.
+  Round 5 inverts the model: `stream_source()` returns immediately, and a background **warm-and-hold** task warms the chain (combined first, then the handed-out stream — order unchanged) and then **stays attached as a real consumer** (`/api/stream.mp4`) for 60 seconds, extended by each new stream request. The producers are therefore alive when the real consumer dials, and stay alive across HomeKit's retry. Verified cold-start on a live box: stream request answered in 0.00s, hold attached at t+3s, released cleanly at t+60s, HLS segments flowing.
+
 ## [2.6.17]
 
 ### Fixed
