@@ -464,26 +464,88 @@ class TestHomeKitActuallyReceivesH264:
     def test_the_prewarm_order_is_combined_first(self):
         """The single most dangerous lines to "tidy up".
 
-        stream_source() pre-warms cuboai_combined_ FIRST, unconditionally, and
-        only then the stream it actually hands out (cuboai_h264_ when the
-        toggle is on). Both halves matter:
+        The warm-and-hold task (#85 round 5) pre-warms cuboai_combined_ FIRST,
+        unconditionally, and only then the stream actually handed out
+        (cuboai_h264_ when the toggle is on). Both halves matter:
 
         * combined first: the h264 stream is a transcode OF the combined one,
           so warming h264 against a cold combined dials the engine through the
           nested ffmpeg's timeout — the bb4bf13 failure that had to be
           reverted.
-        * then the handed-out stream too (#85 round 4): returning the h264 URL
-          with only combined warm leaves the transcode producer cold, and a
-          fresh HomeKit DESCRIBE raced its startup into a 404.
+        * then the handed-out stream too (#85 round 4): handing out the h264
+          URL with only combined warm leaves the transcode producer cold, and
+          a fresh HomeKit DESCRIBE raced its startup into a 404.
         """
         import inspect
 
         from custom_components.cuboai import camera as camera_platform
 
-        src = inspect.getsource(camera_platform.CuboLocalCamera.stream_source)
+        src = inspect.getsource(camera_platform.CuboLocalCamera._warm_hold)
         combined_warm = src.index('_prewarm_stream(f"cuboai_combined_{self._device_id}"')
         handed_out_warm = src.index("_prewarm_stream(name")
         assert combined_warm < handed_out_warm, "combined must be warmed before the handed-out stream"
         # The combined warm must be unconditional — never replaced by a direct
         # h264-only warm.
         assert "frame.jpeg?src=cuboai_h264_" not in src
+
+    def test_stream_source_never_awaits_the_warmup(self):
+        """#85 round 5: stream_source() must return fast.
+
+        HomeKit's session setup awaits stream_source before spawning its
+        ffmpeg, on a ~10s budget. The round-4 code awaited two sequential
+        pre-warms there — ~15s on a cold engine — so the Home app abandoned
+        the session before the URL was even returned: the reporter's +20s
+        diag showed no producer AND no consumer, i.e. nothing ever dialed.
+        The warm-up must run as a background task, never inline.
+        """
+        import inspect
+
+        from custom_components.cuboai import camera as camera_platform
+
+        src = inspect.getsource(camera_platform.CuboLocalCamera.stream_source)
+        assert "await self._prewarm_stream" not in src, "pre-warm must not block stream_source"
+        assert "_kick_warm_hold" in src, "stream_source must kick the background warm-and-hold"
+
+    def test_the_hold_outlives_the_warmup(self):
+        """#85 round 5, flip-proven live: go2rtc reaps a producer the INSTANT
+        its last consumer detaches (producer idle at t+0s after frame.jpeg).
+        A pre-warm alone therefore guarantees nothing for the consumer that
+        dials next — the task must stay ATTACHED after warming."""
+        import inspect
+
+        from custom_components.cuboai import camera as camera_platform
+
+        src = inspect.getsource(camera_platform.CuboLocalCamera._warm_hold)
+        # the hold is a real consumer of the handed-out stream…
+        assert "/api/stream.mp4?src=" in src
+        # …and it lasts until the extendable deadline, not one request
+        assert "_warm_hold_deadline" in src
+
+    @pytest.mark.asyncio
+    async def test_kick_extends_the_deadline_and_reuses_the_task(self):
+        import time
+        from unittest.mock import MagicMock
+
+        from custom_components.cuboai import camera as camera_platform
+
+        cam = camera_platform.CuboLocalCamera.__new__(camera_platform.CuboLocalCamera)
+        cam._device_id = "DEV1"
+        cam._warm_hold_task = None
+        cam._warm_hold_deadline = 0.0
+        created = []
+
+        class _FakeTask:
+            def done(self):
+                return False
+
+        cam.hass = MagicMock()
+        cam.hass.async_create_task = lambda coro: (created.append(coro), coro.close(), _FakeTask())[2]
+
+        cam._kick_warm_hold("cuboai_h264_DEV1")
+        first_deadline = cam._warm_hold_deadline
+        assert len(created) == 1
+        assert first_deadline > time.monotonic()
+
+        cam._kick_warm_hold("cuboai_h264_DEV1")
+        assert len(created) == 1, "a live task must be reused, not duplicated"
+        assert cam._warm_hold_deadline >= first_deadline
