@@ -389,9 +389,11 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             pass
 
     async def async_will_remove_from_hass(self) -> None:
+        """Drop the warm-hold consumer on removal/reload so go2rtc can reap."""
         if self._warm_hold_task is not None:
             self._warm_hold_task.cancel()
             self._warm_hold_task = None
+        await super().async_will_remove_from_hass()
 
     async def stream_source(self) -> str | None:
         """Return the stream source. MUST return fast: HomeKit's session setup
