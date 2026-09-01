@@ -84,9 +84,22 @@ class PureSession:
     # ── connection (WORKING) ──────────────────────────────────────────────
     def connect(self, timeout_sec: int = 20) -> None:
         if not self._inner.connect(timeout=float(timeout_sec)):
+            # Split the diagnosis by which leg failed (#98): a refused grant and an
+            # unanswered discovery look identical to the caller but have opposite
+            # causes — camera-side load vs the network path.
+            if getattr(self._inner, "last_handshake_saw_nO", False):
+                raise RuntimeError(
+                    "Pure Python handshake failed — camera answered discovery but did "
+                    "not grant the session (no 0x2041 after nO). Retry; the camera "
+                    "rate-limits rapid attempts.")
             raise RuntimeError(
-                "Pure Python handshake failed — camera did not grant the session "
-                "(no 0x2041). Retry; the camera rate-limits rapid attempts.")
+                "Pure Python handshake failed — the camera never answered the "
+                "discovery probe (no nO reply). Packets are not reaching the camera, "
+                "or its replies are not coming back. On a routed/VLAN path note the "
+                "camera replies from EPHEMERAL UDP ports, so stateful firewalls "
+                "(one-way inter-VLAN rules, the Proxmox VM firewall) drop the replies "
+                "as unrelated traffic — allow camera->client UDP, not just "
+                "client->camera.")
         self.session_hdr = self._inner.session_hdr
 
     def disconnect(self) -> None:

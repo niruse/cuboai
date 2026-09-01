@@ -1901,6 +1901,12 @@ class TUTKDirectSession:
         # reach the `::ffff:` formatter / probe sendto below as a raw TypeError.
         pass
 
+        # Which leg failed matters (#98): "discovery got no answer" points at the
+        # network path (routed/VLAN, stateful firewalls), "answered but no grant"
+        # points at the camera (rate-limit/load). Callers read this after a False
+        # return to raise a diagnosis instead of one message for both.
+        self.last_handshake_saw_nO = False
+
         deadline = time.time() + timeout
 
         def recv_match(s, pred, t):
@@ -1985,6 +1991,7 @@ class TUTKDirectSession:
             # heuristic, which was tuned to one fingerprint and returned None on a changed
             # MAC. We abort only on a recovered R that POSITIVELY DISAGREES with ours.
             R_echo = nO_recover_R(nO_raw)
+            self.last_handshake_saw_nO = True
             if R_echo is not None and R_echo != R:
                 s.close()
                 self._sock = None   # M2: never leave a closed fd in _sock on a failed attempt
