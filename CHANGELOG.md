@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.19]
+
+### Changed
+- **The handshake failure message now says which leg failed (issue #98).** "No 0x2041" was
+  raised both when the discovery probe got no answer at all and when the camera answered but
+  refused the grant — opposite causes (the network path vs camera-side rate-limiting) behind
+  one message. A cross-VLAN report made the gap concrete, and a live A/B established the
+  facts: the transport has **no same-subnet requirement** (a routed client on a different
+  /24 was granted a session in 0.1s; discovery is unicast to the configured IP, no broadcast,
+  no MAC/TTL gate) — but the camera **replies from ephemeral UDP ports**, so any stateful
+  firewall between HA and the camera (one-way inter-VLAN rules, the Proxmox VM firewall
+  under HAOS-on-Proxmox) silently drops the replies as unrelated traffic. The
+  "discovery never answered" message now spells that out; "answered but no grant" keeps
+  pointing at the camera's rate-limit.
+
 ## [2.6.18]
 
 ### Fixed

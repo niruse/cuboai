@@ -2177,6 +2177,12 @@ class TUTKDirectSession:
         # "discover" mode; see cuboai_validate._validate_startup, which rejects it the
         # same way). Fail fast here with a clear message so a missing/None IP can never
         # reach the `::ffff:` formatter / probe sendto below as a raw TypeError.
+
+        # Which leg failed matters (#98): "discovery got no answer" points at the
+        # network path (routed/VLAN, stateful firewalls), "answered but no grant"
+        # points at the camera (rate-limit/load). Callers read this after a False
+        # return to raise a diagnosis instead of one message for both.
+        self.last_handshake_saw_nO = False
         if not self.camera_ip:
             raise ValueError(
                 "camera_ip is required to connect: the pure backend sends a unicast "
@@ -2273,6 +2279,7 @@ class TUTKDirectSession:
             # own R, but the clean echo removes the fragility AND the 64K-table cost).
             # We abort only on a recovered R that POSITIVELY DISAGREES with ours.
             R_echo = nO_recover_R(nO_raw)
+            self.last_handshake_saw_nO = True
             if R_echo is not None and R_echo != R:
                 s.close()
                 self._sock = None   # M2: never leave a closed fd in _sock on a failed attempt
