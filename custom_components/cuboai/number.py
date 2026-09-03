@@ -211,11 +211,16 @@ class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def native_value(self):
+        """The camera's night-light brightness, or unknown.
+
+        This used to return a hardcoded 100 when the value was missing — and it
+        was ALWAYS missing, because nothing populated `local["brightness"]`. So
+        the entity read 100 no matter what the camera was set to. Reporting
+        unknown is the honest answer when the poll has not produced a value.
+        """
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
         bright_pct = cam.get("local", {}).get("brightness")
-        if bright_pct is not None:
-            return int(bright_pct)
-        return 100
+        return int(bright_pct) if bright_pct is not None else None
 
     @property
     def device_info(self):
