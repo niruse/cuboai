@@ -86,9 +86,9 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
     try:
         from .tutk.cuboai_messages import (
             LULLABY_CATALOG,
-            LULLABY_TIMER_REPEAT,
             CuboAIClient,
-            build_set_lullaby_vol_duration,
+            build_get_lullaby_schedule,
+            build_set_lullaby_schedule,
         )
         from .tutk.cuboai_session import get_session
 
@@ -107,40 +107,46 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
             auto_discover_lib=False,
         ) as sess:
             client = CuboAIClient(sess)
+
+            def _schedule_echo():
+                """Raw GET_LULLABY_SCHEDULE bytes, or None if it cannot be read.
+
+                SET_LULLABY_VOL_DURATION (2438) is the camera's ONLY write for the
+                lullaby volume and sleep timer, and its 140-byte struct carries BOTH
+                fields with no field mask — there is no volume-only or timer-only
+                opcode. So every write is necessarily a read-modify-write, and
+                `build_set_lullaby_schedule` takes this echo to preserve whichever
+                field the caller left as None.
+                """
+                try:
+                    _rt, raw = sess.ioctl(*build_get_lullaby_schedule())
+                    return raw
+                except Exception as e:
+                    log_to_file(f"[Lullaby] could not read the schedule echo: {e}")
+                    return None
+
             if cmd_type == "play":
                 if not song_uuid:
                     song_uuid = list(LULLABY_CATALOG.keys())[0]
 
                 # IMPORTANT: Set vol/duration BEFORE playing, otherwise camera might ignore or immediately stop
                 #
-                # Both callers pass volume=None (the card path via select_source and
-                # async_media_play), and this used to fall back to a hardcoded 50 — so
-                # every lullaby play silently overrode whatever volume the user, or the
-                # CuboAi app, had set. SET_LULLABY_VOL_DURATION writes volume and timer
-                # together, so "not specified" has to mean "keep the camera's", not "50".
-                if volume is not None:
-                    vol = int(volume)
-                else:
-                    vol = None
-                    try:
-                        vol = int(client.get_lullaby_schedule().volume)
-                    except Exception as e:
-                        log_to_file(f"[Lullaby] could not read current volume before play: {e}")
-                    if vol is None:
-                        vol = 50
-                        log_to_file("[Lullaby] volume unknown and unreadable — falling back to 50")
-
-                # timer=None here means repeat-forever on purpose: the card path lets
-                # Home Assistant enforce the duration and stop playback itself.
-                timer_val = LULLABY_TIMER_REPEAT
-                if timer and timer > 0:
-                    timer_val = timer * 60
-
-                log_to_file(f"[Lullaby] Setting vol={vol} timer={timer_val} BEFORE play")
+                # volume=None means "keep the camera's". Both callers pass None (the
+                # card path via select_source, and async_media_play), and this used to
+                # fall back to a hardcoded 50 — so every play silently overrode whatever
+                # volume the user or the CuboAi app had set.
+                #
+                # duration: minutes, 0 = repeat forever. The card path deliberately
+                # passes 0/None so the camera repeats and Home Assistant sends the stop.
+                duration = timer if (timer and timer > 0) else 0
+                op, payload = build_set_lullaby_schedule(
+                    volume=volume, duration=duration, get_resp_bytes=_schedule_echo()
+                )
+                log_to_file(f"[Lullaby] Setting vol/duration BEFORE play (vol={volume} dur={duration})")
                 if hasattr(sess, "ioctl"):
-                    sess.ioctl(*build_set_lullaby_vol_duration(vol, timer_val))
+                    sess.ioctl(op, payload)
                 else:
-                    sess._cubo_set(build_set_lullaby_vol_duration(vol, timer_val)[1])
+                    sess._cubo_set(payload)
 
                 log_to_file(f"[Lullaby] Playing song: {song_uuid}")
                 resp = client.play_lullaby(song_uuid)
@@ -159,40 +165,20 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                 resp = client.stop_lullaby(song_uuid)
                 log_to_file(f"[Lullaby] Stop response: {resp}")
             elif cmd_type == "volume":
-                # SET_LULLABY_VOL_DURATION is a COUPLED write: one struct carries both
-                # volume and the sleep timer, so whichever field the caller did not
-                # supply must be read from the camera rather than assumed. Defaulting
-                # the missing half to a constant meant changing the volume silently
-                # reset the sleep timer to repeat-forever, and changing the timer
-                # silently set the volume to 50.
-                cur_vol = cur_timer = None
-                try:
-                    sched = client.get_lullaby_schedule()
-                    cur_vol, cur_timer = sched.volume, sched.timer_mode
-                except Exception as e:
-                    log_to_file(f"[Lullaby] could not read current vol/timer before write: {e}")
-
-                if volume is not None:
-                    vol = int(volume)
-                elif cur_vol is not None:
-                    vol = int(cur_vol)
-                else:
-                    vol = 50
-                    log_to_file("[Lullaby] volume unknown and unreadable — falling back to 50")
-
-                if timer is not None:
-                    timer_val = timer * 60 if timer > 0 else LULLABY_TIMER_REPEAT
-                elif cur_timer is not None:
-                    timer_val = cur_timer          # preserve the camera's own timer
-                else:
-                    timer_val = LULLABY_TIMER_REPEAT
-                    log_to_file("[Lullaby] timer unknown and unreadable — falling back to repeat")
-
-                log_to_file(f"[Lullaby] Setting volume={vol} timer={timer_val}")
+                # Coupled write again: pass only what is being changed and let the
+                # builder carry the other field over from the camera's own echo.
+                # Previously the unsupplied half was invented, so changing the volume
+                # reset the sleep timer to repeat-forever and changing the timer reset
+                # the volume to 50.
+                duration = None if timer is None else (timer if timer > 0 else 0)
+                op, payload = build_set_lullaby_schedule(
+                    volume=volume, duration=duration, get_resp_bytes=_schedule_echo()
+                )
+                log_to_file(f"[Lullaby] Setting volume={volume} duration={duration}")
                 if hasattr(sess, "ioctl"):
-                    resp = sess.ioctl(*build_set_lullaby_vol_duration(vol, timer_val))
+                    resp = sess.ioctl(op, payload)
                 else:
-                    resp = sess._cubo_set(build_set_lullaby_vol_duration(vol, timer_val)[1])
+                    resp = sess._cubo_set(payload)
     except Exception as e:
         log_to_file(f"[Lullaby] ERROR: {e}")
         # Propagate so the retry decorator can retry and then surface a clean
