@@ -489,19 +489,16 @@ class Go2RTCManager:
         if self._options.get("nvr_enabled") and self._options.get("nvr_password"):
             config["rtsp"]["username"] = self._options.get("nvr_username") or "cuboai"
             config["rtsp"]["password"] = self._options["nvr_password"]
-        if "streams" not in config:
-            config["streams"] = {}
-
-        # Overwrite our streams, keeping any other streams (e.g. from user).
-        # Drop stale cuboai_* entries first: this file is merged into, not
-        # replaced, so a stream we no longer generate (or one an older version
-        # wrote into the wrong key) would otherwise linger and be served.
-        for key in [k for k in config["streams"] if str(k).startswith("cuboai_")]:
-            if key not in self._streams:
-                _LOGGER.debug("Dropping stale go2rtc stream %s", key)
-                del config["streams"][key]
-        for k, v in self._streams.items():
-            config["streams"][k] = v
+        # This file is fully REGENERATED here, not merged into: `config` is built
+        # from scratch above and `_write` truncates. That is what makes a stale
+        # cuboai_* entry impossible — a stream we no longer generate simply is not
+        # written again. (An earlier comment here described a merge, and a loop
+        # tried to prune stale entries from `config["streams"]`; since that key was
+        # always empty at that point, the loop could never run. Removed rather than
+        # made real: the file lives inside the integration directory and is ours to
+        # own, and re-reading it would risk resurrecting exactly the stale entries
+        # the loop was meant to remove.)
+        config["streams"] = dict(self._streams)
         _LOGGER.info("go2rtc config written with streams: %s", sorted(self._streams))
 
         def _write():
