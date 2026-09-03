@@ -65,7 +65,6 @@ import time
 # It is a positional permutation (value-independent), so it generalises to any
 # host. Computing it dynamically keeps the pure transport portable across hosts.
 _AVMID_PERM     = (1, 0, 5, 4, 3, 2)
-_AVMID_FALLBACK = bytes.fromhex("000000000000")   # neutral fallback; used only iff the local MAC read fails
 _AF_PACKET      = 17       # sockaddr_ll.sll_family on Linux
 _AF_LINK        = 18       # sockaddr_dl.sdl_family on macOS/BSD
 _IFF_LOOPBACK   = 0x8      # net/if.h IFF_LOOPBACK — same value on Linux and macOS/BSD
@@ -194,17 +193,22 @@ def compute_av_mid():
     """Return the 6-byte _AV_MID for this host (perm of local NIC MAC).
 
     Cross-platform: getifaddrs (Linux AF_PACKET / macOS AF_LINK) → /sys/class/net
-    (Linux) → uuid.getnode() (Windows + universal). Falls back to a neutral value
-    only if every method fails, so import never raises; a stderr note is emitted
-    on that final fallback. On Linux/macOS getifaddrs wins.
+    (Linux) → uuid.getnode() (Windows + universal). If every method fails (e.g. a
+    network-isolated container with no NIC at all), a fresh random 6-byte fingerprint
+    is generated instead — the camera does not validate this value's structure or
+    origin, so any 6 bytes work equally well, and a random value avoids every such
+    host presenting the same fixed, identifiable fingerprint. Import never raises; a
+    stderr note is emitted on that fallback. On Linux/macOS getifaddrs wins, so
+    behaviour is unchanged.
     """
     mac = (_local_mac_via_getifaddrs()      # Linux (AF_PACKET) / macOS (AF_LINK)
            or _local_mac_via_sysfs()        # Linux /sys/class/net fallback
            or _local_mac_via_uuid())        # cross-platform incl. Windows
     if mac is None:
+        fallback = os.urandom(6)
         sys.stderr.write("[cuboai_pure] WARN: no NIC MAC found; "
-                         "using fallback _AV_MID %s\n" % _AVMID_FALLBACK.hex())
-        return _AVMID_FALLBACK
+                         "using random fallback _AV_MID %s\n" % fallback.hex())
+        return fallback
     return bytes(mac[i] for i in _AVMID_PERM)
 
 
