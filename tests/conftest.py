@@ -73,6 +73,22 @@ _ha_module(
     DataUpdateCoordinator=_DataUpdateCoordinator,
     UpdateFailed=type("UpdateFailed", (Exception,), {}),
 )
+_ha_module(
+    "homeassistant.components.number",
+    NumberEntity=_entity_base("NumberEntity"),
+    RestoreNumber=_entity_base("RestoreNumber"),
+)
+_ha_module(
+    "homeassistant.components.media_player",
+    MediaPlayerEntity=_entity_base("MediaPlayerEntity"),
+    MediaPlayerEntityFeature=MagicMock(),
+    MediaPlayerState=MagicMock(),
+    MediaType=MagicMock(),
+    RepeatMode=MagicMock(),
+)
+_ha_module("homeassistant.helpers.entity_registry", async_get=MagicMock())
+_ha_module("homeassistant.helpers.dispatcher", async_dispatcher_send=MagicMock(),
+           async_dispatcher_connect=MagicMock())
 _ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
 _ha_module("homeassistant.util")
 _ha_module("homeassistant.util.dt", utcnow=lambda: datetime.datetime.now(datetime.UTC))

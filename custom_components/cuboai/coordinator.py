@@ -253,9 +253,24 @@ def _fetch_local_data(
                         try:
                             sched = client.get_lullaby_schedule()
                             data["lullaby_volume"] = sched.volume
+                            # The camera's ACTUAL sleep timer, echoed on this same
+                            # response (offset 8): 0 = repeat forever, 1800 = 30 min,
+                            # 3600 = 60 min. It was being read and thrown away, so the
+                            # Lullaby Timer number had nothing to reconcile against and
+                            # showed only whatever Home Assistant last set locally —
+                            # "30 minutes" while the camera was actually on repeat.
+                            data["lullaby_timer_mode"] = sched.timer_mode
+                            data["lullaby_timer_name"] = sched.timer_name
+                            data["lullaby_timer_minutes"] = (
+                                sched.timer_mode // 60 if sched.timer_mode else 0
+                            )
                         except Exception as e:
+                            # Do NOT invent a volume here. The previous fallback wrote a
+                            # hardcoded 50, which the merge in _fetch_all then treated as
+                            # a real reading and carried forward — so a failed schedule
+                            # read silently reported the wrong volume instead of keeping
+                            # the last known one.
                             log_to_file(f"Failed to get lullaby schedule: {e}")
-                            data["lullaby_volume"] = 50
 
                     except Exception as e:
                         import traceback
