@@ -175,8 +175,13 @@ def main() -> int:
     # defer_stream_start=False matches the live producer: the engine brings its
     # reader up immediately instead of waiting out a ~5s native defer, which
     # would otherwise elapse before the first recorded frame is expected.
+    # auto_discover_lib=False: PlaybackSession is pure-only — it reaches through
+    # `transport._inner` (a PureSession attribute) and drives the pure engine's RDT
+    # and channel-N paths. A native session auto-discovered from libs/<arch>/ would
+    # not provide any of that, so pin the backend rather than depending on the
+    # camera_ip argument to incidentally rule the native library out.
     with get_session(uid, account, password, camera_ip=camera_ip,
-                     auto_discover_lib=True,
+                     auto_discover_lib=False,
                      defer_stream_start=False, defer_video_start_late=False) as sess:
         transport = sess
         inner = getattr(transport, "_inner", transport)
