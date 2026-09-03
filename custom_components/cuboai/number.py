@@ -192,7 +192,12 @@ class CuboNightLightBrightnessNumber(CoordinatorEntity, NumberEntity):
                 camera_ip=self._camera_ip if self._camera_ip else None,
                 defer_stream_start=False,
                 defer_video_start_late=False,
-                auto_discover_lib=True,
+                # auto_discover_lib=False: pure is the guaranteed backend everywhere in this
+                # integration. An auto-discovered libIOTCAPIs_ALL (async_ensure_dependencies
+                # downloads one into libs/<arch>/) would otherwise put SOME sessions on the
+                # native backend while switch.py/light.py and the streamers stay pure. Only an
+                # explicit lib_path/CUBOAI_LIB selects native.
+                auto_discover_lib=False,
             ) as sess:
                 client = CuboAIClient(sess)
                 client.set_brightness(bright_pct)

@@ -99,7 +99,12 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
             camera_ip=camera_ip if camera_ip else None,
             defer_stream_start=True,
             defer_video_start_late=True,
-            auto_discover_lib=True,
+            # auto_discover_lib=False: pure is the guaranteed backend everywhere in this
+            # integration. An auto-discovered libIOTCAPIs_ALL (async_ensure_dependencies
+            # downloads one into libs/<arch>/) would otherwise put SOME sessions on the
+            # native backend while switch.py/light.py and the streamers stay pure. Only an
+            # explicit lib_path/CUBOAI_LIB selects native.
+            auto_discover_lib=False,
         ) as sess:
             client = CuboAIClient(sess)
             if cmd_type == "play":
