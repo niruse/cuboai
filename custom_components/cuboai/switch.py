@@ -228,7 +228,11 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        return cam.get("local", {}).get("status_led_on", False)
+        # `status_light_on` is the key the coordinator poll writes, from
+        # get_hw_control().status_light_on_off. This entity read `status_led_on`,
+        # which the poll never writes — so the switch showed only its own
+        # optimistic write and returned to False on every restart.
+        return cam.get("local", {}).get("status_light_on", False)
 
     @property
     def device_info(self):
@@ -244,7 +248,7 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
             _set_status_led, self._uid, self._account, self._password, self._camera_ip, True
         )
         cam = self.coordinator.data.setdefault("cameras", {}).setdefault(self._device_id, {})
-        cam.setdefault("local", {})["status_led_on"] = True
+        cam.setdefault("local", {})["status_light_on"] = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
@@ -252,7 +256,7 @@ class CuboStatusLEDSwitch(CoordinatorEntity, SwitchEntity):
             _set_status_led, self._uid, self._account, self._password, self._camera_ip, False
         )
         cam = self.coordinator.data.setdefault("cameras", {}).setdefault(self._device_id, {})
-        cam.setdefault("local", {})["status_led_on"] = False
+        cam.setdefault("local", {})["status_light_on"] = False
         self.async_write_ha_state()
 
 

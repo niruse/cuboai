@@ -90,3 +90,27 @@ def test_entity_reports_unknown_rather_than_a_hardcoded_hundred():
 
 def test_entity_does_not_round_a_real_hundred_away():
     assert _entity({"brightness": 100}).native_value == 100
+
+
+# --- the Status LED switch read a key the poll never wrote -------------------
+
+import custom_components.cuboai.switch as switch_mod  # noqa: E402
+
+
+def _led(local):
+    e = object.__new__(switch_mod.CuboStatusLEDSwitch)
+    e.coordinator = MagicMock()
+    e.coordinator.data = {"cameras": {DEVICE: {"local": local}}}
+    e._device_id = DEVICE
+    return e
+
+
+def test_status_led_reflects_the_polled_camera_value():
+    """The poll writes `status_light_on`; the switch used to read `status_led_on`,
+    which nothing wrote, so it sat at False no matter what the camera reported."""
+    assert _led({"status_light_on": True}).is_on is True
+    assert _led({"status_light_on": False}).is_on is False
+
+
+def test_status_led_defaults_to_off_when_the_poll_has_no_value():
+    assert _led({}).is_on is False

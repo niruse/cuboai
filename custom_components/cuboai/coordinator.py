@@ -174,6 +174,11 @@ def _fetch_local_data(
                             ss_status = client.get_sleep_safety_status()
                             data["sleep_safety"] = ss_status.get("enabled")
                             data["baby_presence"] = ss_status.get("baby_presence_alert")
+                            # The camera distinguishes "Covered Face and Rollover" from
+                            # "Covered Face Only"; the sensor's On/Off hides that, and its
+                            # `raw_value` attribute read a key nothing ever wrote.
+                            data["sleep_safety_mode"] = ss_status.get("mode")
+                            data["sleep_safety_mode_desc"] = ss_status.get("mode_desc")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_safety: {e}")
 
@@ -275,7 +280,6 @@ def _fetch_local_data(
                             # Lullaby Timer number had nothing to reconcile against and
                             # showed only whatever Home Assistant last set locally —
                             # "30 minutes" while the camera was actually on repeat.
-                            data["lullaby_timer_mode"] = sched.timer_mode
                             data["lullaby_timer_name"] = sched.timer_name
                             data["lullaby_timer_minutes"] = (
                                 sched.timer_mode // 60 if sched.timer_mode else 0
