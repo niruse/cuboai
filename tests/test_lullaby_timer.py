@@ -19,6 +19,7 @@ constant silently changed the field the user did not touch.
 import importlib
 import importlib.util
 import os
+import struct
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -94,114 +95,111 @@ def test_camera_value_wins_again_after_the_pending_clears():
 
 
 # --- the coupled write -------------------------------------------------------
+#
+# SET_LULLABY_VOL_DURATION (2438) is the camera's ONLY write for the lullaby
+# volume and sleep timer, and its 140-byte struct carries BOTH fields with no
+# field mask — there is no volume-only or timer-only opcode. Every write is
+# therefore a read-modify-write, and these tests decode the REAL payload the
+# real builder produces rather than mocking it.
 
-def _run_volume_cmd(volume, timer, sched_volume=70, sched_timer=1800):
-    """Drive _execute_lullaby_cmd's 'volume' branch and capture the frame built."""
-    client = MagicMock()
-    client.get_lullaby_schedule.return_value = MagicMock(volume=sched_volume, timer_mode=sched_timer)
+GET_SCHED_REQ, GET_SCHED_RESP, SET_VOL_DUR_REQ = 2440, 2441, 2438
+
+
+def _echo(volume, timer_seconds):
+    """A GET_LULLABY_SCHEDULE response: timer_mode @8, volume @12, playing @16."""
+    raw = bytearray(144)
+    struct.pack_into("<I", raw, 8, timer_seconds)
+    struct.pack_into("<I", raw, 12, volume)
+    struct.pack_into("<I", raw, 16, 1)
+    return bytes(raw)
+
+
+def _run_cmd(cmd_type, volume, timer, cam_volume=70, cam_timer=1800, echo_fails=False):
+    """Drive _execute_lullaby_cmd and decode the SET payload it actually built."""
+    sent = {}
+
+    def _ioctl(op, payload):
+        if op == GET_SCHED_REQ:
+            if echo_fails:
+                raise RuntimeError("timeout")
+            return GET_SCHED_RESP, _echo(cam_volume, cam_timer)
+        if op == SET_VOL_DUR_REQ:
+            sent["timer"] = struct.unpack_from("<I", payload, 4)[0]
+            sent["volume"] = struct.unpack_from("<I", payload, 8)[0]
+            sent["len"] = len(payload)
+        return op + 1, b""
+
     sess = MagicMock()
+    sess.ioctl.side_effect = _ioctl
     ctx = MagicMock()
     ctx.__enter__ = MagicMock(return_value=sess)
     ctx.__exit__ = MagicMock(return_value=False)
-    seen = {}
-
-    def _build(vol, tmr, correlation_id=0):
-        seen["volume"], seen["timer"] = vol, tmr
-        return 2438, b""
 
     with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_lullaby_vol_duration", _build):
+         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=MagicMock()):
         media_player._execute_lullaby_cmd(
-            "uid", "acct", "pw", "192.0.2.10", "volume", None, volume, timer
+            "uid", "acct", "pw", "192.0.2.10", cmd_type, "SOME-UUID", volume, timer
         )
-    return seen
+    return sent
+
+
+def test_the_write_is_the_140_byte_coupled_struct():
+    sent = _run_cmd("volume", volume=80, timer=None)
+    assert sent["len"] == 140, "SET_LULLABY_VOL_DURATION is a fixed 140-byte struct"
 
 
 def test_setting_volume_alone_preserves_the_cameras_timer():
-    seen = _run_volume_cmd(volume=80, timer=None, sched_timer=1800)
-    assert seen["volume"] == 80
-    assert seen["timer"] == 1800, "changing the volume must not reset the sleep timer"
+    sent = _run_cmd("volume", volume=80, timer=None, cam_timer=1800)
+    assert sent["volume"] == 80
+    assert sent["timer"] == 1800, "changing the volume must not reset the sleep timer"
 
 
 def test_setting_the_timer_alone_preserves_the_cameras_volume():
-    seen = _run_volume_cmd(volume=None, timer=60, sched_volume=70)
-    assert seen["timer"] == 3600
-    assert seen["volume"] == 70, "changing the timer must not reset the volume"
+    sent = _run_cmd("volume", volume=None, timer=60, cam_volume=70)
+    assert sent["timer"] == 3600
+    assert sent["volume"] == 70, "changing the timer must not reset the volume"
 
 
 def test_zero_minutes_still_means_repeat_forever():
-    seen = _run_volume_cmd(volume=None, timer=0, sched_timer=1800)
-    assert seen["timer"] == 0
+    sent = _run_cmd("volume", volume=None, timer=0, cam_timer=1800)
+    assert sent["timer"] == 0
 
 
 def test_both_supplied_are_both_honoured():
-    seen = _run_volume_cmd(volume=25, timer=30)
-    assert (seen["volume"], seen["timer"]) == (25, 1800)
+    sent = _run_cmd("volume", volume=25, timer=30)
+    assert (sent["volume"], sent["timer"]) == (25, 1800)
 
 
-def test_unreadable_schedule_still_writes_something_sane():
-    client = MagicMock()
-    client.get_lullaby_schedule.side_effect = RuntimeError("timeout")
-    sess = MagicMock()
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=sess)
-    ctx.__exit__ = MagicMock(return_value=False)
-    seen = {}
+def test_minutes_are_converted_to_the_cameras_seconds_encoding():
+    assert _run_cmd("volume", None, 30)["timer"] == 1800
+    assert _run_cmd("volume", None, 60)["timer"] == 3600
 
-    def _build(vol, tmr, correlation_id=0):
-        seen["volume"], seen["timer"] = vol, tmr
-        return 2438, b""
 
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_lullaby_vol_duration", _build):
-        media_player._execute_lullaby_cmd("uid", "acct", "pw", "192.0.2.10", "volume", None, 80, None)
-    assert seen["volume"] == 80
-    assert seen["timer"] == 0
+def test_an_unreadable_echo_still_writes_the_supplied_field():
+    sent = _run_cmd("volume", volume=80, timer=None, echo_fails=True)
+    assert sent["volume"] == 80
+    assert sent["timer"] == 0, "with no echo to preserve, the timer falls back to repeat"
 
 
 # --- play must not reset the volume -----------------------------------------
 
-def _run_play_cmd(volume, timer, sched_volume=70):
-    client = MagicMock()
-    client.get_lullaby_schedule.return_value = MagicMock(volume=sched_volume, timer_mode=0)
-    sess = MagicMock()
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=sess)
-    ctx.__exit__ = MagicMock(return_value=False)
-    seen = {}
-
-    def _build(vol, tmr, correlation_id=0):
-        seen["volume"], seen["timer"] = vol, tmr
-        return 2438, b""
-
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_lullaby_vol_duration", _build):
-        media_player._execute_lullaby_cmd(
-            "uid", "acct", "pw", "192.0.2.10", "play", "SOME-UUID", volume, timer
-        )
-    return seen
-
-
 def test_play_keeps_the_cameras_volume_when_none_is_supplied():
     """Both callers pass volume=None; play must not silently reset it to 50."""
-    seen = _run_play_cmd(volume=None, timer=None, sched_volume=70)
-    assert seen["volume"] == 70
+    sent = _run_cmd("play", volume=None, timer=None, cam_volume=70)
+    assert sent["volume"] == 70
 
 
 def test_play_honours_an_explicit_volume():
-    seen = _run_play_cmd(volume=20, timer=None, sched_volume=70)
-    assert seen["volume"] == 20
+    sent = _run_cmd("play", volume=20, timer=None, cam_volume=70)
+    assert sent["volume"] == 20
 
 
 def test_play_with_no_timer_is_repeat_forever():
     """The card path relies on this: HA enforces the duration and sends the stop."""
-    seen = _run_play_cmd(volume=None, timer=None)
-    assert seen["timer"] == 0
+    sent = _run_cmd("play", volume=None, timer=None, cam_timer=1800)
+    assert sent["timer"] == 0
 
 
 def test_play_converts_minutes_to_the_cameras_seconds_encoding():
-    seen = _run_play_cmd(volume=None, timer=30)
-    assert seen["timer"] == 1800
+    sent = _run_cmd("play", volume=None, timer=30)
+    assert sent["timer"] == 1800
