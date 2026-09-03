@@ -143,6 +143,22 @@ def _fetch_local_data(
                             log_to_file(f"Failed to get temp_humidity: {e}")
 
                         try:
+                            # Night-light brightness (percent). The camera reports it on
+                            # GET_LIGHT_STYLE @24; nothing was reading it, so
+                            # `local["brightness"]` was never populated at all — the
+                            # Night Light Brightness number fell back to a hardcoded 100
+                            # regardless of the camera, and the light entity reported no
+                            # brightness despite advertising ColorMode.BRIGHTNESS.
+                            from .tutk.cuboai_messages import build_get_light_style, parse_light_style
+
+                            _rt, _raw = sess.ioctl(*build_get_light_style())
+                            _style = parse_light_style(_raw)
+                            if _style.get("brightness") is not None:
+                                data["brightness"] = _style["brightness"]
+                        except Exception as e:
+                            log_to_file(f"Failed to get light style: {e}")
+
+                        try:
                             data["sleep_mode_on"] = client.get_sleep_mode().get("enabled")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_mode: {e}")
