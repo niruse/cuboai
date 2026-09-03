@@ -140,10 +140,35 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                 resp = client.stop_lullaby(song_uuid)
                 log_to_file(f"[Lullaby] Stop response: {resp}")
             elif cmd_type == "volume":
-                vol = int(volume) if volume is not None else 50
-                timer_val = LULLABY_TIMER_REPEAT
-                if timer and timer > 0:
-                    timer_val = timer * 60
+                # SET_LULLABY_VOL_DURATION is a COUPLED write: one struct carries both
+                # volume and the sleep timer, so whichever field the caller did not
+                # supply must be read from the camera rather than assumed. Defaulting
+                # the missing half to a constant meant changing the volume silently
+                # reset the sleep timer to repeat-forever, and changing the timer
+                # silently set the volume to 50.
+                cur_vol = cur_timer = None
+                try:
+                    sched = client.get_lullaby_schedule()
+                    cur_vol, cur_timer = sched.volume, sched.timer_mode
+                except Exception as e:
+                    log_to_file(f"[Lullaby] could not read current vol/timer before write: {e}")
+
+                if volume is not None:
+                    vol = int(volume)
+                elif cur_vol is not None:
+                    vol = int(cur_vol)
+                else:
+                    vol = 50
+                    log_to_file("[Lullaby] volume unknown and unreadable — falling back to 50")
+
+                if timer is not None:
+                    timer_val = timer * 60 if timer > 0 else LULLABY_TIMER_REPEAT
+                elif cur_timer is not None:
+                    timer_val = cur_timer          # preserve the camera's own timer
+                else:
+                    timer_val = LULLABY_TIMER_REPEAT
+                    log_to_file("[Lullaby] timer unknown and unreadable — falling back to repeat")
+
                 log_to_file(f"[Lullaby] Setting volume={vol} timer={timer_val}")
                 if hasattr(sess, "ioctl"):
                     resp = sess.ioctl(*build_set_lullaby_vol_duration(vol, timer_val))
@@ -755,7 +780,10 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def _push_native_timer(self, minutes):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {}) if self.coordinator.data else {}
-        vol = cam.get("local", {}).get("lullaby_volume", 50)
+        # None means "keep whatever the camera has". SET_LULLABY_VOL_DURATION writes
+        # volume AND timer in one struct, so defaulting to 50 here silently reset the
+        # camera's volume as a side effect of changing the sleep timer.
+        vol = cam.get("local", {}).get("lullaby_volume")
         try:
             await self.hass.async_add_executor_job(
                 _execute_lullaby_cmd,
