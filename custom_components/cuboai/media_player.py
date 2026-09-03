@@ -112,7 +112,26 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
                     song_uuid = list(LULLABY_CATALOG.keys())[0]
 
                 # IMPORTANT: Set vol/duration BEFORE playing, otherwise camera might ignore or immediately stop
-                vol = int(volume) if volume is not None else 50
+                #
+                # Both callers pass volume=None (the card path via select_source and
+                # async_media_play), and this used to fall back to a hardcoded 50 — so
+                # every lullaby play silently overrode whatever volume the user, or the
+                # CuboAi app, had set. SET_LULLABY_VOL_DURATION writes volume and timer
+                # together, so "not specified" has to mean "keep the camera's", not "50".
+                if volume is not None:
+                    vol = int(volume)
+                else:
+                    vol = None
+                    try:
+                        vol = int(client.get_lullaby_schedule().volume)
+                    except Exception as e:
+                        log_to_file(f"[Lullaby] could not read current volume before play: {e}")
+                    if vol is None:
+                        vol = 50
+                        log_to_file("[Lullaby] volume unknown and unreadable — falling back to 50")
+
+                # timer=None here means repeat-forever on purpose: the card path lets
+                # Home Assistant enforce the duration and stop playback itself.
                 timer_val = LULLABY_TIMER_REPEAT
                 if timer and timer > 0:
                     timer_val = timer * 60
