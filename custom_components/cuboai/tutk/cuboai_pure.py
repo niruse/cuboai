@@ -1805,6 +1805,16 @@ class TUTKDirectSession:
         # accept-window survives the wrap. Byte-identical pre-wrap; OFF reverts to the historical
         # non-modular gate, which dead-stalls a continuous stream ~every 46 min at the wrap.
         self._idx_modular = os.environ.get("CUBOAI_IDX_MODULAR", "1") != "0"
+        # Same wrap class as _idx_modular, on the OTHER u16 counter (default ON): the camera's
+        # IO message-index [56:58] wraps at 65536 while `_data_ack` is an unbounded monotonic
+        # int, so past the wrap `(self._data_ack + 1) in self._cam_msgs` can never be true again
+        # and _data_ack FREEZES — the D field of every subsequent host->cam ACK stops advancing
+        # ([40:42] must wrap 0xFFFF->0x0000) and the camera's send-window stops being credited.
+        # Lifting the idx into _data_ack's space (_unwrap_index) and discarding consumed entries
+        # keeps the contiguous edge advancing across the wrap. Byte-identical pre-wrap
+        # (_unwrap_index == raw idx while no wrap has occurred).
+        # REGRESSION SWITCH, NOT A TUNABLE: `=0` reopens the freeze-at-wrap — keep ON.
+        self._dataack_wrap = os.environ.get("CUBOAI_DATAACK_WRAP", "1") != "0"
         # minimum in-order wait (AU-indices) before advancing past an absent AU — the
         # scaled grace (~4 at LAN) is too short to wait out a >grace-late frag-burst, so
         # the late-but-complete AU is still skipped+rejected; this floor holds each AU long
@@ -2218,11 +2228,22 @@ class TUTKDirectSession:
             return
         if self._is_io_frame(dec):
             idx = struct.unpack("<H", dec[56:58])[0]
-            self._cam_msgs.add(idx)
             if idx == 0:
                 self._got_first = True
-            while (self._data_ack + 1) in self._cam_msgs:
-                self._data_ack += 1
+            if self._dataack_wrap:
+                # wrap-safe: store the idx lifted into _data_ack's unbounded space, advance the
+                # contiguous edge, and drop consumed entries (bounds the set + prevents a stale
+                # wrapped value from false-advancing a later epoch). Pre-wrap this is identical to
+                # the else-branch (_unwrap_index == raw idx, and _data_ack depends only on
+                # contiguity, which the discard does not change).
+                self._cam_msgs.add(_unwrap_index(idx, self._data_ack))
+                while (self._data_ack + 1) in self._cam_msgs:
+                    self._data_ack += 1
+                    self._cam_msgs.discard(self._data_ack)
+            else:
+                self._cam_msgs.add(idx)
+                while (self._data_ack + 1) in self._cam_msgs:
+                    self._data_ack += 1
             return
         # AV fragment: D = highest fragment-seq [46:48], modular-u16, skipping gaps/junk.
         frag = struct.unpack("<H", dec[46:48])[0]
