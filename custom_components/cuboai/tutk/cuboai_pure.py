@@ -1825,6 +1825,16 @@ class TUTKDirectSession:
         # (_unwrap_index == raw idx while no wrap has occurred).
         # REGRESSION SWITCH, NOT A TUNABLE: `=0` reopens the freeze-at-wrap — keep ON.
         self._dataack_wrap = os.environ.get("CUBOAI_DATAACK_WRAP", "1") != "0"
+        # SECOND-STREAM dead-read fix (default ON): `done_upto` is a per-reader local that starts
+        # at -1, but the camera's AV message-index is SESSION-scoped. So the FIRST read of a
+        # session works and every read after it meets an index already far past the +256 accept
+        # window — EVERY fragment is rejected, forever, and the reader emits zero access units
+        # while fragments keep arriving at full rate. Silent: no error, no gap counter moving.
+        # Reachable through the legacy shim (cuboai_transport_py.start_video() opens a fresh
+        # av_frames() iterator each call). Anchoring the window at the first accepted AU start
+        # fixes it; the seed only fires when the index is out of window, so a normal
+        # fresh-session stream is byte-identical.
+        self._idx_seed = os.environ.get("CUBOAI_IDX_SEED", "1") != "0"
         # minimum in-order wait (AU-indices) before advancing past an absent AU — the
         # scaled grace (~4 at LAN) is too short to wait out a >grace-late frag-burst, so
         # the late-but-complete AU is still skipped+rejected; this floor holds each AU long
@@ -3331,9 +3341,10 @@ class TUTKDirectSession:
                             gi.result = bytes(dec[68:min(len(dec), 68 + max(0, avlen - 4))])
                             gi.done.set()
                         continue
-                    idx = struct.unpack("<H", dec[56:58])[0]
+                    raw_idx = struct.unpack("<H", dec[56:58])[0]
+                    idx = raw_idx
                     if self._idx_modular:                 # H1: lift the u16 index into done_upto's
-                        idx = _unwrap_index(idx, done_upto)  # space so the gate survives the wrap
+                        idx = _unwrap_index(raw_idx, done_upto)  # space so the gate survives the wrap
                     frag = struct.unpack("<H", dec[46:48])[0]
                     avlen = struct.unpack("<H", dec[52:54])[0]
                     chunk = bytes(dec[64:64 + max(0, avlen)])
@@ -3357,6 +3368,16 @@ class TUTKDirectSession:
                         if not is_marker(chunk):
                             continue
                         gmax = frag
+                        # SECOND-STREAM dead-read fix (see _idx_seed): this is THIS reader's first
+                        # accepted access-unit start. done_upto still holds its -1 initialiser, but
+                        # the camera's message-index is session-scoped, so on any read after the
+                        # first it is already past the +256 accept window and EVERY fragment would
+                        # be rejected from here on. Anchor the window here instead. Fires only when
+                        # the index is out of window (never on a fresh-session stream), so the
+                        # normal path is byte-identical.
+                        if self._idx_seed and not (done_upto < idx <= done_upto + 256):
+                            done_upto = raw_idx - 1
+                            idx = _unwrap_index(raw_idx, done_upto) if self._idx_modular else raw_idx
                     else:
                         fwd = (frag - gmax) & 0xFFFF
                         back = (gmax - frag) & 0xFFFF
