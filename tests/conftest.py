@@ -4,7 +4,9 @@ This module sets up the necessary mocks for Home Assistant modules
 so that cuboai components can be imported in tests.
 """
 
+import datetime
 import sys
+from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,6 +24,58 @@ sys.modules["homeassistant.const"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.entity"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+
+# Entity base classes and exceptions must be REAL objects, not MagicMock attributes:
+# the platform modules subclass them (and combine several by multiple inheritance, so
+# they must also be distinct classes), and `except HomeAssistantError` needs a real
+# exception type. Registering them here rather than in individual test modules keeps
+# it independent of the order pytest happens to import tests in — a stub installed by
+# one test module was otherwise visible to, and could break, every later one.
+def _ha_module(name, **attrs):
+    """Ensure sys.modules[name] exists and carries `attrs`, without clobbering
+    anything a module already there has defined."""
+    mod = sys.modules.get(name)
+    if not isinstance(mod, ModuleType):
+        mod = ModuleType(name)
+        sys.modules[name] = mod
+    for key, value in attrs.items():
+        if not hasattr(mod, key):
+            setattr(mod, key, value)
+    return mod
+
+
+def _entity_base(name):
+    return type(name, (), {"__init__": lambda self, *a, **k: None})
+
+
+class _CoordinatorEntity:
+    """Mirrors the one behaviour the platform modules rely on from the real base:
+    `super().__init__(coordinator)` makes `self.coordinator` available."""
+
+    def __init__(self, coordinator=None, context=None):
+        self.coordinator = coordinator
+
+
+class _DataUpdateCoordinator:
+    def __init__(self, hass=None, logger=None, *, name=None, update_interval=None, **kwargs):
+        self.hass = hass
+        self.logger = logger
+        self.name = name
+        self.update_interval = update_interval
+
+
+_ha_module("homeassistant.components")
+_ha_module("homeassistant.components.switch", SwitchEntity=_entity_base("SwitchEntity"))
+_ha_module("homeassistant.helpers.restore_state", RestoreEntity=_entity_base("RestoreEntity"))
+_ha_module(
+    "homeassistant.helpers.update_coordinator",
+    CoordinatorEntity=_CoordinatorEntity,
+    DataUpdateCoordinator=_DataUpdateCoordinator,
+    UpdateFailed=type("UpdateFailed", (Exception,), {}),
+)
+_ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
+_ha_module("homeassistant.util")
+_ha_module("homeassistant.util.dt", utcnow=lambda: datetime.datetime.now(datetime.UTC))
 
 # Mock cuboai utils to avoid file I/O during tests
 _mock_utils = MagicMock()

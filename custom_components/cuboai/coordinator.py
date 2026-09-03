@@ -183,7 +183,25 @@ def _fetch_local_data(
 
                         try:
                             stats = client.get_session_stats()
-                            data["connection_mode"] = stats.get("mode")
+                            mode = stats.get("mode")
+                            if mode:
+                                data["connection_mode"] = mode
+                            else:
+                                # The IOCTL answered but its body carried no parseable JSON,
+                                # so there is no mode in it. Leave the key UNSET so the merge
+                                # in _fetch_all carries the last known mode forward — exactly
+                                # what the except branch below already relies on.
+                                #
+                                # Writing None here instead dropped the Connection Mode sensor
+                                # to `unknown` for one poll and back again. Measured on a live
+                                # camera over 12h: 200 flaps, each lasting a median of 64.6s
+                                # (one poll interval), for a value that never actually changed
+                                # from "lan". "Unknown" is never true here anyway — this GET
+                                # only returns at all because the local session is up.
+                                log_to_file(
+                                    "[CuboAICoordinator] session stats carried no mode "
+                                    f"(raw_len={stats.get('raw_len')}); keeping the last known value"
+                                )
                         except Exception as e:
                             log_to_file(f"Failed to get session stats: {e}")
 

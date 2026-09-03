@@ -17,34 +17,12 @@ import importlib.util
 import logging
 import os
 import sys
-import types
 from unittest.mock import MagicMock, patch
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
-def _stub(name, **attrs):
-    """Register a stub module. conftest mocks `homeassistant` itself, which makes it
-    a non-package, so every submodule switch.py imports has to be registered here —
-    and the entity base classes must be real classes, not MagicMock attributes."""
-    mod = types.ModuleType(name)
-    for k, v in attrs.items():
-        setattr(mod, k, v)
-    sys.modules[name] = mod
-    return mod
-
-
-def _base(name):
-    """A distinct stand-in class per Home Assistant entity base — they are combined
-    by multiple inheritance, so they must not collapse into one shared class."""
-    return type(name, (), {"__init__": lambda self, *a, **k: None})
-
-
-_stub("homeassistant.components")
-_stub("homeassistant.components.switch", SwitchEntity=_base("SwitchEntity"))
-_stub("homeassistant.helpers.restore_state", RestoreEntity=_base("RestoreEntity"))
-_stub("homeassistant.helpers.update_coordinator", CoordinatorEntity=_base("CoordinatorEntity"))
-_stub("homeassistant.exceptions", HomeAssistantError=RuntimeError)
+# The Home Assistant entity bases come from conftest, which registers real stub
+# classes for them. Only the utils swap is specific to this module.
 
 # conftest replaces custom_components.cuboai.utils with a MagicMock, which would
 # turn the @retry_camera_command-decorated helpers into mocks too. Put the real
