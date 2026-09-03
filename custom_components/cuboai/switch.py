@@ -108,6 +108,30 @@ class CuboSleepModeSwitch(CoordinatorEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
+def _apply_verified(entity, key, requested, actual, label):
+    """Write the camera's ACTUAL post-set value into the coordinator cache.
+
+    When the two disagree the camera accepted the command and ignored it, which
+    is a real (and on this firmware, expected) outcome — say so once, clearly,
+    instead of showing a state the camera is not in.
+    """
+    if bool(actual) != bool(requested):
+        if not getattr(entity, "_ignored_warned", False):
+            entity._ignored_warned = True
+            _LOGGER.warning(
+                "%s: the camera accepted turning %s %s but still reports %s. This firmware "
+                "acknowledges the command and does not apply it, so Home Assistant is showing "
+                "the camera's real state rather than the requested one.",
+                entity.entity_id or entity._attr_name,
+                label,
+                "on" if requested else "off",
+                "on" if actual else "off",
+            )
+    cam = entity.coordinator.data.setdefault("cameras", {}).setdefault(entity._device_id, {})
+    cam.setdefault("local", {})[key] = bool(actual)
+    entity.async_write_ha_state()
+
+
 @retry_camera_command("Status LED command")
 def _set_status_led(uid, account, password, camera_ip, on: bool):
     """Synchronous function to set status led."""
@@ -307,9 +331,25 @@ class CuboFlipScreenSwitch(CoordinatorEntity, SwitchEntity):
 
 @retry_camera_command("Baby presence command")
 def _set_baby_presence(uid, account, password, camera_ip, on: bool):
-    """Synchronous function to set baby presence alert."""
+    """Set the baby-presence alert and return the state the camera actually reports.
+
+    `baby_presence_alert` is one of four coupled fields in SET_SLEEP_SAFETY_SETTING.
+    A live round-trip against this firmware showed the SET is accepted (result=0)
+    while the read-back is UNCHANGED in both directions — and that this is not a
+    transport problem, since `safety_alert`, `cover_alert` and `sensitivity` read
+    back exactly as written in the same call. The field is accepted and ignored,
+    the same way the status LED is.
+
+    This is a baby monitor, so a presence alert that Home Assistant shows as
+    enabled while the camera has not enabled it is the wrong failure to be quiet
+    about. Read the value back and return what the camera really reports.
+    """
     try:
-        from .tutk.cuboai_messages import build_get_sleep_safety_setting, build_set_sleep_safety_setting
+        from .tutk.cuboai_messages import (
+            CuboAIClient,
+            build_get_sleep_safety_setting,
+            build_set_sleep_safety_setting,
+        )
         from .tutk.cuboai_session import get_session
 
         with get_session(
@@ -327,6 +367,11 @@ def _set_baby_presence(uid, account, password, camera_ip, on: bool):
             else:
                 resp_type, raw = sess._send_ioc(*build_get_sleep_safety_setting())
                 sess._send_ioc(*build_set_sleep_safety_setting(raw, baby_presence_alert=on))
+            try:
+                return bool(CuboAIClient(sess).get_sleep_safety_status().get("baby_presence_alert"))
+            except Exception as e:
+                _LOGGER.debug("Baby-presence read-back failed, assuming requested state: %s", e)
+                return on
     except Exception as e:
         _LOGGER.error(f"Failed to set baby presence: {e}")
         raise
@@ -362,17 +407,13 @@ class CuboBabyPresenceSwitch(CoordinatorEntity, SwitchEntity):
         }
 
     async def async_turn_on(self, **kwargs):
-        await self.hass.async_add_executor_job(
+        actual = await self.hass.async_add_executor_job(
             _set_baby_presence, self._uid, self._account, self._password, self._camera_ip, True
         )
-        cam = self.coordinator.data.setdefault("cameras", {}).setdefault(self._device_id, {})
-        cam.setdefault("local", {})["baby_presence"] = True
-        self.async_write_ha_state()
+        _apply_verified(self, "baby_presence", True, actual, "the baby-presence alert")
 
     async def async_turn_off(self, **kwargs):
-        await self.hass.async_add_executor_job(
+        actual = await self.hass.async_add_executor_job(
             _set_baby_presence, self._uid, self._account, self._password, self._camera_ip, False
         )
-        cam = self.coordinator.data.setdefault("cameras", {}).setdefault(self._device_id, {})
-        cam.setdefault("local", {})["baby_presence"] = False
-        self.async_write_ha_state()
+        _apply_verified(self, "baby_presence", False, actual, "the baby-presence alert")
