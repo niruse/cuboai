@@ -49,7 +49,12 @@ class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
         self._attr_native_step = 30
         self._attr_native_unit_of_measurement = "min"
 
+        # Restored across reloads; used only until the camera tells us its own value.
         self._timer_value = 30
+        #: A value the user picked that has not yet been pushed to the camera. It
+        #: wins over the camera's reading so a selection made before pressing play
+        #: is not overwritten by the next poll; it clears once the camera agrees.
+        self._pending = None
 
     async def async_added_to_hass(self) -> None:
         """Restore the last timer value after a reload or HA restart.
@@ -66,8 +71,51 @@ class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
             _LOGGER.debug("Could not restore lullaby timer value", exc_info=True)
 
     @property
+    def _camera_minutes(self):
+        """The sleep timer the CAMERA reports, in minutes, or None if unknown.
+
+        From GET_LULLABY_SCHEDULE (timer_mode @8): 0 = repeat forever,
+        1800 = 30 min, 3600 = 60 min.
+        """
+        data = self.coordinator.data or {}
+        cam = data.get("cameras", {}).get(self._device_id, {})
+        return cam.get("local", {}).get("lullaby_timer_minutes")
+
+    @property
     def native_value(self):
+        """What the camera is actually set to, unless a newer local pick is pending.
+
+        This used to return a purely local value that started at a hardcoded 30 and
+        was never reconciled with the camera — so a lullaby the camera was repeating
+        indefinitely still showed "30 min" in Home Assistant. The camera reports its
+        real timer on a response the coordinator already reads.
+        """
+        cam_minutes = self._camera_minutes
+        if self._pending is not None:
+            if cam_minutes is not None and int(cam_minutes) == int(self._pending):
+                self._pending = None      # the camera caught up
+            else:
+                return self._pending
+        if cam_minutes is not None:
+            return int(cam_minutes)
         return self._timer_value
+
+    @property
+    def extra_state_attributes(self):
+        cam_minutes = self._camera_minutes
+        data = self.coordinator.data or {}
+        cam = data.get("cameras", {}).get(self._device_id, {})
+        return {
+            "camera_timer_minutes": cam_minutes,
+            "camera_timer_mode": cam.get("local", {}).get("lullaby_timer_name"),
+            "pending_change": self._pending,
+            # True while Home Assistant is showing a value the camera has not adopted.
+            "differs_from_camera": (
+                self._pending is not None
+                and cam_minutes is not None
+                and int(cam_minutes) != int(self._pending)
+            ),
+        }
 
     @property
     def device_info(self):
@@ -80,6 +128,9 @@ class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         self._timer_value = int(value)
+        # Held as pending until the camera reports this value back, so the pick
+        # survives the next poll instead of snapping to the camera's old setting.
+        self._pending = int(value)
         self.async_write_ha_state()
 
         # Notify the lullaby player: if a NATIVE lullaby is playing it pushes
