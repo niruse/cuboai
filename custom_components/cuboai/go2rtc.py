@@ -655,9 +655,14 @@ class Go2RTCManager:
         """Request playback of `start_epoch` (UTC) for `cam`; returns its URL.
 
         Writes the moment to the camera's state file, which the already-declared
-        DVR producer reads when a viewer connects. Any producer still running
-        for a previous request is stopped first, so the next viewer gets the
-        moment just asked for rather than the tail of the old one.
+        DVR producer reads when a viewer connects.
+
+        Note that nothing is stopped here. An earlier version of this docstring
+        claimed a previous producer was stopped first, but the body deliberately
+        does not do that — see the comment below on why go2rtc's DELETE is the
+        wrong tool. A producer left over from an earlier request keeps serving
+        that older moment until it ends; the next producer to start reads the
+        file written here.
         """
         import json
 
