@@ -908,6 +908,16 @@ def _unwrap_index(idx_u16, done_upto):
     return done_upto + ((idx_u16 - done_upto) & 0xFFFF)
 
 
+def _unwrap_index_back(idx_u16, cur):
+    """Lift a u16 wire counter BACKWARD into `cur`'s unbounded monotonic space: the nearest value
+    at-or-below `cur` congruent to idx_u16 (mod 65536). The mirror of `_unwrap_index`, for wire
+    values that always refer to something ALREADY SENT (a resend request naming one of our own
+    recent frames). While `cur` < 65536 this is the identity, so the wire is unchanged below the
+    wrap; past it the lookup keeps resolving instead of silently missing.
+    """
+    return cur - ((cur - idx_u16) & 0xFFFF)
+
+
 def is_keepalive_probe(raw: bytes) -> bool:
     """True iff `raw` is the camera's 24-byte IOTC keepalive (alive-check) probe.
 
@@ -3889,6 +3899,8 @@ class TUTKDirectSession:
                                              # underruns (measured 72ms vs the 64ms it plays at) -> breakage
         period = 1024.0 / rate               # AAC frame duration (== 64 ms at 16 kHz): feed at EXACTLY this
         finished = False
+        # REGRESSION SWITCH, NOT A TUNABLE: OFF (=0) reopens the talkback resend-lookup wrap death.
+        _talk_wrap = os.environ.get("CUBOAI_TALK_WRAP", "1") != "0"   # see the SACK-replay lookup below
         sent_buf = {}                        # talk_frag -> au, for resend on the camera's 0x09 SACK
         t0 = time.time()
         self._talk_stop = False              # cooperative stop flag (set by stop_audio())
@@ -3966,6 +3978,20 @@ class TUTKDirectSession:
                             if 0 < cnt < 256 and C != 0xFFFF:
                                 for k in range(min(cnt, (len(dec) - 50) // 2)):
                                     frag = (C + struct.unpack_from('<H', dec, 50 + 2 * k)[0]) & 0xFFFF
+                                    if _talk_wrap:
+                                        # talk_frag is MONOTONIC (it must never restart when a
+                                        # looped file wraps its content), so sent_buf's keys are
+                                        # unbounded — but the SACK entry decodes to a u16. Past
+                                        # 65536 frames (64 ms/frame => ~70 min of continuous or
+                                        # looping talkback) every sent_buf.get(u16) MISSES and
+                                        # talkback loss-recovery SILENTLY STOPS (resends_sent just
+                                        # stops rising; the wire stays well-formed, so nothing
+                                        # looks wrong). Lift the u16 BACKWARD into talk_frag's
+                                        # space — resends are always for already-sent frames, so
+                                        # the nearest match at-or-below the current frag is the
+                                        # right one. Below the wrap this is the identity, so the
+                                        # wire is unchanged.
+                                        frag = _unwrap_index_back(frag, talk_frag)
                                     au = sent_buf.get(frag)
                                     if au is not None:
                                         s.sendto(build_talk_audio(R, channel, self._seq, talk_relseq, frag, frag, au), cam)
