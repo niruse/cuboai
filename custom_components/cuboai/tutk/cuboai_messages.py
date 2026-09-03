@@ -1707,19 +1707,65 @@ def parse_feature_support(raw: bytes) -> dict:
     return d
 
 
+def _json_span(raw: bytes):
+    """Byte span of the FIRST complete {...} object in `raw`, or None.
+
+    Brace-counted, and string-aware so a brace inside a JSON string value does not
+    close the object. This exists because the response is a binary IOCTL blob with
+    the JSON embedded in it: the trailing bytes are counters and padding, and any
+    stray 0x7D ('}') among them made a greedy first-{ to last-} match span past the
+    end of the real object, so json.loads failed and the whole response was
+    discarded. Whether that happened depended on the counter values, which is why
+    it presented as an intermittent, self-healing parse failure rather than a
+    consistent one.
+    """
+    start = raw.find(b'{')
+    if start < 0:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == 0x5C:        # backslash
+                esc = True
+            elif ch == 0x22:        # closing quote
+                in_str = False
+            continue
+        if ch == 0x22:
+            in_str = True
+        elif ch == 0x7B:            # {
+            depth += 1
+        elif ch == 0x7D:            # }
+            depth -= 1
+            if depth == 0:
+                return start, i + 1
+    return None                     # truncated: no matching close brace
+
+
 def _extract_json(raw: bytes):
     """Pull the first {...} object out of a response blob, repairing the camera's bare
     (unquoted) dotted-quad IP values so json.loads accepts it. Returns dict or None."""
     import re, json
+
+    def _load(chunk: bytes):
+        txt = chunk.decode('latin1', 'replace')
+        txt = re.sub(r':\s*(\d{1,3}(?:\.\d{1,3}){3})\s*([,}\]])', r': "\1"\2', txt)  # quote bare IPs
+        try:
+            return json.loads(txt)
+        except Exception:
+            return None
+
+    span = _json_span(raw)
+    if span:
+        obj = _load(raw[span[0]:span[1]])
+        if obj is not None:
+            return obj
+    # Fall back to the historical greedy match so this can only ever parse MORE
+    # responses than before, never fewer.
     m = re.search(rb'\{.*\}', raw, re.S)
-    if not m:
-        return None
-    txt = m.group(0).decode('latin1', 'replace')
-    txt = re.sub(r':\s*(\d{1,3}(?:\.\d{1,3}){3})\s*([,}\]])', r': "\1"\2', txt)  # quote bare IPs
-    try:
-        return json.loads(txt)
-    except Exception:
-        return None
+    return _load(m.group(0)) if m else None
 
 def parse_session_stats(raw: bytes) -> dict:
     """GET_SESSION_STATS_RESP (0x0935) — UNDOCUMENTED. The camera's own per-session
