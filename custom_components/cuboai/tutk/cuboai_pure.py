@@ -248,29 +248,55 @@ def _block_transform(blk: bytes) -> bytes:
                        _ror32(r10, 11), _ror32(r9, 15))
 
 
-def transcode(plain: bytes) -> bytes:
-    """Full TUTK TransCodePartial: 16-byte block transform + tail XOR.
+def transcode(plain: bytes, swap_tail: bool = True) -> bytes:
+    """Full TUTK TransCodePartial: 16-byte block transform + tail XOR-and-Swap.
 
     This maps the real plaintext av-connect to the exact bytes that go on the
     wire. The account, password, header and every structured field live in full
     16-byte blocks, so they are transcoded by the block transform.
 
-    The trailing `len & 0xF` bytes are a plain XOR: `K16[i] ^ plain[i]`. TUTK has
-    a `Swap` byte-permutation applied to the tail for tail lengths 2/4/8, but the
-    IOTC SendMessage path used for these LAN frames does NOT apply it — every
-    frame type matches plain XOR (the 88-byte probe/ACK with trailer
-    `63041313040c0c63`, the 76-byte IOCTL request, the 598-byte av-connect, and
-    the IOCTL responses). Do NOT re-add Swap here — it corrupts the probe tail
-    and breaks connect.
+    The trailing `len & 0xF` bytes are `Swap(plain_tail XOR K16)` (see
+    `_tail_swap`). `swap_tail=False` reproduces the NO-Swap wire of the
+    pre-session SEARCH/broadcast frames (build_probe/build_ack/build_lan_query),
+    which are the only frames that skip it.
+
+    (An earlier revision of this file documented the tail as a plain XOR
+    *everywhere* and warned "do NOT re-add Swap — it breaks connect". That was
+    wrong for the DATA channel and is what mangled any frame whose tail length
+    is 2/4/8 — e.g. the 216-byte lullaby-schedule SET, tail 8. The nuance is:
+    Swap on the data channel, no Swap on the search/direct frames.)
     """
     n = len(plain)
     full = n - (n & 0xF)
     out = bytearray(n)
     for off in range(0, full, 16):
         out[off:off + 16] = _block_transform(plain[off:off + 16])
-    for i in range(full, n):
-        out[i] = _K16[i - full] ^ plain[i]
+    tl = n - full
+    if tl:
+        xored = bytes(_K16[i] ^ plain[full + i] for i in range(tl))
+        out[full:] = _tail_swap(xored, tl) if swap_tail else xored
     return bytes(out)
+
+
+# TUTK TransCodePartial / ReverseTransCodePartial apply a `Swap` byte-permutation
+# (lib 0x2714f0) to the partial-block TAIL, but ONLY for tail lengths 2/4/8 (identity
+# for every other length). Reversed from the .so and confirmed byte-for-byte against
+# the real lib via ctypes for ALL lengths: encode `wire_tail = Swap(plain_tail XOR K)`;
+# decode `plain_tail = Swap(wire_tail) XOR K` (Swap is an involution). This is why a
+# 148-byte schedule SET (216-byte frame, tail 8) whose duration lived in the tail read
+# back mangled when the tail was a plain XOR; tails 6/12 (av-connect, IOCTL GET) are
+# identity, so they were always correct.
+_TAIL_SWAP = {2: (1, 0), 4: (2, 3, 0, 1), 8: (7, 4, 3, 2, 1, 6, 5, 0)}
+
+
+def _tail_swap(buf, length):
+    """Apply the TransCodePartial tail `Swap` permutation (identity unless length is
+    2/4/8; an involution). Used by BOTH `transcode` and `inv_transcode` so the wire
+    encode/decode match native TransCodePartial / ReverseTransCodePartial exactly."""
+    perm = _TAIL_SWAP.get(length)
+    if perm is None:
+        return buf
+    return bytes(buf[j] for j in perm)
 
 
 def _rol32(v, r):
@@ -304,14 +330,19 @@ def _inv_block_transform(blk: bytes) -> bytes:
 
 
 def inv_transcode(wire: bytes) -> bytes:
-    """Full inverse of `transcode` (what the camera computes on receive)."""
+    """Full inverse of `transcode` — byte-identical to the native library's
+    `ReverseTransCodePartial` (lib 0x2720d0). The tail (len & 0xF == 2/4/8) is
+    un-Swapped then XOR'd: `plain_tail = Swap(wire_tail) XOR K16` (Swap is an
+    involution, so the same `_tail_swap` inverts the encode)."""
     n = len(wire)
     full = n - (n & 0xF)
     out = bytearray(n)
     for off in range(0, full, 16):
         out[off:off + 16] = _inv_block_transform(wire[off:off + 16])
-    for i in range(full, n):
-        out[i] = _K16[i - full] ^ wire[i]
+    tl = n - full
+    if tl:
+        swapped = _tail_swap(wire[full:], tl)      # involution: undo the encode-side Swap
+        out[full:] = bytes(_K16[i] ^ swapped[i] for i in range(tl))
     return bytes(out)
 
 
@@ -791,12 +822,12 @@ def _build_ls_plaintext(uid, R: int, ack: bool) -> bytes:
 
 def build_probe(uid: bytes, R: int) -> bytes:
     """88-byte LAN-search probe wire packet (transcode of the true plaintext)."""
-    return transcode(_build_ls_plaintext(uid, R, ack=False))
+    return transcode(_build_ls_plaintext(uid, R, ack=False), swap_tail=False)  # search: no Swap
 
 
 def build_ack(uid: bytes, R: int) -> bytes:
     """88-byte LAN-search ACK wire packet (probe with plaintext[64]=0x02)."""
-    return transcode(_build_ls_plaintext(uid, R, ack=True))
+    return transcode(_build_ls_plaintext(uid, R, ack=True), swap_tail=False)   # search: no Swap
 
 
 # ── IOTC LAN device-identity query (message type 0x0402) ──────────────────────
@@ -823,7 +854,7 @@ def build_lan_query(uid, R: int, mid: bytes = None) -> bytes:
     t[36:38] = struct.pack("<H", R & 0xFFFF)
     t[38:44] = mid if mid is not None else _CLIENT_FINGERPRINT
     t[44:52] = _LQ_TAIL8
-    return transcode(bytes(t))
+    return transcode(bytes(t), swap_tail=False)  # search/broadcast frame: no Swap on the tail
 
 
 def build_close(R: int, session_fp: bytes = None) -> bytes:
