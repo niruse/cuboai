@@ -159,3 +159,49 @@ def test_unreadable_schedule_still_writes_something_sane():
         media_player._execute_lullaby_cmd("uid", "acct", "pw", "192.0.2.10", "volume", None, 80, None)
     assert seen["volume"] == 80
     assert seen["timer"] == 0
+
+
+# --- play must not reset the volume -----------------------------------------
+
+def _run_play_cmd(volume, timer, sched_volume=70):
+    client = MagicMock()
+    client.get_lullaby_schedule.return_value = MagicMock(volume=sched_volume, timer_mode=0)
+    sess = MagicMock()
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=sess)
+    ctx.__exit__ = MagicMock(return_value=False)
+    seen = {}
+
+    def _build(vol, tmr, correlation_id=0):
+        seen["volume"], seen["timer"] = vol, tmr
+        return 2438, b""
+
+    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
+         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
+         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_lullaby_vol_duration", _build):
+        media_player._execute_lullaby_cmd(
+            "uid", "acct", "pw", "192.0.2.10", "play", "SOME-UUID", volume, timer
+        )
+    return seen
+
+
+def test_play_keeps_the_cameras_volume_when_none_is_supplied():
+    """Both callers pass volume=None; play must not silently reset it to 50."""
+    seen = _run_play_cmd(volume=None, timer=None, sched_volume=70)
+    assert seen["volume"] == 70
+
+
+def test_play_honours_an_explicit_volume():
+    seen = _run_play_cmd(volume=20, timer=None, sched_volume=70)
+    assert seen["volume"] == 20
+
+
+def test_play_with_no_timer_is_repeat_forever():
+    """The card path relies on this: HA enforces the duration and sends the stop."""
+    seen = _run_play_cmd(volume=None, timer=None)
+    assert seen["timer"] == 0
+
+
+def test_play_converts_minutes_to_the_cameras_seconds_encoding():
+    seen = _run_play_cmd(volume=None, timer=30)
+    assert seen["timer"] == 1800
