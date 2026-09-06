@@ -1144,6 +1144,10 @@ class CuboAICameraCard extends HTMLElement {
           const o = this.tsOverlay;
           if (!o) return;
           const v = this.content && this.content.video;
+          // Honor a live config change (the card editor preview re-runs
+          // setConfig on the same element): unchecking the option must stop
+          // the badge, not leave the interval painting it forever.
+          if (!(this._config && this._config.show_timestamp === true)) { o.style.display = 'none'; return; }
           // DVR playback has its own timecode on the scrub bar; the badge is
           // for the LIVE view only.
           if (!v || this._dvrPlaying) { o.style.display = 'none'; return; }

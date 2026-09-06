@@ -34,9 +34,12 @@ class TestOverlayAutoHide:
         assert "${bpmText} BPM" in CARD  # the badge itself still renders real data
 
     def test_badges_hide_when_state_is_dead(self):
-        """The shared liveness gate exists and both badges honor a hide branch."""
+        """The shared liveness gate exists and BOTH badges have their own hide
+        branch (a generic display='none' count would pass on unrelated modal/
+        form code — pin the exact elements)."""
         assert "sens.state !== 'unknown' && sens.state !== 'unavailable'" in CARD
-        assert CARD.count("style.display = 'none'") >= 2
+        assert "this.bpmOverlay.style.display = 'none'" in CARD
+        assert "this.envOverlay.style.display = 'none'" in CARD
 
     def test_overlay_toggles_default_on(self):
         """Absent keys must behave exactly like before (default ON): the guard
@@ -54,8 +57,10 @@ class TestMusicToggle:
 
 class TestTimestampBadge:
     def test_opt_in_only(self):
-        """#99 asked for opt-in; the badge must require an explicit true."""
-        assert "this._config.show_timestamp === true" in CARD
+        """#99 asked for opt-in; the badge must require an explicit true — both
+        at creation AND inside the tick, so a live config change (card editor
+        preview) stops the badge instead of leaving the interval painting it."""
+        assert CARD.count("this._config.show_timestamp === true") >= 2
 
     def test_driven_by_frame_progress_not_wall_clock(self):
         """The whole point: currentTime advancement is what feeds the badge."""
