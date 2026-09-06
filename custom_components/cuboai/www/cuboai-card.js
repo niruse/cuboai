@@ -116,6 +116,14 @@ class CuboAICameraCardEditor extends HTMLElement {
     set('#mute-select', c.default_mute_state || 'remember');
     set('#song-filter-select', c.default_song_filter || 'all');
     set('#playlist-filter-select', c.default_playlist_filter || 'all');
+    const check = (sel, on) => {
+      const el = this.querySelector(sel);
+      if (el) el.checked = on;
+    };
+    check('#show-env-toggle', c.show_env_overlay !== false);
+    check('#show-mat-toggle', c.show_mat_overlay !== false);
+    check('#show-music-toggle', c.show_music !== false);
+    check('#show-timestamp-toggle', c.show_timestamp === true);
   }
 
   set hass(hass) {
@@ -176,6 +184,29 @@ class CuboAICameraCardEditor extends HTMLElement {
         </select>
 
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
+          <label style="display: block; font-weight: 500; margin-bottom: 8px;">Card Sections:</label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+            <input type="checkbox" id="show-env-toggle">
+            <span>Temperature / humidity badge on the video</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+            <input type="checkbox" id="show-mat-toggle">
+            <span>Sleep-mat BPM badge on the video</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+            <input type="checkbox" id="show-music-toggle">
+            <span>Lullabies &amp; music section below the video</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="show-timestamp-toggle">
+            <span>Timestamp badge (freezes and turns red when the stream stalls)</span>
+          </label>
+          <p style="color: var(--secondary-text-color); font-size: 12px; margin-top: 8px;">
+            Badges auto-hide when their sensor has no data (mat / thermometer are optional accessories).
+          </p>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
           <label style="display: block; font-weight: 500; margin-bottom: 8px;">Video Compatibility:</label>
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="h264-toggle">
@@ -230,6 +261,22 @@ class CuboAICameraCardEditor extends HTMLElement {
     if (plFilter) {
       plFilter.value = this._config ? (this._config.default_playlist_filter || 'all') : 'all';
       plFilter.addEventListener('change', (e) => this._valueChanged(e));
+    }
+
+    // Section toggles (issues #99/#100). Defaults: everything on except the
+    // timestamp badge, which is opt-in.
+    for (const [id, key, dflt] of [
+      ['#show-env-toggle', 'show_env_overlay', true],
+      ['#show-mat-toggle', 'show_mat_overlay', true],
+      ['#show-music-toggle', 'show_music', true],
+      ['#show-timestamp-toggle', 'show_timestamp', false],
+    ]) {
+      const el = this.querySelector(id);
+      if (el) {
+        const v = this._config ? this._config[key] : undefined;
+        el.checked = v === undefined ? dflt : v !== false && v !== 'false';
+        el.addEventListener('change', (e) => this._valueChanged(e));
+      }
     }
 
     // Global song-cache controls (drive the shared switch entity / service,
@@ -312,6 +359,14 @@ class CuboAICameraCardEditor extends HTMLElement {
       newConfig.default_song_filter = target.value;
     } else if (target.id === "playlist-filter-select") {
       newConfig.default_playlist_filter = target.value;
+    } else if (target.id === "show-env-toggle") {
+      if (target.checked) delete newConfig.show_env_overlay; else newConfig.show_env_overlay = false;
+    } else if (target.id === "show-mat-toggle") {
+      if (target.checked) delete newConfig.show_mat_overlay; else newConfig.show_mat_overlay = false;
+    } else if (target.id === "show-music-toggle") {
+      if (target.checked) delete newConfig.show_music; else newConfig.show_music = false;
+    } else if (target.id === "show-timestamp-toggle") {
+      if (target.checked) newConfig.show_timestamp = true; else delete newConfig.show_timestamp;
     }
 
     // Use CustomEvent so `detail` is delivered reliably (a plain Event with a
@@ -339,6 +394,7 @@ class CuboAICameraCard extends HTMLElement {
     if (this._dvrWait) { clearInterval(this._dvrWait); this._dvrWait = null; }
     if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
+    if (this._tsClock) { clearInterval(this._tsClock); this._tsClock = null; }
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
 
@@ -579,7 +635,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.15';
+        const CARD_VERSION = 'v2.6.20';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -1064,6 +1120,56 @@ class CuboAICameraCard extends HTMLElement {
         this.appendChild(this.envOverlay);
       }
 
+      // ── Opt-in timestamp badge (issue #99, show_timestamp: true) ──────────
+      // Driven by FRAME PROGRESS, not a wall clock: a plain clock keeps ticking
+      // over a frozen frame, which is exactly the failure the badge exists to
+      // expose. While video.currentTime advances it shows the current time;
+      // when frames stop for >4s it freezes at the last-advance moment and
+      // turns red — a stale image now looks stale.
+      if (this._config && this._config.show_timestamp === true) {
+        if (!this.tsOverlay) {
+          this.tsOverlay = document.createElement('div');
+          this.tsOverlay.style.cssText = 'position: absolute !important; bottom: 60px !important; right: 16px !important; z-index: 2147483647 !important; color: white !important; text-shadow: 1px 1px 3px black !important; font-weight: bold !important; font-size: 14px !important; pointer-events: none !important; background: rgba(0,0,0,0.3) !important; padding: 4px 10px !important; border-radius: 12px !important; display: none; align-items: center;';
+          this.appendChild(this.tsOverlay);
+          this._tsLastMediaTime = -1;
+          this._tsLastAdvance = 0;
+        }
+        // (Re)arm separately from element creation: disconnectedCallback clears
+        // the interval but the element property survives a re-mount, so a
+        // create-only guard would leave the badge permanently frozen.
+        if (!this._tsClock) {
+        const STALL_MS = 4000;
+        const fmt = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        this._tsClock = setInterval(() => {
+          const o = this.tsOverlay;
+          if (!o) return;
+          const v = this.content && this.content.video;
+          // DVR playback has its own timecode on the scrub bar; the badge is
+          // for the LIVE view only.
+          if (!v || this._dvrPlaying) { o.style.display = 'none'; return; }
+          const now = Date.now();
+          // A reconnect swaps in a fresh MediaStream and currentTime restarts
+          // near 0 — far BELOW the remembered high-water mark. Without this
+          // re-anchor the badge would stay red forever after a recovery.
+          if (v.currentTime < this._tsLastMediaTime - 1) this._tsLastMediaTime = v.currentTime;
+          if (v.currentTime > this._tsLastMediaTime + 0.05) {
+            this._tsLastMediaTime = v.currentTime;
+            this._tsLastAdvance = now;
+          }
+          if (!this._tsLastAdvance) { o.style.display = 'none'; return; }  // nothing played yet
+          const stalled = now - this._tsLastAdvance > STALL_MS;
+          if (stalled) {
+            o.textContent = '⚠ ' + fmt(new Date(this._tsLastAdvance));
+            o.style.background = 'rgba(198,40,40,0.75)';
+          } else {
+            o.textContent = fmt(new Date(now));
+            o.style.background = 'rgba(0,0,0,0.3)';
+          }
+          o.style.display = 'flex';
+        }, 1000);
+        }
+      }
+
 
       customElements.whenDefined('webrtc-camera').then(() => {
         if (!this.content) {
@@ -1219,6 +1325,10 @@ class CuboAICameraCard extends HTMLElement {
           }
           this.musicBar = document.createElement('div');
           this.musicBar.style.cssText = 'display: flex; flex-direction: column; margin-top: 8px; padding: 12px; border-top: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12)); background: var(--card-background-color, #fff); border-radius: 0 0 12px 12px; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); color: var(--primary-text-color, #212121);';
+          // show_music:false hides the whole lullaby/music area (issue #100).
+          // The element is still BUILT (the build below is one long straight-line
+          // block; hiding beats restructuring it) — it just never displays.
+          if (this._config && this._config.show_music === false) this.musicBar.style.display = 'none';
 
           this.musicBar.innerHTML = `
             <style>
@@ -2156,6 +2266,11 @@ class CuboAICameraCard extends HTMLElement {
               if (player) player.appendChild(this.envOverlay);
               else root.appendChild(this.envOverlay);
             }
+
+            if (this.tsOverlay && (!this.tsOverlay.isConnected || (player && !player.contains(this.tsOverlay)))) {
+              if (player) player.appendChild(this.tsOverlay);
+              else root.appendChild(this.tsOverlay);
+            }
             
             if ((video || audio) && volumeIcon) {
               // Ensure the media matches our memory when it first loads
@@ -2512,45 +2627,55 @@ class CuboAICameraCard extends HTMLElement {
           }
       }
 
+      // A sensor that is missing/unknown/unavailable renders NOTHING, not "??":
+      // the mat and thermometer are sold separately, so on many cameras these
+      // entities simply do not exist and a permanent "?? BPM" floating on the
+      // video is noise (issue #100). The config flags are a hard off switch on
+      // top of that auto-hide (show_mat_overlay / show_env_overlay, default on).
+      const _live = (sens) => sens && sens.state !== 'unknown' && sens.state !== 'unavailable';
+
       if (this.bpmOverlay) {
-        let bpmText = "??";
-        if (bpmState && bpmState.state !== 'unknown' && bpmState.state !== 'unavailable') {
-            const parsed = parseFloat(bpmState.state);
-            bpmText = !isNaN(parsed) ? Math.round(parsed) : bpmState.state;
+        const wanted = !this._config || this._config.show_mat_overlay !== false;
+        if (wanted && _live(bpmState)) {
+          const parsed = parseFloat(bpmState.state);
+          const bpmText = !isNaN(parsed) ? Math.round(parsed) : bpmState.state;
+          this.bpmOverlay.innerHTML = `<ha-icon icon="mdi:heart-pulse" style="margin-right: 4px; color: #ff4a4a; --mdc-icon-size: 18px;"></ha-icon>${bpmText} BPM`;
+          this.bpmOverlay.style.display = 'flex';
+          this._currentBpmText = bpmText + " BPM";
+        } else {
+          this.bpmOverlay.style.display = 'none';
+          this._currentBpmText = "";
         }
-        this.bpmOverlay.innerHTML = `<ha-icon icon="mdi:heart-pulse" style="margin-right: 4px; color: #ff4a4a; --mdc-icon-size: 18px;"></ha-icon>${bpmText} BPM`;
-        this.bpmOverlay.style.display = 'flex';
-        this._currentBpmText = bpmText !== "??" ? bpmText + " BPM" : "";
       }
 
       if (this.envOverlay) {
+        const wanted = !this._config || this._config.show_env_overlay !== false;
         let envHtml = '';
-        let tempText = "??";
-        let tempUnit = "°C";
-        if (tempState && tempState.state !== 'unknown' && tempState.state !== 'unavailable') {
+        this._currentTempText = "";
+        this._currentHumiText = "";
+        if (wanted && _live(tempState)) {
             const parsed = parseFloat(tempState.state);
-            tempText = !isNaN(parsed) ? Math.round(parsed) : tempState.state;
+            const tempText = !isNaN(parsed) ? Math.round(parsed) : tempState.state;
+            let tempUnit = "°C";
             if (tempState.attributes.unit_of_measurement) {
                 tempUnit = tempState.attributes.unit_of_measurement.replace(/[^A-Za-z0-9°CF]/g, '');
             }
+            envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:thermometer" style="margin-right: 2px; color: #ff9800; --mdc-icon-size: 18px;"></ha-icon>${tempText}${tempUnit}</span>`;
+            this._currentTempText = tempText + tempUnit;
         }
-        envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:thermometer" style="margin-right: 2px; color: #ff9800; --mdc-icon-size: 18px;"></ha-icon>${tempText}${tempUnit}</span>`;
-        this._currentTempText = tempText !== "??" ? tempText + tempUnit : "";
-
-        let humiText = "??";
-        let humiUnit = "%";
-        if (humiState && humiState.state !== 'unknown' && humiState.state !== 'unavailable') {
+        if (wanted && _live(humiState)) {
             const parsed = parseFloat(humiState.state);
-            humiText = !isNaN(parsed) ? Math.round(parsed) : humiState.state;
-            if (humiState.attributes.unit_of_measurement) {
-                humiUnit = humiState.attributes.unit_of_measurement;
-            }
+            const humiText = !isNaN(parsed) ? Math.round(parsed) : humiState.state;
+            const humiUnit = (humiState.attributes.unit_of_measurement) || "%";
+            envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:water-percent" style="margin-right: 2px; color: #03a9f4; --mdc-icon-size: 18px;"></ha-icon>${humiText}${humiUnit}</span>`;
+            this._currentHumiText = humiText + humiUnit;
         }
-        envHtml += `<span style="display:flex;align-items:center;"><ha-icon icon="mdi:water-percent" style="margin-right: 2px; color: #03a9f4; --mdc-icon-size: 18px;"></ha-icon>${humiText}${humiUnit}</span>`;
-        this._currentHumiText = humiText !== "??" ? humiText + humiUnit : "";
-
-        this.envOverlay.innerHTML = envHtml;
-        this.envOverlay.style.display = 'flex';
+        if (envHtml) {
+          this.envOverlay.innerHTML = envHtml;
+          this.envOverlay.style.display = 'flex';
+        } else {
+          this.envOverlay.style.display = 'none';
+        }
       }
 
       if (!this._initialized) {
@@ -2677,6 +2802,7 @@ class CuboAICameraCard extends HTMLElement {
 
   updateMusicStatus(hass, speakerEntityId, lullabyEntityId) {
     if (!this.musicBar) return;
+    if (this._config && this._config.show_music === false) return;  // hidden section (issue #100)
     const speakerState = hass.states[speakerEntityId];
     const lullabyState = lullabyEntityId ? hass.states[lullabyEntityId] : null;
     
