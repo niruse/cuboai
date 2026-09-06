@@ -18,9 +18,9 @@ The behaviors:
 
 from pathlib import Path
 
-CARD = (
-    Path(__file__).parent.parent / "custom_components" / "cuboai" / "www" / "cuboai-card.js"
-).read_text(encoding="utf-8")
+CARD = (Path(__file__).parent.parent / "custom_components" / "cuboai" / "www" / "cuboai-card.js").read_text(
+    encoding="utf-8"
+)
 
 
 class TestOverlayAutoHide:
