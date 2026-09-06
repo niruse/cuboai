@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.20]
+
+### Fixed
+- **The card no longer shows "?? BPM" / "??°C" over the video when the sensor doesn't exist
+  (issue #100).** The sleep mat and smart thermometer are optional accessories, but the video
+  badges rendered unconditionally — a camera without them wore permanent "??" placeholders. A
+  badge whose sensor is missing/`unavailable`/`unknown` now hides itself; it reappears the
+  moment real data arrives. No configuration needed.
+
+### Added
+- **Card section toggles (issue #100)**, in the card editor and as YAML keys, all default ON so
+  existing setups are untouched: `show_env_overlay` (temperature/humidity badge),
+  `show_mat_overlay` (BPM badge), `show_music` (the whole lullabies/music area below the video).
+- **Opt-in timestamp badge (issue #99)**: `show_timestamp: true` puts a clock on the video that
+  is driven by **frame progress**, not wall time — while frames flow it shows the current time;
+  when the stream stalls for more than 4 seconds it freezes at the last-frame moment and turns
+  red. A plain clock keeps ticking over a frozen picture, which is exactly the failure this
+  exists to expose. Client-side only: no server transcode, no extra CPU on the stream path.
+
 ## [2.6.19]
 
 ### Changed
