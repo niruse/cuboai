@@ -635,7 +635,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.21';
+        const CARD_VERSION = 'v2.6.22';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -888,6 +888,7 @@ class CuboAICameraCard extends HTMLElement {
         const goLive = () => {
           frac = 1;
           this._dvrPlaying = false;
+          this._dvrShownMs = null;   // back to live: badge shows wall-clock again
           clearInterval(this._dvrWait); this._dvrWait = null;
           clearInterval(this._dvrClock); this._dvrClock = null;
           const live = cuboaiFindCameraState(this._hass, (this._config || {}).device_id);
@@ -1035,6 +1036,10 @@ class CuboAICameraCard extends HTMLElement {
                   drawRuler();
                 }
                 const shownMs = playedFrom + elapsed * 1000;
+                // Publish the footage moment so the on-video timestamp badge can
+                // show it during playback (the badge shows wall-clock only while
+                // live). Cleared in goLive().
+                this._dvrShownMs = shownMs;
                 const f = 1 - (edgeAt() - shownMs) / spanNow();
                 if (f >= 0 && f <= 1) {
                   frac = f;
@@ -1190,9 +1195,22 @@ class CuboAICameraCard extends HTMLElement {
           // setConfig on the same element): unchecking the option must stop
           // the badge, not leave the interval painting it forever.
           if (!(this._config && this._config.show_timestamp === true)) { o.style.display = 'none'; return; }
-          // DVR playback has its own timecode on the scrub bar; the badge is
-          // for the LIVE view only.
-          if (!v || this._dvrPlaying) { o.style.display = 'none'; return; }
+          if (!v) { o.style.display = 'none'; return; }
+          // During DVR playback show the FOOTAGE moment (published by the scrub
+          // clock), not wall-clock — the badge stays visible when you reverse
+          // into a recording instead of vanishing. Plain style: the stall/red
+          // logic is a "is the LIVE image frozen" signal and does not apply to
+          // recorded playback.
+          if (this._dvrPlaying) {
+            if (this._dvrShownMs) {
+              o.textContent = fmt(new Date(this._dvrShownMs));
+              o.style.background = 'rgba(0,0,0,0.3)';
+              o.style.display = 'flex';
+            } else {
+              o.style.display = 'none';   // playback starting, no footage moment yet
+            }
+            return;
+          }
           const now = Date.now();
           // A reconnect swaps in a fresh MediaStream and currentTime restarts
           // near 0 — far BELOW the remembered high-water mark. Without this

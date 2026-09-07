@@ -66,6 +66,15 @@ class TestTimestampBadge:
         """The whole point: currentTime advancement is what feeds the badge."""
         assert "v.currentTime > this._tsLastMediaTime" in CARD
 
+    def test_badge_shows_footage_time_during_playback(self):
+        """The badge stays visible when you reverse into a recording, showing
+        the FOOTAGE moment (published by the scrub clock as _dvrShownMs), not
+        wall-clock and not hidden."""
+        assert "this._dvrShownMs = shownMs" in CARD  # published by the scrub clock
+        assert "fmt(new Date(this._dvrShownMs))" in CARD  # rendered by the badge
+        # and it no longer blanks purely because playback is active
+        assert "if (!v || this._dvrPlaying) { o.style.display = 'none'; return; }" not in CARD
+
     def test_stall_turns_the_badge_red_at_the_freeze_time(self):
         assert "STALL_MS" in CARD
         assert "fmt(new Date(this._tsLastAdvance))" in CARD
