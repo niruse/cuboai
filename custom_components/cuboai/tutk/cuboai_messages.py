@@ -337,6 +337,23 @@ class CuboAIClient:
             raise ValueError(f"Unexpected response type {resp_type}")
         return LullabyVolDuration.parse(data)
 
+    def get_lullaby_schedule(self) -> dict:
+        """GET_LULLABY_SCHEDULE (2440) — the camera's lullaby volume + sleep-timer echo.
+
+        This is the ONLY readable source for the lullaby volume and timer:
+        GET_LULLABY_VOL_DURATION (2436) carries the current song and play state but
+        NOT the volume (see parse_lullaby's `'volume': None` note), and the write
+        (SET_LULLABY_VOL_DURATION, 2438) is a coupled struct that needs this echo to
+        preserve whichever field a caller leaves alone.
+
+        Returns parse_lullaby_schedule's dict: `volume`, `timer_mode` (seconds:
+        0 = repeat, 1800 = 30 min, 3600 = 60 min) and `timer` (its label).
+        """
+        resp_type, data = self.transport.ioctl(*build_get_lullaby_schedule())
+        if resp_type != IOTYPE_USER_GET_LULLABY_SCHEDULE_RESP:
+            raise ValueError(f"Unexpected response type {resp_type}")
+        return parse_lullaby_schedule(data)
+
     def get_cry_detect_status(self) -> dict:
         resp_type, data = self.transport.ioctl(*build_get_cry_detect())
         return parse_cry_detection(data)
