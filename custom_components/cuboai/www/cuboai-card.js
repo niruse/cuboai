@@ -635,7 +635,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.20';
+        const CARD_VERSION = 'v2.6.21';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -792,10 +792,13 @@ class CuboAICameraCard extends HTMLElement {
           // though -- paint() also runs on a 30s tick and on resize, and would
           // overwrite a time you were halfway through typing.
           if (document.activeElement !== when) when.value = asLocalInput(at);
-          // While playback runs, the 1s playback clock owns the stamp — the
-          // 30s repaint must not overwrite the running timecode with a static
-          // date label.
-          if (!this._dvrPlaying) {
+          // While playback runs the 1s clock owns the stamp, so the 30s repaint
+          // must not overwrite the running timecode with a static date label.
+          // BUT a DRAG is the exception: the label must PREVIEW the moment under
+          // the playhead as you move it, otherwise it keeps showing the playing
+          // position and a reverse-drag looks like "the time isn't changing"
+          // (the small picker box tracked the drag, the big label did not).
+          if (!this._dvrPlaying || this._dvrDragging) {
             stamp.textContent = live
               ? 'Live'
               : at.toLocaleString([], { month: '2-digit', day: '2-digit',
@@ -913,6 +916,19 @@ class CuboAICameraCard extends HTMLElement {
             return;
           }
           this._dvrDev = dev;   // lets the ruler find this camera's learned coverage
+          // A RE-SEEK (reverse, ±nudge, picker Go, chunk-continue) enters here
+          // while the PREVIOUS request's running clock is still ticking. Kill it
+          // now — it is otherwise cleared only inside the new wait's success
+          // branch below, so until then it keeps repainting the OLD time over
+          // this new "Loading" label. And null the per-seek currentTime baseline
+          // (see the clock): the recording stream reuses the same deterministic
+          // RTSP URL, so the <video> element is reused and its currentTime does
+          // NOT restart from the new target — the clock must re-baseline, or the
+          // label reads new-target + all the seconds the previous moment played.
+          clearInterval(this._dvrClock); this._dvrClock = null;
+          this._dvrBaseCT = null;
+          this._dvrOkNoted = false;
+          const seekTarget = at.getTime();
           // The service takes an absolute time as well as "10m"-style offsets.
           this._hass.callService('cuboai', 'play_recording', {
             device_id: dev,
@@ -940,7 +956,15 @@ class CuboAICameraCard extends HTMLElement {
             // always available -- it has to be, or its attributes never reach
             // the frontend and this card cannot find it at all -- so its state
             // says nothing about whether the producer has seeked yet.
-            const ready = st && st.attributes && st.attributes.playing_from;
+            //
+            // It must MATCH THIS seek's target, not merely be truthy: on a
+            // re-seek `playing_from` still holds the PREVIOUS request's time
+            // (the backend flips it old-value -> new-value with no null gap), so
+            // a truthiness test passed on the stale value and swapped onto the
+            // old footage before the new target was live. The service stores the
+            // exact epoch we sent, so this compares equal within a slack window.
+            const pf = st && st.attributes && st.attributes.playing_from;
+            const ready = pf && Math.abs(new Date(pf).getTime() - seekTarget) < 2000;
             if (ready) {
               clearInterval(this._dvrWait);
               this._dvrWait = null;
@@ -957,9 +981,24 @@ class CuboAICameraCard extends HTMLElement {
               // request time while minutes of footage roll by — which read
               // as "the time bar is wrong".
               const playedFrom = at.getTime();
+              // Seconds of footage actually played SINCE THIS seek. The <video>
+              // element is reused across seeks (same RTSP URL), so currentTime
+              // is an absolute, ever-growing counter, not "seconds since the
+              // target". Baseline it on first read and re-baseline if it ever
+              // drops (a re-dial that did reset the element) so elapsed always
+              // starts at 0 for this moment.
+              const elapsedOf = (vid) => {
+                if (!vid) return 0;
+                if (this._dvrBaseCT == null || vid.currentTime < this._dvrBaseCT) this._dvrBaseCT = vid.currentTime;
+                return Math.max(0, vid.currentTime - this._dvrBaseCT);
+              };
               clearInterval(this._dvrClock);
               this._dvrClock = setInterval(() => {
                 if (!this._dvrPlaying) { clearInterval(this._dvrClock); this._dvrClock = null; return; }
+                // Hold the running timecode while the user is scrubbing — paint()
+                // is showing the moment under the playhead, and this 1s tick must
+                // not fight it back to the playing position.
+                if (this._dvrDragging) return;
                 // The camera's SD card does not hold every minute (retention
                 // and coverage vary). A moment with no data makes the DVR
                 // producer exit empty and the player shows a raw error
@@ -976,7 +1015,7 @@ class CuboAICameraCard extends HTMLElement {
                   // 15-minute cap); only an error with nothing played means the
                   // SD card holds nothing there.
                   const vv = this.content && this.content.video;
-                  const playedS = vv ? vv.currentTime : 0;
+                  const playedS = elapsedOf(vv);
                   if (playedS > 5) {
                     playFrom(new Date(playedFrom + playedS * 1000));
                   } else {
@@ -989,12 +1028,13 @@ class CuboAICameraCard extends HTMLElement {
                 }
                 const v = this.content && this.content.video;
                 if (!v || v.readyState < 2) return;
-                if (!this._dvrOkNoted && v.currentTime > 5) {
+                const elapsed = elapsedOf(v);
+                if (!this._dvrOkNoted && elapsed > 5) {
                   this._dvrOkNoted = true;
                   covNote(dev, 'ok', playedFrom);
                   drawRuler();
                 }
-                const shownMs = playedFrom + v.currentTime * 1000;
+                const shownMs = playedFrom + elapsed * 1000;
                 const f = 1 - (edgeAt() - shownMs) / spanNow();
                 if (f >= 0 && f <= 1) {
                   frac = f;
@@ -1087,14 +1127,16 @@ class CuboAICameraCard extends HTMLElement {
         go.addEventListener('click', goToPicked);
         when.addEventListener('keydown', (e) => { if (e.key === 'Enter') goToPicked(); });
 
-        let dragging = false;
+        // Shared on the instance (not a local) so paint() and the 1s playback
+        // clock can see it and let the drag preview the seek target.
+        this._dvrDragging = false;
         track.addEventListener('pointerdown', (e) => {
-          dragging = true; track.setPointerCapture(e.pointerId); seek(e.clientX);
+          this._dvrDragging = true; track.setPointerCapture(e.pointerId); seek(e.clientX);
         });
-        track.addEventListener('pointermove', (e) => { if (dragging) seek(e.clientX); });
+        track.addEventListener('pointermove', (e) => { if (this._dvrDragging) seek(e.clientX); });
         const endDrag = (e) => {
-          if (!dragging) return;
-          dragging = false;
+          if (!this._dvrDragging) return;
+          this._dvrDragging = false;
           try { track.releasePointerCapture(e.pointerId); } catch (_) {}
           commit();
         };
@@ -1103,7 +1145,7 @@ class CuboAICameraCard extends HTMLElement {
 
         // Keep the ruler honest as time passes and on resize; while the user is
         // dragging, leave the playhead alone.
-        this._dvrTick = setInterval(() => { if (!dragging) { drawRuler(); paint(); } }, 30000);
+        this._dvrTick = setInterval(() => { if (!this._dvrDragging) { drawRuler(); paint(); } }, 30000);
         if (window.ResizeObserver) {
           this._dvrResize = new ResizeObserver(() => { drawRuler(); paint(); });
           this._dvrResize.observe(track);
