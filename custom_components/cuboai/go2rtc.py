@@ -381,9 +381,24 @@ class Go2RTCManager:
         desired_webrtc = 8556
         desired_api = DESIRED_API_PORT
 
+        pinned_rtsp = desired_rtsp != 8555  # user set a non-default port (NVR)
+
         def _resolve():
             rtsp = desired_rtsp
             if not _port_bindable(rtsp):
+                # start() has already reclaimed our own instance and waited (up
+                # to 30s) for a PINNED port to release, so if it is still
+                # unbindable here the holder is genuinely FOREIGN. Hop anyway as
+                # a last resort (an unbound RTSP listener fails silently — issue
+                # #80), but say so loudly: for a pinned port this is the only
+                # case that changes the NVR's URL, and it means a real conflict.
+                if pinned_rtsp:
+                    _LOGGER.error(
+                        "Configured RTSP port %s is held by another process and could not be "
+                        "reclaimed; falling back to a free port — your NVR/recorder URL will "
+                        "change. Choose an rtsp_port nothing else uses to keep it stable.",
+                        desired_rtsp,
+                    )
                 rtsp = find_available_port(start_port=desired_rtsp + 1)
             webrtc = desired_webrtc
             if webrtc == rtsp or not _port_bindable(webrtc):
@@ -601,6 +616,21 @@ class Go2RTCManager:
         previous_rtsp = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
         if previous_rtsp:
             await self._wait_for_port_free(int(previous_rtsp), timeout=15.0)
+
+        # A user who PINNED a non-default rtsp_port (the NVR case: the recorder
+        # stores the port, so a hop silently breaks recording until the URL is
+        # re-copied) must get that EXACT port back on every start. The reclaim
+        # above already SIGTERM/KILLed our own orphan by binary path, which
+        # frees whatever RTSP port it held; wait for the pinned port itself to
+        # release before _resolve_ports probes it, so it binds the pinned port
+        # instead of hopping to desired+1 and staying there. 30s (not 15s): a
+        # dying instance with a live consumer holds the listener longer, and the
+        # wait returns instantly once free so a clean start pays nothing. Skipped
+        # for the 8555 default — that belongs to HA's own go2rtc and never frees,
+        # so waiting on it would burn the timeout every start (issue #80/#84).
+        desired_rtsp = int(self._options.get("rtsp_port", 8555))
+        if desired_rtsp != 8555:
+            await self._wait_for_port_free(desired_rtsp, timeout=30.0)
 
         await self._resolve_ports()
         await self._resolve_codecs()

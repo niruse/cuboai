@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.24]
+
+### Fixed
+- **A pinned `rtsp_port` no longer hops to a different port on restart.** If you set a specific
+  RTSP port (the NVR case — the recorder stores the port, so a hop silently breaks recording), the
+  integration could self-heal *off* that port to the next one when its own dying instance from the
+  previous run briefly still held it during restart — and never return, so the port drifted
+  (e.g. 8557 → 8558) and stranded the recorder. On startup it now reclaims its own previous
+  instance and waits (up to 30s) for the *configured* port to release before binding, so a pinned
+  port is bound every time. The default port (8555, owned by Home Assistant's own go2rtc) still
+  self-heals immediately as before; a pinned port only ever falls back on a genuine *foreign*
+  conflict, and now logs a clear error when it does. This keeps `nvr_rtsp_url` (and the
+  `cuboai_stamped_` timestamp URL) stable so a recorder needs its URL copied only once.
+
 ## [2.6.23]
 
 ### Added
