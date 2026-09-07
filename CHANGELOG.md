@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.25]
+
+### Fixed
+- **HomeKit "No Response" on Cubo 3 (SW05) even after the v2.6.18 producer fix — the H.264
+  stream was above HomeKit's resolution limit (issue #85).** The Cubo 3's HEVC sensor is
+  2560×1440, so the `cuboai_h264_` compatibility transcode emitted 1440p / H.264 High level ~5.0.
+  HomeKit cameras top out at 1920×1080 / level 4.0, so the iOS client set up a full SRTP session
+  and then **silently refused the out-of-spec video** — a valid session with a black screen. The
+  `cuboai_h264_` stream is now capped at 1080p / High / level 4.0. It only downscales a source
+  *above* 1080p, so native-1080p cameras (Cubo 2 / CB02) are unaffected. This is the compatibility
+  stream by design; to record a 1440p camera at full resolution, point the NVR at the native
+  combined stream instead. (The RTSP `SETUP → 461 Unsupported Transport` some logs show is
+  unrelated and harmless — go2rtc's RTSP is TCP-only, so ffmpeg's default UDP attempt is refused
+  and it retries over TCP.)
+
 ## [2.6.24]
 
 ### Fixed

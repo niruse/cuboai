@@ -432,6 +432,18 @@ class TestHomeKitActuallyReceivesH264:
         # The untoggled camera is untouched.
         assert "cuboai_h264_CB02AAA" not in streams
 
+    def test_h264_stream_is_capped_to_homekit_limits(self):
+        """HomeKit refuses >1080p / >level 4.0; a Cubo 3 streams 1440p, which
+        gave a valid SRTP session but 'No Response'. The compatibility stream
+        must downscale a too-big source (no-op for <=1080p) and pin a
+        HomeKit-safe H.264 profile/level."""
+        src = _resolve({"h264_cameras": ["SW05BBB"]})["cuboai_h264_SW05BBB"][0]
+        # only shrinks a source ABOVE 1080p (native-1080p cameras untouched)
+        assert "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease" in src
+        assert "-profile:v high" in src
+        # plain -level:v is overridden by go2rtc's template; pin via x264-params
+        assert "-x264-params level=4.0" in src
+
     def test_the_h264_stream_never_spawns_a_second_camera_session(self):
         """The #85 invariant, which the reverted bb4bf13 broke.
 
