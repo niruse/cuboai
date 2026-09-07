@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.21]
+
+### Fixed
+- **DVR timeline: the timecode now follows the playhead when you reverse.** Dragging the scrub
+  bar backward while a recording was playing left the big time label stuck on the *playing*
+  position — only the small date box tracked the drag — so a reverse looked like "the time isn't
+  changing." The label now previews the moment under the playhead throughout the drag (and the
+  1-second playback clock stands down so it can't reclaim it), then loads that moment on release.
+  Verified live: dragging back reads the target time continuously and never blanks.
+- **DVR timeline: a second seek could show the wrong (offset) time.** The running clock measured
+  played-seconds from the video element, which is reused across seeks, so a re-seek added the
+  previous moment's elapsed time to the new target. It now re-baselines per seek (robust whether
+  the player resets its clock or not), clears the previous clock immediately on a new seek, and
+  waits for the recording entity's `playing_from` to match the newly requested time before
+  switching — instead of swapping on the stale previous value.
+- **Card: unchecking the timestamp badge in the editor now takes effect immediately** (the badge's
+  1-second updater re-checks the option each tick instead of running until reload).
+
 ## [2.6.20]
 
 ### Fixed

@@ -128,6 +128,19 @@ class TestRecordingAttributeContract:
         assert attrs["playing_from"].startswith("2026-")
         assert attrs["device_id"] == "DEV1"
 
+    def test_playing_from_updates_on_a_second_seek(self):
+        """The card keys its readiness gate on playing_from MATCHING the new
+        target, so a re-seek must move the attribute to the new epoch — not
+        leave the old one (the reverse-re-seek bug, v2.6.21)."""
+        rec = _make_recording()
+        rec.set_playback("rtsp://127.0.0.1:8554/x", 1_770_000_000)
+        first = rec.extra_state_attributes["playing_from"]
+        # Same deterministic URL, different moment — exactly the re-seek case.
+        rec.set_playback("rtsp://127.0.0.1:8554/x", 1_770_003_600)
+        second = rec.extra_state_attributes["playing_from"]
+        assert second != first
+        assert second.startswith("2026-")
+
 
 # =============================================================================
 # Static guards on the card
@@ -254,6 +267,55 @@ class TestCardKeepsPlaybackInPlace:
         """A fixed 15-minute tick is 288 ticks across three days."""
         code = _card_code()
         assert "STEPS.find" in code and "MIN_PX" in code
+
+    def test_reseek_timecode_rebaselines_currenttime(self):
+        """The reverse-re-seek bug (v2.6.21): the <video> element is reused
+        across seeks (same deterministic RTSP URL), so currentTime is an
+        absolute counter, not seconds-since-target. The running clock must
+        subtract a per-seek baseline, and never anchor the stamp on bare
+        currentTime, or a re-seek shows new-target + all prior play seconds."""
+        code = _card_code()
+        # A per-seek baseline, reset in playFrom and applied in the clock.
+        assert "this._dvrBaseCT = null" in code
+        assert "vid.currentTime - this._dvrBaseCT" in code
+        # The stamp is anchored on the re-baselined elapsed, not raw currentTime.
+        assert "playedFrom + elapsed * 1000" in code
+        assert "playedFrom + v.currentTime * 1000" not in code
+
+    def test_reseek_clears_the_previous_running_clock(self):
+        """playFrom must kill the prior _dvrClock at entry, not only inside the
+        new wait's success branch — otherwise the stale clock repaints the old
+        time over the new 'Loading' label during the seek window."""
+        code = _card_code()
+        play_from = code[code.index("const playFrom =") :]
+        head = play_from[: play_from.index("let waited = 0;")]
+        assert "clearInterval(this._dvrClock); this._dvrClock = null;" in head
+
+    def test_readiness_gate_matches_the_new_target(self):
+        """A re-seek leaves playing_from at the PREVIOUS truthy value (the
+        backend flips old->new with no null gap), so a truthiness test swaps
+        onto stale footage. The gate must compare playing_from to this seek's
+        requested time within a slack window."""
+        code = _card_code()
+        assert "new Date(pf).getTime() - seekTarget" in code
+        assert "< 2000" in code
+
+    def test_drag_previews_the_target_time(self):
+        """The reported symptom: reversing by DRAGGING the scrub bar kept the
+        big label on the playing position instead of the moment under the
+        playhead (only the small picker box followed). paint() must show the
+        target during a drag even while playing, and the 1s clock must yield to
+        it — both keyed off the shared this._dvrDragging flag."""
+        code = _card_code()
+        assert "!this._dvrPlaying || this._dvrDragging" in code
+        # the running clock stands down during a drag
+        assert "if (this._dvrDragging) return;" in code
+        # the flag is on the instance (so paint/clock can see it), set on
+        # pointerdown and cleared before commit
+        assert "this._dvrDragging = true;" in code
+        assert "this._dvrDragging = false;" in code
+        # never resurrect a function-local `dragging` that paint() can't see
+        assert "let dragging = false;" not in code
 
 
 # =============================================================================

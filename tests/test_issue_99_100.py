@@ -105,4 +105,14 @@ class TestEditor:
 
 class TestVersions:
     def test_card_badge_matches_release(self):
-        assert "const CARD_VERSION = 'v2.6.20';" in CARD
+        """The badge painted on the ruler must match the integration version,
+        so a shipped card is never mistaken for an older one. Derived from the
+        manifest so it needs no edit per release — only that the two agree."""
+        import json
+
+        manifest = json.loads(
+            (Path(__file__).parent.parent / "custom_components" / "cuboai" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert f"const CARD_VERSION = 'v{manifest['version']}';" in CARD
