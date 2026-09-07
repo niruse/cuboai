@@ -169,6 +169,78 @@ class TestApiPortFallback:
 
 
 # =============================================================================
+# A user-pinned rtsp_port is sticky: it must not self-heal off the port an NVR
+# stores (the port kept hopping 8557->8558 and stranding the recorder)
+# =============================================================================
+
+
+class TestPinnedRtspPortIsSticky:
+    @pytest.mark.asyncio
+    async def test_pinned_port_is_kept_when_bindable(self):
+        hass = _make_hass()
+        manager = go2rtc_module.Go2RTCManager(hass)
+        manager.update_streams([], {"rtsp_port": 8557})
+        # every port bindable -> the pinned port must be used verbatim
+        with patch.object(go2rtc_module, "_port_bindable", return_value=True):
+            await manager._resolve_ports()
+        assert manager._rtsp_port == 8557
+        assert hass.data[DOMAIN]["rtsp_port_effective"] == 8557
+
+    @pytest.mark.asyncio
+    async def test_pinned_port_falls_back_and_logs_only_on_a_foreign_conflict(self, caplog):
+        hass = _make_hass()
+        manager = go2rtc_module.Go2RTCManager(hass)
+        manager.update_streams([], {"rtsp_port": 8557})
+        # 8557 stays unbindable through the probe (a genuine foreign holder,
+        # since start() has already reclaimed our own instance) -> hop + error.
+        bindable = lambda p: p != 8557  # noqa: E731
+        with (
+            patch.object(go2rtc_module, "_port_bindable", side_effect=bindable),
+            patch.object(
+                sys.modules["custom_components.cuboai.utils"],
+                "find_available_port",
+                side_effect=lambda start_port, max_port=8600: start_port,
+            ),
+            caplog.at_level("ERROR"),
+        ):
+            await manager._resolve_ports()
+        assert manager._rtsp_port == 8558
+        assert any("Configured RTSP port 8557" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_default_8555_still_self_heals_without_error(self, caplog):
+        hass = _make_hass()
+        manager = go2rtc_module.Go2RTCManager(hass)
+        manager.update_streams([], {})  # no rtsp_port -> default 8555
+        bindable = lambda p: p != 8555  # noqa: E731
+        with (
+            patch.object(go2rtc_module, "_port_bindable", side_effect=bindable),
+            patch.object(
+                sys.modules["custom_components.cuboai.utils"],
+                "find_available_port",
+                side_effect=lambda start_port, max_port=8600: start_port,
+            ),
+            caplog.at_level("ERROR"),
+        ):
+            await manager._resolve_ports()
+        assert manager._rtsp_port == 8556
+        # the loud "your NVR URL will change" error is for PINNED ports only
+        assert not any("Configured RTSP port" in r.message for r in caplog.records)
+
+    def test_start_waits_on_the_pinned_desired_port_but_not_on_8555(self):
+        """The fix that stops the hop lives in start(): it must wait for the
+        pinned port to release (so our own dying instance can't force a hop),
+        and must NOT wait on the 8555 default (HA's own go2rtc owns it forever,
+        waiting would burn the timeout every start)."""
+        import inspect
+
+        src = inspect.getsource(go2rtc_module.Go2RTCManager.start)
+        assert 'desired_rtsp = int(self._options.get("rtsp_port", 8555))' in src
+        assert "if desired_rtsp != 8555:" in src
+        assert "_wait_for_port_free(desired_rtsp, timeout=30.0)" in src
+
+
+# =============================================================================
 # Camera entities go quiet when go2rtc is down
 # =============================================================================
 
