@@ -192,6 +192,37 @@ class Go2RTCManager:
                     f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20",
                 ]
 
+            # Optional per-camera RTSP timestamp burn-in (opt-in). Burns the
+            # wall-clock time into the video IMAGE so an NVR's recordings show
+            # when each frame was captured. This is the only stream carrying a
+            # video FILTER: drawtext cannot ride a 'copy' leg, so it must
+            # transcode — hence a DEDICATED stream that only the NVR URL points
+            # at (const.nvr_stream_name). The card (WebRTC) and HomeKit keep the
+            # passthrough combined stream, so the live view is neither restyled
+            # nor forced through a transcode, and only the NVR consumer pays the
+            # CPU, only while connected. Safe under the #85 one-engine invariant:
+            # this declares no exec — its single source is a cross-reference to
+            # the combined stream's existing producer, exactly like cuboai_h264_.
+            #
+            # Wall-clock is correct because this is the LIVE stream (what an NVR
+            # records). The DVR playback stream is deliberately NOT stamped: it
+            # replays past footage, so '%{localtime}' (now) would be wrong there.
+            #
+            # go2rtc's ffmpeg source passes the raw '-vf' filter to the nested
+            # ffmpeg via '#raw=' (verified on go2rtc 1.9.14). The drawtext value
+            # has no spaces so it stays a single ffmpeg arg; the bundled font is
+            # referenced by absolute path (no system font is guaranteed present).
+            if dev_id in (self._options.get("rtsp_timestamp_cameras") or []):
+                font = os.path.join(os.path.dirname(__file__), "bin", "timestamp-font.ttf")
+                drawtext = (
+                    f"drawtext=fontfile={font}:text=%{{localtime}}"
+                    ":x=w-tw-12:y=h-th-12:fontsize=28:fontcolor=white"
+                    ":box=1:boxcolor=black@0.45:boxborderw=8"
+                )
+                self._streams[f"cuboai_stamped_{dev_id}"] = [
+                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw=-vf {drawtext}",
+                ]
+
             # Recorded footage from the camera's own DVR. Declared here rather
             # than added over go2rtc's API, which rejects `exec:` sources (it
             # would be a remote-execution hole). Which moment to play is passed

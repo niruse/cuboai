@@ -494,6 +494,19 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             cv.multi_select(h264_options)
         )
 
+        # Burn the wall-clock time into the RTSP video image for the checked
+        # cameras, so an NVR's recordings show when each frame was captured.
+        # Opt-in: it forces a transcode of that camera's NVR stream (extra CPU
+        # while the NVR is connected). Only the NVR URL is affected — the live
+        # card and HomeKit keep the un-stamped passthrough stream. Same option
+        # values as above (per-camera).
+        schema[
+            vol.Optional(
+                "rtsp_timestamp_cameras",
+                default=self.config_entry.options.get("rtsp_timestamp_cameras", []),
+            )
+        ] = cv.multi_select(h264_options)
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),

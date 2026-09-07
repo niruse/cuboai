@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.23]
+
+### Added
+- **RTSP timestamp burn-in for NVR recordings (opt-in, per camera).** A new **RTSP timestamp**
+  option (Options → the same per-camera checklist as the H.264 toggle) draws the current time
+  into the RTSP video image, so an NVR's recordings show when each frame was captured. When on,
+  `nvr_rtsp_url` points at a dedicated `cuboai_stamped_<device id>` stream (re-copy the URL into
+  your recorder). It's opt-in because it transcodes the NVR stream (extra CPU while the recorder
+  is connected); the live card and HomeKit keep the un-stamped passthrough stream, and the card's
+  own `show_timestamp` badge covers the live view. Not applied to recorded-playback scrubbing
+  (that replays past footage, where a "now" clock would be wrong). Ships a bundled font so it does
+  not depend on any system font being present.
+
 ## [2.6.22]
 
 ### Changed

@@ -549,3 +549,72 @@ class TestHomeKitActuallyReceivesH264:
         cam._kick_warm_hold("cuboai_h264_DEV1")
         assert len(created) == 1, "a live task must be reused, not duplicated"
         assert cam._warm_hold_deadline >= first_deadline
+
+
+# =============================================================================
+# RTSP timestamp burn-in (opt-in) — the stamped stream for NVR recordings
+# =============================================================================
+
+
+class TestRtspTimestampStream:
+    """A dedicated `cuboai_stamped_<id>` transcode with the time drawn into the
+    image, isolated to the NVR path so the card/HomeKit keep the passthrough
+    live stream. It must not re-open a camera session (issue #85 invariant)."""
+
+    def test_no_stamped_stream_when_option_off(self):
+        streams = _resolve({})
+        assert not any(k.startswith("cuboai_stamped_") for k in streams)
+
+    def test_stamped_stream_only_for_opted_in_camera(self):
+        streams = _resolve({"rtsp_timestamp_cameras": ["SW05BBB"]})
+        assert "cuboai_stamped_SW05BBB" in streams
+        assert "cuboai_stamped_CB02AAA" not in streams
+
+    def test_stamped_stream_shape(self):
+        src = _resolve({"rtsp_timestamp_cameras": ["CB02AAA"]})["cuboai_stamped_CB02AAA"]
+        assert len(src) == 1
+        s = src[0]
+        # a cross-reference transcode of combined (NOT a second engine)
+        assert s.startswith("ffmpeg:cuboai_combined_CB02AAA#")
+        assert "exec:" not in s and "cuboai_stream_video.py" not in s
+        # the drawtext filter, passed as raw -vf, with wall-clock + bundled font
+        assert "#raw=-vf drawtext=" in s
+        assert "text=%{localtime}" in s
+        assert "timestamp-font.ttf" in s
+        assert "#timeout=20" in s
+
+    def test_stamped_stream_adds_no_second_video_engine(self):
+        """The #85 invariant: exactly one cuboai_stream_video.py exec per camera
+        even with the stamped stream present."""
+        streams = _resolve({"rtsp_timestamp_cameras": ["SW05BBB"]})
+        video_execs = [
+            s
+            for name, srcs in streams.items()
+            if name.endswith("SW05BBB")
+            for s in srcs
+            if s.startswith("exec:") and "cuboai_stream_video.py" in s
+        ]
+        assert len(video_execs) == 1
+
+    def test_bundled_font_exists(self):
+        assert (COMPONENT / "bin" / "timestamp-font.ttf").is_file()
+
+    def test_nvr_stream_name_maps_only_when_opted_in(self):
+        from custom_components.cuboai.const import live_stream_name, nvr_stream_name
+
+        assert nvr_stream_name("DEV1", {}) == "cuboai_combined_DEV1"
+        assert nvr_stream_name("DEV1", {"rtsp_timestamp_cameras": ["DEV1"]}) == "cuboai_stamped_DEV1"
+        # live-view name must never follow the timestamp option
+        assert live_stream_name("DEV1", {"rtsp_timestamp_cameras": ["DEV1"]}) == "cuboai_combined_DEV1"
+
+    def test_only_the_nvr_url_uses_the_stamped_stream(self):
+        """sensor.py must route only nvr_rtsp_url through nvr_stream_name; the
+        plain rtsp_url / stream_id stay on live_stream_name."""
+        code = "\n".join(
+            line
+            for line in (COMPONENT / "sensor.py").read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#")
+        )
+        assert "nvr_stream_name(self._device_id" in code
+        # the non-NVR rtsp_url is still built from the live stream name
+        assert 'f"rtsp://{auth}127.0.0.1:{rtsp_port}/{stream}"' in code
