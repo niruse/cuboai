@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.22]
+
+### Changed
+- **The on-video timestamp badge now stays visible during DVR playback**, showing the footage
+  moment being played instead of vanishing when you reverse into a recording (`show_timestamp`).
+  It reads the same footage time the scrub bar shows; the stall/red treatment remains a live-only
+  "is the picture frozen" signal.
+
 ## [2.6.21]
 
 ### Fixed
