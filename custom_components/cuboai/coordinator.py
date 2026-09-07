@@ -272,18 +272,25 @@ def _fetch_local_data(
                         data["lullaby_song"] = ls.current_song_uuid
 
                         try:
+                            # get_lullaby_schedule() did not exist on CuboAIClient at all,
+                            # so this raised AttributeError on EVERY poll. The except below
+                            # swallowed it and the old hardcoded `= 50` fallback made the
+                            # result look like a real reading — the lullaby volume Home
+                            # Assistant showed was never once the camera's.
                             sched = client.get_lullaby_schedule()
-                            data["lullaby_volume"] = sched.volume
+                            vol = sched.get("volume")
+                            if vol is not None:
+                                data["lullaby_volume"] = vol
                             # The camera's ACTUAL sleep timer, echoed on this same
                             # response (offset 8): 0 = repeat forever, 1800 = 30 min,
                             # 3600 = 60 min. It was being read and thrown away, so the
                             # Lullaby Timer number had nothing to reconcile against and
                             # showed only whatever Home Assistant last set locally —
                             # "30 minutes" while the camera was actually on repeat.
-                            data["lullaby_timer_name"] = sched.timer_name
-                            data["lullaby_timer_minutes"] = (
-                                sched.timer_mode // 60 if sched.timer_mode else 0
-                            )
+                            timer_mode = sched.get("timer_mode")
+                            if timer_mode is not None:
+                                data["lullaby_timer_name"] = sched.get("timer")
+                                data["lullaby_timer_minutes"] = timer_mode // 60 if timer_mode else 0
                         except Exception as e:
                             # Do NOT invent a volume here. The previous fallback wrote a
                             # hardcoded 50, which the merge in _fetch_all then treated as
