@@ -308,7 +308,26 @@ type: custom:cuboai-camera-card
 show_timeline: true          # false hides the scrub bar entirely
 timeline_hours: 18           # span of the bar; adjust to your card's retention
 timeline_play_seconds: 900   # how much footage one request plays
+show_timestamp: false        # on-video clock, bottom-right (see below)
+show_mat_overlay: true       # sleep-mat BPM badge (auto-hides with no mat)
+show_env_overlay: true       # temperature/humidity badge (auto-hides with no data)
+show_music: true             # false hides the lullabies/music section
 ```
+
+**`show_timestamp`** draws a clock onto the video, bottom-right. It is driven by
+**frame progress, not a wall clock**, so a frozen picture is obvious rather than
+hidden behind a ticking clock:
+
+- **Live view:** shows the current time while frames flow; if the stream stalls
+  for more than ~4 seconds it **freezes at the last-frame moment and turns red**,
+  so a stale image looks stale.
+- **Reverse / recorded playback:** shows the **footage time** you are watching —
+  it follows the moment under the playhead as you scrub back, matching the scrub
+  bar's own running label, and returns to the live clock when you press LIVE.
+
+This is the card's own overlay (browser-side). To bake the time into the RTSP
+stream an NVR records, use the separate **RTSP timestamp** option instead — see
+[the RTSP section](#optional-burn-the-time-into-the-recording).
 
 **The bar clamps itself to what actually plays.** The camera prunes its
 oldest recordings as the SD card fills — measured live, the playable window
@@ -415,10 +434,16 @@ the URL into your recorder** after enabling it.
 
 It is opt-in because it forces a transcode of the NVR stream (extra CPU on the HA
 host, only while the recorder is connected). The live card and HomeKit are
-unaffected — they keep the un-stamped passthrough stream, and the card has its
-own on-video clock (`show_timestamp`). The burn-in applies to the live/NVR stream
-only; recorded-playback (DVR scrubbing in the card) is not stamped, because it
-replays past footage where a "now" clock would be wrong.
+unaffected — they keep the un-stamped passthrough stream; if you want a clock in
+the card's own view, use `show_timestamp` (above), which correctly shows the
+footage time during recorded playback too.
+
+This RTSP burn-in is **live-stream only**: it writes the real wall-clock time onto
+the frames as they are captured, which is exactly what an NVR recording needs. It
+is deliberately not applied to the DVR-playback stream — that replays *past*
+footage, so a "now" clock burned into it would be wrong. (The card's
+`show_timestamp` overlay handles playback correctly by showing the footage time,
+because it is a browser overlay that knows which moment is on screen.)
 
 ### 3. Two things that are not what you would guess
 
