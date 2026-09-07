@@ -188,8 +188,27 @@ class Go2RTCManager:
             #      the engine's ~10s cold start plus the up-to-one-GOP wait
             #      for a decodable keyframe instead of dying into a 404.
             if force_h264:
+                # Cap at 1080p / H.264 High level 4.0 for HomeKit (and HLS).
+                # HomeKit cameras top out at 1920x1080 (~level 4.0); a Cubo 3
+                # (SW05) HEVC sensor streams 2560x1440, so this transcode was
+                # emitting 1440p High level ~5.0. HomeKit then sets up a full
+                # SRTP session and SILENTLY refuses the out-of-spec video — a
+                # valid session with nothing on screen, i.e. "No Response"
+                # (issue #85, after the v2.6.18 producer fix). scale=min(...)
+                # with force_original_aspect_ratio=decrease only shrinks a
+                # source ABOVE 1080p, so a native-1080p camera (Cubo 2 / CB02)
+                # is byte-for-byte unaffected. This is the COMPATIBILITY stream
+                # (that is why it exists); full-resolution recording of a 1440p
+                # camera should point its NVR at the native combined stream,
+                # which stays untouched. Verified on go2rtc 1.9.14: the plain
+                # -level:v arg is overridden by go2rtc's template, so the level
+                # is pinned via -x264-params (ffprobe out: High / level 4.0).
+                hk = (
+                    "-vf scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
+                    " -profile:v high -x264-params level=4.0"
+                )
                 self._streams[f"cuboai_h264_{dev_id}"] = [
-                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20",
+                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw={hk}",
                 ]
 
             # Optional per-camera RTSP timestamp burn-in (opt-in). Burns the
