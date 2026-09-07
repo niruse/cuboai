@@ -405,6 +405,21 @@ the two-way-audio (PCMA backchannel) track, and several NVRs — Hikvision and
 HiLook in particular — reject a stream with a sendonly audio media instead of
 just ignoring it.
 
+### Optional: burn the time into the recording
+
+**Options → RTSP timestamp** (a per-camera checklist, like the H.264 toggle):
+check a camera to draw the current time into the RTSP video image, so your
+NVR's recordings show when each frame was captured. When it's on, `nvr_rtsp_url`
+automatically points at a dedicated `cuboai_stamped_<device id>` stream — **re-copy
+the URL into your recorder** after enabling it.
+
+It is opt-in because it forces a transcode of the NVR stream (extra CPU on the HA
+host, only while the recorder is connected). The live card and HomeKit are
+unaffected — they keep the un-stamped passthrough stream, and the card has its
+own on-video clock (`show_timestamp`). The burn-in applies to the live/NVR stream
+only; recorded-playback (DVR scrubbing in the card) is not stamped, because it
+replays past footage where a "now" clock would be wrong.
+
 ### 3. Two things that are not what you would guess
 
 - **The port is whatever go2rtc actually bound — read it, don't assume it.**

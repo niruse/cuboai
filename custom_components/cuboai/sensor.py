@@ -4,7 +4,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, live_stream_name
+from .const import DOMAIN, live_stream_name, nvr_stream_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -544,7 +544,13 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
                 host = urlparse(get_url(self.hass, allow_external=False, allow_ip=True)).hostname
             except Exception:
                 pass
-            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/{stream}"
+            # The NVR records the stamped stream when the RTSP-timestamp option
+            # is on for this camera (time burned into the image); otherwise the
+            # normal live stream. Only the NVR URLs use this — rtsp_url /
+            # web_player_url / stream_id above stay on the passthrough live
+            # stream so the card and HomeKit are unaffected.
+            nvr_stream = nvr_stream_name(self._device_id, self._entry_options())
+            base = f"rtsp://{auth}{host or '<HA-IP>'}:{rtsp_port}/{nvr_stream}"
             attrs["nvr_rtsp_url"] = base
             attrs["nvr_rtsp_url_video_only"] = base + "?video"
             attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"
