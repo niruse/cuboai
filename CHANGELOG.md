@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.31]
+
+### Changed
+- **Pressing play no longer installs software.** When a YouTube or Spotify item failed to load, the
+  integration ran `pip install --upgrade yt-dlp` and told you to restart Home Assistant. It did that
+  on *every* failure, so it changed the Home Assistant environment as a side effect of pressing play,
+  ran a network install while the request waited — and the advice was almost always wrong: the usual
+  causes are a private, removed or region-locked video, none of which an upgrade can fix. Meanwhile
+  the message YouTube actually returned was buried behind the upgrade notice.
+
+  Playback now reports the real reason instead. A video that simply cannot be fetched (private,
+  removed, age- or region-restricted, or a playlist that no longer exists) is logged as a plain
+  warning naming the item and what YouTube said. Anything else is logged as an error, with the hint
+  that if it affects *every* video then yt-dlp likely needs updating — something you do by updating
+  the integration or Home Assistant, not something the integration will now do behind your back.
+
+  The same applies to the old "yt-dlp is missing, install it" path: yt-dlp is a declared requirement
+  that Home Assistant installs, so if it is genuinely absent the integration now says the environment
+  is damaged rather than quietly pip-installing into it.
+
 ## [2.6.30]
 
 ### Fixed

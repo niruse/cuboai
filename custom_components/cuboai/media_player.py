@@ -21,6 +21,27 @@ from .tutk.cuboai_messages import LULLABY_CATALOG
 
 _LOGGER = logging.getLogger(__name__)
 
+#: yt-dlp messages that mean "this particular item cannot be fetched" rather than
+#: "the integration is broken". Separating them keeps a private or region-locked
+#: video from being reported as a fault the user should go and fix.
+_YT_CONTENT_ERROR_MARKERS = (
+    "private video",
+    "video unavailable",
+    "video is unavailable",
+    "removed by the uploader",
+    "account associated with this video has been terminated",
+    "not available in your country",
+    "members-only",
+    "sign in to confirm your age",
+    "does not exist",
+)
+
+
+def _is_yt_content_error(message: str) -> bool:
+    """Whether a yt-dlp failure is about the CONTENT, not about us."""
+    lowered = str(message).lower()
+    return any(marker in lowered for marker in _YT_CONTENT_ERROR_MARKERS)
+
 
 def _get_timer_minutes(hass, unique_id: str) -> int:
     """Read a CuboAI number-entity timer value (minutes) by its unique_id.
@@ -422,11 +443,18 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 try:
                     import yt_dlp
                 except ImportError:
-                    import subprocess
-                    import sys
-
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
-                    import yt_dlp
+                    # yt-dlp is a manifest requirement, so Home Assistant installs
+                    # it before this integration is ever loaded. Reaching here means
+                    # the environment is broken, and pip-installing into it from a
+                    # worker thread (as this used to do) is not a repair — it just
+                    # hides the breakage behind a slow, surprising side effect.
+                    _LOGGER.error(
+                        "yt-dlp is not installed, so YouTube/Spotify playback cannot work. "
+                        "It is listed in the integration's requirements, so this usually means "
+                        "the Home Assistant environment is damaged — reinstall the integration "
+                        "or restart Home Assistant to let it install requirements again."
+                    )
+                    return None
 
                 ydl_opts = {
                     "format": "bestaudio/best",
@@ -467,21 +495,28 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                             info = info["entries"][0]
                         return info.get("url", media_id)
                 except Exception as e:
-                    import logging
-
-                    _LOGGER = logging.getLogger(__name__)
-                    _LOGGER.warning("yt-dlp extraction failed (%s), attempting automatic upgrade...", e)
-                    import subprocess
-                    import sys
-
-                    try:
-                        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"])
-                        _LOGGER.warning(
-                            "yt-dlp was successfully upgraded! You must RESTART Home Assistant to apply the new version."
+                    # Report what actually went wrong, and do NOT try to "repair" it
+                    # by pip-installing a yt-dlp upgrade (which this used to do on
+                    # EVERY failure). That ran a network install inside a worker
+                    # thread, mutated the Home Assistant environment as a side
+                    # effect of pressing play, and then told the user to restart —
+                    # advice that was almost always wrong, because the common causes
+                    # are a private/removed/region-locked video or a stale player
+                    # client, none of which an upgrade fixes. Users chased a restart
+                    # instead of seeing the real message.
+                    reason = str(e).replace("ERROR: ", "").strip()
+                    if _is_yt_content_error(reason):
+                        # Nothing is broken on our side — this particular item cannot
+                        # be fetched. Keep it at WARNING so it doesn't read as a fault.
+                        _LOGGER.warning("Cannot play %s: YouTube says %s", media_id, reason)
+                    else:
+                        _LOGGER.error(
+                            "Could not fetch %s: %s. If this affects every video (not just one), "
+                            "YouTube has likely changed something and yt-dlp needs updating — "
+                            "update the integration, or Home Assistant, to pick up a newer yt-dlp.",
+                            media_id,
+                            reason,
                         )
-                    except Exception as upgrade_err:
-                        _LOGGER.error("Failed to upgrade yt-dlp: %s", upgrade_err)
-                    # We cannot hot-reload yt-dlp, so we just raise the original error for now
                     return None
 
             media_id = await self.hass.async_add_executor_job(_extract_yt_url)
