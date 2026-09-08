@@ -97,7 +97,7 @@ def test_own_last_ports_never_borrows_a_siblings_port():
     hass.data[DOMAIN] = {
         "rtsp_port_effective": 8557,
         "api_port_effective": 1985,
-        "entryA": {"rtsp_port_effective": 8557, "api_port_effective": 1985},
+        "_ports_by_entry": {"entryA": {"rtsp": 8557, "api": 1985}},
     }
     # (a) entry B registered but has published nothing yet
     b = _manager(hass, "entryB")
@@ -108,6 +108,37 @@ def test_own_last_ports_never_borrows_a_siblings_port():
     # "entry A's live ports are mine".
     fresh = go2rtc_module.Go2RTCManager(hass, "entryC")
     assert fresh._own_last_ports() == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_our_last_ports_survive_an_entry_reload():
+    """REGRESSION (v2.6.28): the per-entry port record was written into
+    hass.data[DOMAIN][entry_id], which async_unload_entry POPS. On reload
+    _own_last_ports() therefore returned (None, None) and start() skipped the
+    "wait for our own previous RTSP port to release" step — so a self-healed
+    default port (8556) could hop again on every reload, stranding WebRTC and
+    HomeKit on the old port. Pinned ports hid this: they have their own wait.
+
+    The record must live somewhere unload does not clear.
+    """
+    hass = _make_hass()
+    m1 = _manager(hass, "entryA", {})  # default 8555 -> self-heals
+    with (
+        patch.object(go2rtc_module, "_port_bindable", side_effect=lambda p: p != 8555),
+        patch.object(
+            sys.modules["custom_components.cuboai.utils"],
+            "find_available_port",
+            side_effect=lambda start_port, max_port=8600: start_port,
+        ),
+    ):
+        await m1._resolve_ports()
+    assert m1._rtsp_port == 8556
+
+    # what async_unload_entry does
+    hass.data[DOMAIN].pop("entryA", None)
+
+    m2 = _manager(hass, "entryA", {})  # the reload's fresh manager
+    assert m2._own_last_ports()[0] == 8556, "our previous RTSP port was forgotten across a reload"
 
 
 # =============================================================================
@@ -218,8 +249,10 @@ def test_terminate_stale_processes_skips_protected_pids():
 def test_sensor_and_camera_read_their_own_entrys_port():
     hass = _make_hass()
     hass.data[DOMAIN] = {
-        "entryA": {"rtsp_port_effective": 8557, "api_port_effective": 1985},
-        "entryB": {"rtsp_port_effective": 8600, "api_port_effective": 1986},
+        "_ports_by_entry": {
+            "entryA": {"rtsp": 8557, "api": 1985},
+            "entryB": {"rtsp": 8600, "api": 1986},
+        },
         # stale global mirror from whichever entry started last
         "rtsp_port_effective": 8600,
         "api_port_effective": 1986,
