@@ -289,6 +289,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up CuboAI from a config entry."""
     _LOGGER.debug("Starting CuboAI async_setup_entry...")
 
+    # Entries created before the config flow set a unique_id have none, so the
+    # duplicate-account guard would not see them. Backfill from the account id
+    # every entry already stores, rather than adding an async_migrate_entry —
+    # that needs a VERSION bump, which stops the user downgrading.
+    #
+    # Must stay ABOVE the add_update_listener() registration below:
+    # async_update_options computes its changed_keys from OPTIONS only, so a
+    # unique_id-only write leaves that set empty and its
+    # `if changed_keys and all(...)` guard falls through to a full
+    # async_reload — a spurious reload on every upgrade start.
+    if entry.unique_id is None and entry.data.get("uuid"):
+        hass.config_entries.async_update_entry(entry, unique_id=str(entry.data["uuid"]))
+        _LOGGER.debug("Backfilled config entry unique_id from the stored account id")
+
     # Ensure token and log paths are set (in case async_setup wasn't called)
     set_token_paths(hass.config.path())
     set_log_path(hass.config.path())

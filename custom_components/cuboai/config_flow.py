@@ -265,6 +265,23 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         import homeassistant.helpers.config_validation as cv
 
+        # One CuboAI ACCOUNT per config entry. Both auth paths (password and MFA)
+        # funnel through this step, and this is the earliest point where the
+        # account identity is known — so a duplicate is refused before the user
+        # bothers picking cameras. A DIFFERENT account is still free to add a
+        # second entry; only re-adding the same one is blocked, which otherwise
+        # produced two entries whose entities collide on identical unique_ids.
+        #
+        # The id is the Cognito `sub` claim decoded from the ID token
+        # (api.decode_id_token) — opaque and immutable, unlike the e-mail the
+        # user types, which can vary by casing or alias.
+        account_id = str(self._auth_data.get("uuid") or "").strip()
+        if not account_id:
+            account_id = str(self._auth_data.get("username", "")).strip().lower()
+        if account_id:
+            await self.async_set_unique_id(account_id)
+            self._abort_if_unique_id_configured()
+
         all_cameras = self._auth_data.get("all_cameras") or self._auth_data.get("cameras", [])
         options_map = {
             cam["device_id"]: f"{cam.get('baby_name', 'Camera')} ({cam['device_id']})" for cam in all_cameras

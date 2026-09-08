@@ -311,14 +311,20 @@ class Go2RTCManager:
         domain-global keys, which on a second entry's first start hold the
         SIBLING's live ports — start() would then wait on, and reclaim, a
         healthy other account's go2rtc. Absent means "we have never started".
+
+        Survives an entry reload: the record is kept in the domain-level
+        `_ports_by_entry` map, not in the per-entry store that unload pops.
         """
         domain_data = self.hass.data.get(DOMAIN) or {}
         if self._entry_id is None:
-            own = domain_data  # single-entry legacy layout
+            # No entry id (legacy/manual construction): fall back to the global
+            # mirror, which is what this manager itself last wrote.
+            rtsp = domain_data.get("rtsp_port_effective")
+            api = domain_data.get("api_port_effective")
         else:
-            own = domain_data.get(self._entry_id) or {}
-        rtsp = own.get("rtsp_port_effective")
-        api = own.get("api_port_effective")
+            own = (domain_data.get("_ports_by_entry") or {}).get(self._entry_id) or {}
+            rtsp = own.get("rtsp")
+            api = own.get("api")
         return (int(rtsp) if rtsp else None, int(api) if api else None)
 
     def _port_held_by_live_sibling(self, port: int) -> bool:
@@ -524,15 +530,24 @@ class Go2RTCManager:
         self._api_port = api_port
         # Single source of truth for every port consumer (camera
         # stream_source/snapshots, entity attributes, and through them the card).
-        # Published PER ENTRY — with two entries the domain-global keys were
+        # Recorded PER ENTRY — with two entries the domain-global keys were
         # last-writer-wins, so entry A's consumers followed entry B's go2rtc.
+        #
+        # It lives in a DOMAIN-level `_ports_by_entry` map rather than in the
+        # entry's own hass.data[DOMAIN][entry_id] store, because
+        # async_unload_entry POPS that store: on a reload the record would be
+        # gone, _own_last_ports() would return (None, None), and start() would
+        # skip waiting for our own previous RTSP port to release — letting a
+        # self-healed port hop again on every reload (issue #80/#84).
+        #
         # The global keys stay as a legacy mirror for any reader that has no
         # entry id to hand; effective_ports() prefers the per-entry value.
         domain_data = self.hass.data.setdefault(DOMAIN, {})
         if self._entry_id is not None:
-            entry_data = domain_data.setdefault(self._entry_id, {})
-            entry_data["rtsp_port_effective"] = rtsp_port
-            entry_data["api_port_effective"] = api_port
+            domain_data.setdefault("_ports_by_entry", {})[self._entry_id] = {
+                "rtsp": rtsp_port,
+                "api": api_port,
+            }
         domain_data["rtsp_port_effective"] = rtsp_port
         domain_data["api_port_effective"] = api_port
         await self._sync_webrtc_integration_url(api_port)

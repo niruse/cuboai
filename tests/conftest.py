@@ -26,6 +26,28 @@ sys.modules["homeassistant.helpers.entity"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 
 
+# config_flow.py does `from homeassistant import config_entries`, which resolves to
+# an ATTRIBUTE of the homeassistant MagicMock — a different object from
+# sys.modules["homeassistant.config_entries"] above. Without a real base class there,
+# `class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)` produces a
+# MagicMock instead of a class and the flow cannot be driven at all. Give that
+# attribute real bases (adding only — everything else on it stays a MagicMock).
+class _ConfigFlowBase:
+    """Minimal stand-in for homeassistant.config_entries.ConfigFlow."""
+
+    def __init_subclass__(cls, **kwargs):  # swallows `domain=...`
+        super().__init_subclass__()
+
+
+class _OptionsFlowBase:
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__()
+
+
+sys.modules["homeassistant"].config_entries.ConfigFlow = _ConfigFlowBase
+sys.modules["homeassistant"].config_entries.OptionsFlow = _OptionsFlowBase
+
+
 # Entity base classes and exceptions must be REAL objects, not MagicMock attributes:
 # the platform modules subclass them (and combine several by multiple inheritance, so
 # they must also be distinct classes), and `except HomeAssistantError` needs a real

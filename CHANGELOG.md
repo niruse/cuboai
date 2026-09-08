@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.29]
+
+### Fixed
+- **Regression in 2.6.28: a self-healed RTSP port could hop again on an entry reload.** 2.6.28 began
+  recording each entry's resolved ports inside that entry's own `hass.data` store — which unloading
+  the entry deletes. On a reload the integration therefore no longer remembered which port it had
+  been using, and skipped waiting for its own previous port to be released, so the port could move
+  (e.g. 8556 → 8557) and strand WebRTC/HomeKit consumers pointing at the old one. The record now
+  lives where a reload cannot clear it. Installs with a **pinned** `rtsp_port` were never affected —
+  they have a separate wait — which is why this did not show up in the 2.6.28 release testing.
+
+### Added
+- **The same CuboAI account can no longer be added twice.** The config entry now carries a unique id
+  derived from the account itself (the identifier in the login token, not the e-mail address), so a
+  duplicate setup is refused with "This CuboAI account is already configured." Existing installations
+  get this id filled in automatically on the next start, with no reconfiguration. Adding a *different*
+  account as a second entry is still allowed.
+
+### Known limitation
+Two *different* accounts are still not fully supported: the login tokens are cached in a single
+shared file, so a second account would overwrite the first one's tokens. Per-account token storage is
+a separate change.
+
 ## [2.6.28]
 
 Multi-camera and multi-account hardening. Nothing here changes single-camera behaviour, and no
