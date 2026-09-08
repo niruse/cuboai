@@ -428,7 +428,25 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
                     import yt_dlp
 
-                ydl_opts = {"format": "bestaudio/best", "quiet": True, "noplaylist": True}
+                ydl_opts = {
+                    "format": "bestaudio/best",
+                    "quiet": True,
+                    "noplaylist": True,
+                    # Ask YouTube as the ANDROID client rather than the web one.
+                    #
+                    # The web client hands back stream URLs whose signature has to
+                    # be deciphered by running YouTube's own JavaScript, and yt-dlp
+                    # can only do that with a JS runtime (deno) installed. Home
+                    # Assistant images ship none, so for a growing share of videos
+                    # the web client is simply refused and yt-dlp reports the
+                    # thoroughly misleading "This video is unavailable" — for a
+                    # video that plays fine in a browser. A playlist hits the same
+                    # wall on its first entry, so the whole list fails too.
+                    #
+                    # The android client returns pre-signed URLs and needs no JS.
+                    # "default" stays as a fallback for anything android refuses.
+                    "extractor_args": {"youtube": {"player_client": ["android", "default"]}},
+                }
                 if is_caching_enabled:
                     ydl_opts["outtmpl"] = os.path.join(cache_dir, f"{cache_hash}.%(ext)s")
 
