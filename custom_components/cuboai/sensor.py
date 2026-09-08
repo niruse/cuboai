@@ -4,7 +4,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, live_stream_name, nvr_stream_name
+from .const import DOMAIN, effective_ports, live_stream_name, nvr_stream_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -508,13 +508,12 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        # Prefer the port go2rtc actually bound (self-healed on conflicts)
-        rtsp_port = self.hass.data.get(DOMAIN, {}).get(
-            "rtsp_port_effective"
-        ) or self.coordinator.config_entry.options.get(
-            "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
-        )
-        opts = self.coordinator.config_entry.options
+        # Prefer the ports go2rtc actually bound (self-healed on conflicts),
+        # scoped to THIS entry so a second account's go2rtc is never advertised.
+        entry = self.coordinator.config_entry
+        configured = entry.options.get("rtsp_port", entry.data.get("rtsp_port", 8555))
+        rtsp_port, api_port = effective_ports(self.hass, entry.entry_id, rtsp_default=configured)
+        opts = entry.options
         nvr_enabled = bool(opts.get("nvr_enabled"))
         has_pw = bool(opts.get("nvr_password"))
 
@@ -525,8 +524,6 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
 
             auth = f"{quote(opts.get('nvr_username') or 'cuboai', safe='')}:{quote(opts['nvr_password'], safe='')}@"
 
-        # Like rtsp_port above, the API port self-heals on conflicts (issue #84)
-        api_port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
         stream = live_stream_name(self._device_id, self._entry_options())
         attrs = {
             "go2rtc_server": f"http://127.0.0.1:{api_port}",

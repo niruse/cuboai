@@ -174,6 +174,15 @@ class TestApiPortFallback:
 # =============================================================================
 
 
+def _flatten(src: str) -> str:
+    """Collapse a source snippet to one space-normalised line.
+
+    These are source pins: they assert the LOGIC is present, so they must not
+    break when a long condition is wrapped across lines by the formatter.
+    """
+    return " ".join(src.split()).replace("( ", "(").replace(" )", ")")
+
+
 class TestPinnedRtspPortIsSticky:
     @pytest.mark.asyncio
     async def test_pinned_port_is_kept_when_bindable(self):
@@ -250,10 +259,14 @@ class TestPinnedRtspPortIsSticky:
         src = inspect.getsource(go2rtc_module.Go2RTCManager.start)
         # the guard + the reclaim call live together in the pinned branch
         branch = src[src.index("if desired_rtsp != 8555:") :]
-        assert "await self.hass.async_add_executor_job(_port_bindable, desired_rtsp)" in branch
-        assert "self._terminate_stale_processes" in branch
-        # and the reclaim is gated on the port being busy, not unconditional
-        assert "if not await self.hass.async_add_executor_job(_port_bindable, desired_rtsp):" in branch
+        flat = _flatten(branch)
+        # the reclaim is gated on the port being busy, not unconditional
+        assert "if not await self.hass.async_add_executor_job(_port_bindable, desired_rtsp)" in flat
+        assert "self._terminate_stale_processes" in flat
+        # ...and never kills a SECOND config entry's live go2rtc, which runs the
+        # very same binary and would otherwise match the path sweep.
+        assert "not self._port_held_by_live_sibling(desired_rtsp)" in flat
+        assert "self._protected_pids()" in flat
 
 
 # =============================================================================

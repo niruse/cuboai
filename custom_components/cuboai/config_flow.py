@@ -6,7 +6,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 
 from .api import cuboai_functions as api
-from .const import DOMAIN
+from .const import DOMAIN, effective_ports
 
 # Dedicated file logger for CuboAI
 _LOGGER = logging.getLogger(__name__)
@@ -344,7 +344,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 chosen_port = int(user_input.get("rtsp_port") or 0)
             except (TypeError, ValueError):
                 chosen_port = 0
-            current_port = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
+            current_port = effective_ports(self.hass, self.config_entry.entry_id)[0]
             if chosen_port and chosen_port != current_port:
                 from .go2rtc import _port_bindable
 
@@ -404,7 +404,7 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             # stream (breaking open streams). Show the port go2rtc ACTUALLY
             # bound (it self-heals conflicts at startup), falling back to the
             # historical default.
-            default_port = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective") or 8555
+            default_port = effective_ports(self.hass, self.config_entry.entry_id)[0]
 
         import homeassistant.helpers.config_validation as cv
 
