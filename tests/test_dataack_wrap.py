@@ -37,7 +37,7 @@ def _io_frame(idx):
 
 def _fresh(wrap):
     """A bare session carrying only the attributes _note_cam_data's IO path touches."""
-    s = object.__new__(cp.TUTKDirectSession)   # bypass __init__: no handshake, no socket
+    s = object.__new__(cp.TUTKDirectSession)  # bypass __init__: no handshake, no socket
     s._dataack_wrap = bool(wrap)
     s._cam_msgs = set()
     s._data_ack = 0
@@ -53,7 +53,7 @@ def _feed(s, start_idx, count):
 def test_wrap_on_crosses():
     s = _fresh(wrap=True)
     s._data_ack = 65529
-    _feed(s, 65530, 11)                    # idx 65530..65535 then 0..4 — crosses the wrap
+    _feed(s, 65530, 11)  # idx 65530..65535 then 0..4 — crosses the wrap
     assert s._data_ack == 65540, f"WRAP ON failed to cross the wrap: _data_ack={s._data_ack}"
     assert s._data_ack & 0xFFFF == 4, "wire [40:42] should have wrapped to 0x0004"
 

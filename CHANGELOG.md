@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.26]
+
+Correctness and engine-parity fixes contributed by **Fredrik Ringertz (@Fredde87)** — thank you.
+Each fix ships with a test.
+
+### Fixed
+- **Lullaby volume in Home Assistant never matched the camera.** `CuboAIClient.get_lullaby_schedule()`
+  did not exist, yet the coordinator called it every poll — the `AttributeError` was swallowed and a
+  hardcoded `lullaby_volume = 50` fallback made the result look real. The wrapper now exists (the
+  builder, RESP constant and parser were already there) and the poll reports the camera's actual
+  volume and sleep timer.
+- **Starting a lullaby reset the camera volume to 50, and changing the volume cancelled a running
+  sleep timer.** `SET_LULLABY_VOL_DURATION` is one coupled struct carrying both fields; call sites
+  passed one and defaulted the other. They now go through the read-modify-write helper
+  (`build_set_lullaby_schedule`) so each write preserves the field it isn't changing.
+- **Night Light Brightness reported a constant.** Nothing polled `GET_LIGHT_STYLE`, so the number
+  entity returned a hardcoded 100 and the light reported no brightness despite advertising
+  `ColorMode.BRIGHTNESS`. The poll now reads the camera's real brightness.
+- **Connection Mode flapped to `unknown` roughly one poll in three.** The embedded-JSON extractor used
+  a greedy match that ran past the real object into the response's trailing binary counters; it is now
+  brace-counted and string-aware, and a blank session-stats response no longer erases the last-good
+  mode.
+- **State-key drift** between what several entities read and what the poll wrote (reconciled), and
+  **every session is now pinned to the pure-Python backend** instead of half-discovering an optional
+  native library.
+- **TUTK live-stream engine brought to parity with the DVR-playback copy**, including the
+  TransCodePartial tail `Swap` (which mis-encoded any frame whose length mod 16 was 2, 4 or 8), the
+  cumulative data-ACK and talkback-resend handling across the u16 counter wrap, the reassembly-window
+  anchor so a mid-session read isn't dead, and a randomised AV-MID fallback.
+
 ## [2.6.25]
 
 ### Fixed

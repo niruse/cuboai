@@ -22,8 +22,7 @@ on any key that is read but never written.
 import os
 import re
 
-_CC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "custom_components", "cuboai")
+_CC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "cuboai")
 
 _READ_PATTERNS = (
     r'get\(\s*"local"\s*,\s*\{\}\s*\)\s*\.get\(\s*"(\w+)"',
@@ -55,8 +54,7 @@ def _collect(patterns):
 def test_no_entity_reads_a_key_the_poll_never_writes():
     reads = _collect(_READ_PATTERNS)
     polled = _collect((_POLL_WRITE_PATTERN,))
-    orphans = {k: sorted(v) for k, v in reads.items()
-               if k not in polled}
+    orphans = {k: sorted(v) for k, v in reads.items() if k not in polled}
     assert not orphans, (
         "these keys are read by an entity but never written by the coordinator "
         "poll, so the entity never reconciles with the camera: "

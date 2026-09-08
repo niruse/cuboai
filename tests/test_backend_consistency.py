@@ -76,9 +76,9 @@ def test_every_get_session_call_site_pins_the_backend():
             if t.type != tokenize.NAME or t.string != "get_session":
                 continue
             if i and code[i - 1].type == tokenize.OP and code[i - 1].string == ".":
-                continue                      # attribute access, e.g. self._get_session
+                continue  # attribute access, e.g. self._get_session
             if i + 1 >= len(code) or code[i + 1].string != "(":
-                continue                      # an import or a reference, not a call
+                continue  # an import or a reference, not a call
             depth, j, args = 0, i + 1, []
             while j < len(code):
                 if code[j].string == "(":

@@ -47,7 +47,7 @@ def _entity(camera_local):
     e.coordinator = MagicMock()
     e.coordinator.data = {"cameras": {DEVICE: {"local": camera_local}}}
     e._device_id = DEVICE
-    e._timer_value = 30          # the old hardcoded local default
+    e._timer_value = 30  # the old hardcoded local default
     e._pending = None
     e.async_write_ha_state = lambda: None
     return e
@@ -89,7 +89,7 @@ def test_pending_clears_once_the_camera_agrees():
 def test_camera_value_wins_again_after_the_pending_clears():
     e = _entity({"lullaby_timer_minutes": 60})
     e._pending = 60
-    assert e.native_value == 60                      # reading it clears pending
+    assert e.native_value == 60  # reading it clears pending
     e.coordinator.data["cameras"][DEVICE]["local"]["lullaby_timer_minutes"] = 0
     assert e.native_value == 0
 
@@ -135,11 +135,11 @@ def _run_cmd(cmd_type, volume, timer, cam_volume=70, cam_timer=1800, echo_fails=
     ctx.__enter__ = MagicMock(return_value=sess)
     ctx.__exit__ = MagicMock(return_value=False)
 
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=MagicMock()):
-        media_player._execute_lullaby_cmd(
-            "uid", "acct", "pw", "192.0.2.10", cmd_type, "SOME-UUID", volume, timer
-        )
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=MagicMock()),
+    ):
+        media_player._execute_lullaby_cmd("uid", "acct", "pw", "192.0.2.10", cmd_type, "SOME-UUID", volume, timer)
     return sent
 
 
@@ -182,6 +182,7 @@ def test_an_unreadable_echo_still_writes_the_supplied_field():
 
 
 # --- play must not reset the volume -----------------------------------------
+
 
 def test_play_keeps_the_cameras_volume_when_none_is_supplied():
     """Both callers pass volume=None; play must not silently reset it to 50."""

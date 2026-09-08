@@ -101,12 +101,16 @@ def test_baby_presence_helper_returns_the_readback_not_the_request():
     client = MagicMock()
     client.get_sleep_safety_status.return_value = {"baby_presence_alert": False}
     ctx, sess = _session_ctx(client)
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_get_sleep_safety_setting",
-               return_value=(0x2331, b"")), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_sleep_safety_setting",
-               return_value=(0x2332, b"")):
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client),
+        patch(
+            "custom_components.cuboai.tutk.cuboai_messages.build_get_sleep_safety_setting", return_value=(0x2331, b"")
+        ),
+        patch(
+            "custom_components.cuboai.tutk.cuboai_messages.build_set_sleep_safety_setting", return_value=(0x2332, b"")
+        ),
+    ):
         got = switch._set_baby_presence("uid", "acct", "pw", "192.0.2.10", True)
     assert got is False, "helper must report the camera's value, not the requested one"
     client.get_sleep_safety_status.assert_called_once()
@@ -117,11 +121,15 @@ def test_readback_failure_falls_back_to_the_requested_value():
     client = MagicMock()
     client.get_sleep_safety_status.side_effect = RuntimeError("timeout")
     ctx, sess = _session_ctx(client)
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_get_sleep_safety_setting",
-               return_value=(0x2331, b"")), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.build_set_sleep_safety_setting",
-               return_value=(0x2332, b"")):
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client),
+        patch(
+            "custom_components.cuboai.tutk.cuboai_messages.build_get_sleep_safety_setting", return_value=(0x2331, b"")
+        ),
+        patch(
+            "custom_components.cuboai.tutk.cuboai_messages.build_set_sleep_safety_setting", return_value=(0x2332, b"")
+        ),
+    ):
         got = switch._set_baby_presence("uid", "acct", "pw", "192.0.2.10", True)
     assert got is True

@@ -42,6 +42,7 @@ def _light_style_response(brightness):
 
 def _fetch(brightness=None, raises=False):
     """Run _fetch_local_data with a session that answers GET_LIGHT_STYLE."""
+
     def _ioctl(op, payload=b""):
         if op == GET_LIGHT_STYLE_REQ:
             if raises:
@@ -54,8 +55,10 @@ def _fetch(brightness=None, raises=False):
     ctx = MagicMock()
     ctx.__enter__ = MagicMock(return_value=sess)
     ctx.__exit__ = MagicMock(return_value=False)
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=MagicMock()):
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=ctx),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=MagicMock()),
+    ):
         return coordinator._fetch_local_data("uid", "acct", "pw", "192.0.2.10")
 
 

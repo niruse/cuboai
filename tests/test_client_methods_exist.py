@@ -17,8 +17,7 @@ import ast
 import os
 import re
 
-_CC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "custom_components", "cuboai")
+_CC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "cuboai")
 
 
 def _client_methods():
@@ -73,8 +72,8 @@ def test_get_lullaby_schedule_returns_the_volume_and_timer():
     spec.loader.exec_module(msgs)
 
     raw = bytearray(144)
-    struct.pack_into("<I", raw, 8, 1800)     # timer_mode: 30 minutes
-    struct.pack_into("<I", raw, 12, 42)      # volume
+    struct.pack_into("<I", raw, 8, 1800)  # timer_mode: 30 minutes
+    struct.pack_into("<I", raw, 12, 42)  # volume
     transport = MagicMock()
     transport.ioctl.return_value = (msgs.IOTYPE_USER_GET_LULLABY_SCHEDULE_RESP, bytes(raw))
 
