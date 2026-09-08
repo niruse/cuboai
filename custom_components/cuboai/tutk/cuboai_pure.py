@@ -65,7 +65,6 @@ import time
 # It is a positional permutation (value-independent), so it generalises to any
 # host. Computing it dynamically keeps the pure transport portable across hosts.
 _AVMID_PERM     = (1, 0, 5, 4, 3, 2)
-_AVMID_FALLBACK = bytes.fromhex("000000000000")   # neutral fallback; used only iff the local MAC read fails
 _AF_PACKET      = 17       # sockaddr_ll.sll_family on Linux
 _AF_LINK        = 18       # sockaddr_dl.sdl_family on macOS/BSD
 _IFF_LOOPBACK   = 0x8      # net/if.h IFF_LOOPBACK — same value on Linux and macOS/BSD
@@ -194,17 +193,22 @@ def compute_av_mid():
     """Return the 6-byte _AV_MID for this host (perm of local NIC MAC).
 
     Cross-platform: getifaddrs (Linux AF_PACKET / macOS AF_LINK) → /sys/class/net
-    (Linux) → uuid.getnode() (Windows + universal). Falls back to a neutral value
-    only if every method fails, so import never raises; a stderr note is emitted
-    on that final fallback. On Linux/macOS getifaddrs wins.
+    (Linux) → uuid.getnode() (Windows + universal). If every method fails (e.g. a
+    network-isolated container with no NIC at all), a fresh random 6-byte fingerprint
+    is generated instead — the camera does not validate this value's structure or
+    origin, so any 6 bytes work equally well, and a random value avoids every such
+    host presenting the same fixed, identifiable fingerprint. Import never raises; a
+    stderr note is emitted on that fallback. On Linux/macOS getifaddrs wins, so
+    behaviour is unchanged.
     """
     mac = (_local_mac_via_getifaddrs()      # Linux (AF_PACKET) / macOS (AF_LINK)
            or _local_mac_via_sysfs()        # Linux /sys/class/net fallback
            or _local_mac_via_uuid())        # cross-platform incl. Windows
     if mac is None:
+        fallback = os.urandom(6)
         sys.stderr.write("[cuboai_pure] WARN: no NIC MAC found; "
-                         "using fallback _AV_MID %s\n" % _AVMID_FALLBACK.hex())
-        return _AVMID_FALLBACK
+                         "using random fallback _AV_MID %s\n" % fallback.hex())
+        return fallback
     return bytes(mac[i] for i in _AVMID_PERM)
 
 
@@ -248,29 +252,55 @@ def _block_transform(blk: bytes) -> bytes:
                        _ror32(r10, 11), _ror32(r9, 15))
 
 
-def transcode(plain: bytes) -> bytes:
-    """Full TUTK TransCodePartial: 16-byte block transform + tail XOR.
+def transcode(plain: bytes, swap_tail: bool = True) -> bytes:
+    """Full TUTK TransCodePartial: 16-byte block transform + tail XOR-and-Swap.
 
     This maps the real plaintext av-connect to the exact bytes that go on the
     wire. The account, password, header and every structured field live in full
     16-byte blocks, so they are transcoded by the block transform.
 
-    The trailing `len & 0xF` bytes are a plain XOR: `K16[i] ^ plain[i]`. TUTK has
-    a `Swap` byte-permutation applied to the tail for tail lengths 2/4/8, but the
-    IOTC SendMessage path used for these LAN frames does NOT apply it — every
-    frame type matches plain XOR (the 88-byte probe/ACK with trailer
-    `63041313040c0c63`, the 76-byte IOCTL request, the 598-byte av-connect, and
-    the IOCTL responses). Do NOT re-add Swap here — it corrupts the probe tail
-    and breaks connect.
+    The trailing `len & 0xF` bytes are `Swap(plain_tail XOR K16)` (see
+    `_tail_swap`). `swap_tail=False` reproduces the NO-Swap wire of the
+    pre-session SEARCH/broadcast frames (build_probe/build_ack/build_lan_query),
+    which are the only frames that skip it.
+
+    (An earlier revision of this file documented the tail as a plain XOR
+    *everywhere* and warned "do NOT re-add Swap — it breaks connect". That was
+    wrong for the DATA channel and is what mangled any frame whose tail length
+    is 2/4/8 — e.g. the 216-byte lullaby-schedule SET, tail 8. The nuance is:
+    Swap on the data channel, no Swap on the search/direct frames.)
     """
     n = len(plain)
     full = n - (n & 0xF)
     out = bytearray(n)
     for off in range(0, full, 16):
         out[off:off + 16] = _block_transform(plain[off:off + 16])
-    for i in range(full, n):
-        out[i] = _K16[i - full] ^ plain[i]
+    tl = n - full
+    if tl:
+        xored = bytes(_K16[i] ^ plain[full + i] for i in range(tl))
+        out[full:] = _tail_swap(xored, tl) if swap_tail else xored
     return bytes(out)
+
+
+# TUTK TransCodePartial / ReverseTransCodePartial apply a `Swap` byte-permutation
+# (lib 0x2714f0) to the partial-block TAIL, but ONLY for tail lengths 2/4/8 (identity
+# for every other length). Reversed from the .so and confirmed byte-for-byte against
+# the real lib via ctypes for ALL lengths: encode `wire_tail = Swap(plain_tail XOR K)`;
+# decode `plain_tail = Swap(wire_tail) XOR K` (Swap is an involution). This is why a
+# 148-byte schedule SET (216-byte frame, tail 8) whose duration lived in the tail read
+# back mangled when the tail was a plain XOR; tails 6/12 (av-connect, IOCTL GET) are
+# identity, so they were always correct.
+_TAIL_SWAP = {2: (1, 0), 4: (2, 3, 0, 1), 8: (7, 4, 3, 2, 1, 6, 5, 0)}
+
+
+def _tail_swap(buf, length):
+    """Apply the TransCodePartial tail `Swap` permutation (identity unless length is
+    2/4/8; an involution). Used by BOTH `transcode` and `inv_transcode` so the wire
+    encode/decode match native TransCodePartial / ReverseTransCodePartial exactly."""
+    perm = _TAIL_SWAP.get(length)
+    if perm is None:
+        return buf
+    return bytes(buf[j] for j in perm)
 
 
 def _rol32(v, r):
@@ -304,14 +334,19 @@ def _inv_block_transform(blk: bytes) -> bytes:
 
 
 def inv_transcode(wire: bytes) -> bytes:
-    """Full inverse of `transcode` (what the camera computes on receive)."""
+    """Full inverse of `transcode` — byte-identical to the native library's
+    `ReverseTransCodePartial` (lib 0x2720d0). The tail (len & 0xF == 2/4/8) is
+    un-Swapped then XOR'd: `plain_tail = Swap(wire_tail) XOR K16` (Swap is an
+    involution, so the same `_tail_swap` inverts the encode)."""
     n = len(wire)
     full = n - (n & 0xF)
     out = bytearray(n)
     for off in range(0, full, 16):
         out[off:off + 16] = _inv_block_transform(wire[off:off + 16])
-    for i in range(full, n):
-        out[i] = _K16[i - full] ^ wire[i]
+    tl = n - full
+    if tl:
+        swapped = _tail_swap(wire[full:], tl)      # involution: undo the encode-side Swap
+        out[full:] = bytes(_K16[i] ^ swapped[i] for i in range(tl))
     return bytes(out)
 
 
@@ -791,12 +826,12 @@ def _build_ls_plaintext(uid, R: int, ack: bool) -> bytes:
 
 def build_probe(uid: bytes, R: int) -> bytes:
     """88-byte LAN-search probe wire packet (transcode of the true plaintext)."""
-    return transcode(_build_ls_plaintext(uid, R, ack=False))
+    return transcode(_build_ls_plaintext(uid, R, ack=False), swap_tail=False)  # search: no Swap
 
 
 def build_ack(uid: bytes, R: int) -> bytes:
     """88-byte LAN-search ACK wire packet (probe with plaintext[64]=0x02)."""
-    return transcode(_build_ls_plaintext(uid, R, ack=True))
+    return transcode(_build_ls_plaintext(uid, R, ack=True), swap_tail=False)   # search: no Swap
 
 
 # ── IOTC LAN device-identity query (message type 0x0402) ──────────────────────
@@ -823,7 +858,7 @@ def build_lan_query(uid, R: int, mid: bytes = None) -> bytes:
     t[36:38] = struct.pack("<H", R & 0xFFFF)
     t[38:44] = mid if mid is not None else _CLIENT_FINGERPRINT
     t[44:52] = _LQ_TAIL8
-    return transcode(bytes(t))
+    return transcode(bytes(t), swap_tail=False)  # search/broadcast frame: no Swap on the tail
 
 
 def build_close(R: int, session_fp: bytes = None) -> bytes:
@@ -875,6 +910,16 @@ def _unwrap_index(idx_u16, done_upto):
     no wrap has occurred; across the wrap it continues monotonically (65535 -> 65536). A
     late/duplicate index maps far forward so the gate still rejects it."""
     return done_upto + ((idx_u16 - done_upto) & 0xFFFF)
+
+
+def _unwrap_index_back(idx_u16, cur):
+    """Lift a u16 wire counter BACKWARD into `cur`'s unbounded monotonic space: the nearest value
+    at-or-below `cur` congruent to idx_u16 (mod 65536). The mirror of `_unwrap_index`, for wire
+    values that always refer to something ALREADY SENT (a resend request naming one of our own
+    recent frames). While `cur` < 65536 this is the identity, so the wire is unchanged below the
+    wrap; past it the lookup keeps resolving instead of silently missing.
+    """
+    return cur - ((cur - idx_u16) & 0xFFFF)
 
 
 def is_keepalive_probe(raw: bytes) -> bool:
@@ -1774,6 +1819,26 @@ class TUTKDirectSession:
         # accept-window survives the wrap. Byte-identical pre-wrap; OFF reverts to the historical
         # non-modular gate, which dead-stalls a continuous stream ~every 46 min at the wrap.
         self._idx_modular = os.environ.get("CUBOAI_IDX_MODULAR", "1") != "0"
+        # Same wrap class as _idx_modular, on the OTHER u16 counter (default ON): the camera's
+        # IO message-index [56:58] wraps at 65536 while `_data_ack` is an unbounded monotonic
+        # int, so past the wrap `(self._data_ack + 1) in self._cam_msgs` can never be true again
+        # and _data_ack FREEZES — the D field of every subsequent host->cam ACK stops advancing
+        # ([40:42] must wrap 0xFFFF->0x0000) and the camera's send-window stops being credited.
+        # Lifting the idx into _data_ack's space (_unwrap_index) and discarding consumed entries
+        # keeps the contiguous edge advancing across the wrap. Byte-identical pre-wrap
+        # (_unwrap_index == raw idx while no wrap has occurred).
+        # REGRESSION SWITCH, NOT A TUNABLE: `=0` reopens the freeze-at-wrap — keep ON.
+        self._dataack_wrap = os.environ.get("CUBOAI_DATAACK_WRAP", "1") != "0"
+        # SECOND-STREAM dead-read fix (default ON): `done_upto` is a per-reader local that starts
+        # at -1, but the camera's AV message-index is SESSION-scoped. So the FIRST read of a
+        # session works and every read after it meets an index already far past the +256 accept
+        # window — EVERY fragment is rejected, forever, and the reader emits zero access units
+        # while fragments keep arriving at full rate. Silent: no error, no gap counter moving.
+        # Reachable through the legacy shim (cuboai_transport_py.start_video() opens a fresh
+        # av_frames() iterator each call). Anchoring the window at the first accepted AU start
+        # fixes it; the seed only fires when the index is out of window, so a normal
+        # fresh-session stream is byte-identical.
+        self._idx_seed = os.environ.get("CUBOAI_IDX_SEED", "1") != "0"
         # minimum in-order wait (AU-indices) before advancing past an absent AU — the
         # scaled grace (~4 at LAN) is too short to wait out a >grace-late frag-burst, so
         # the late-but-complete AU is still skipped+rejected; this floor holds each AU long
@@ -2187,11 +2252,22 @@ class TUTKDirectSession:
             return
         if self._is_io_frame(dec):
             idx = struct.unpack("<H", dec[56:58])[0]
-            self._cam_msgs.add(idx)
             if idx == 0:
                 self._got_first = True
-            while (self._data_ack + 1) in self._cam_msgs:
-                self._data_ack += 1
+            if self._dataack_wrap:
+                # wrap-safe: store the idx lifted into _data_ack's unbounded space, advance the
+                # contiguous edge, and drop consumed entries (bounds the set + prevents a stale
+                # wrapped value from false-advancing a later epoch). Pre-wrap this is identical to
+                # the else-branch (_unwrap_index == raw idx, and _data_ack depends only on
+                # contiguity, which the discard does not change).
+                self._cam_msgs.add(_unwrap_index(idx, self._data_ack))
+                while (self._data_ack + 1) in self._cam_msgs:
+                    self._data_ack += 1
+                    self._cam_msgs.discard(self._data_ack)
+            else:
+                self._cam_msgs.add(idx)
+                while (self._data_ack + 1) in self._cam_msgs:
+                    self._data_ack += 1
             return
         # AV fragment: D = highest fragment-seq [46:48], modular-u16, skipping gaps/junk.
         frag = struct.unpack("<H", dec[46:48])[0]
@@ -3269,9 +3345,10 @@ class TUTKDirectSession:
                             gi.result = bytes(dec[68:min(len(dec), 68 + max(0, avlen - 4))])
                             gi.done.set()
                         continue
-                    idx = struct.unpack("<H", dec[56:58])[0]
+                    raw_idx = struct.unpack("<H", dec[56:58])[0]
+                    idx = raw_idx
                     if self._idx_modular:                 # H1: lift the u16 index into done_upto's
-                        idx = _unwrap_index(idx, done_upto)  # space so the gate survives the wrap
+                        idx = _unwrap_index(raw_idx, done_upto)  # space so the gate survives the wrap
                     frag = struct.unpack("<H", dec[46:48])[0]
                     avlen = struct.unpack("<H", dec[52:54])[0]
                     chunk = bytes(dec[64:64 + max(0, avlen)])
@@ -3295,6 +3372,16 @@ class TUTKDirectSession:
                         if not is_marker(chunk):
                             continue
                         gmax = frag
+                        # SECOND-STREAM dead-read fix (see _idx_seed): this is THIS reader's first
+                        # accepted access-unit start. done_upto still holds its -1 initialiser, but
+                        # the camera's message-index is session-scoped, so on any read after the
+                        # first it is already past the +256 accept window and EVERY fragment would
+                        # be rejected from here on. Anchor the window here instead. Fires only when
+                        # the index is out of window (never on a fresh-session stream), so the
+                        # normal path is byte-identical.
+                        if self._idx_seed and not (done_upto < idx <= done_upto + 256):
+                            done_upto = raw_idx - 1
+                            idx = _unwrap_index(raw_idx, done_upto) if self._idx_modular else raw_idx
                     else:
                         fwd = (frag - gmax) & 0xFFFF
                         back = (gmax - frag) & 0xFFFF
@@ -3837,6 +3924,8 @@ class TUTKDirectSession:
                                              # underruns (measured 72ms vs the 64ms it plays at) -> breakage
         period = 1024.0 / rate               # AAC frame duration (== 64 ms at 16 kHz): feed at EXACTLY this
         finished = False
+        # REGRESSION SWITCH, NOT A TUNABLE: OFF (=0) reopens the talkback resend-lookup wrap death.
+        _talk_wrap = os.environ.get("CUBOAI_TALK_WRAP", "1") != "0"   # see the SACK-replay lookup below
         sent_buf = {}                        # talk_frag -> au, for resend on the camera's 0x09 SACK
         t0 = time.time()
         self._talk_stop = False              # cooperative stop flag (set by stop_audio())
@@ -3914,6 +4003,20 @@ class TUTKDirectSession:
                             if 0 < cnt < 256 and C != 0xFFFF:
                                 for k in range(min(cnt, (len(dec) - 50) // 2)):
                                     frag = (C + struct.unpack_from('<H', dec, 50 + 2 * k)[0]) & 0xFFFF
+                                    if _talk_wrap:
+                                        # talk_frag is MONOTONIC (it must never restart when a
+                                        # looped file wraps its content), so sent_buf's keys are
+                                        # unbounded — but the SACK entry decodes to a u16. Past
+                                        # 65536 frames (64 ms/frame => ~70 min of continuous or
+                                        # looping talkback) every sent_buf.get(u16) MISSES and
+                                        # talkback loss-recovery SILENTLY STOPS (resends_sent just
+                                        # stops rising; the wire stays well-formed, so nothing
+                                        # looks wrong). Lift the u16 BACKWARD into talk_frag's
+                                        # space — resends are always for already-sent frames, so
+                                        # the nearest match at-or-below the current frag is the
+                                        # right one. Below the wrap this is the identity, so the
+                                        # wire is unchanged.
+                                        frag = _unwrap_index_back(frag, talk_frag)
                                     au = sent_buf.get(frag)
                                     if au is not None:
                                         s.sendto(build_talk_audio(R, channel, self._seq, talk_relseq, frag, frag, au), cam)

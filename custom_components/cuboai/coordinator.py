@@ -100,7 +100,12 @@ def _fetch_local_data(
                     camera_ip=camera_ip if camera_ip else None,
                     defer_stream_start=False,
                     defer_video_start_late=False,
-                    auto_discover_lib=True,
+                    # auto_discover_lib=False: pure is the guaranteed backend everywhere in this
+                    # integration. An auto-discovered libIOTCAPIs_ALL (async_ensure_dependencies
+                    # downloads one into libs/<arch>/) would otherwise put SOME sessions on the
+                    # native backend while switch.py/light.py and the streamers stay pure. Only an
+                    # explicit lib_path/CUBOAI_LIB selects native.
+                    auto_discover_lib=False,
                 ) as sess:
                     client = CuboAIClient(sess)
 
@@ -138,6 +143,22 @@ def _fetch_local_data(
                             log_to_file(f"Failed to get temp_humidity: {e}")
 
                         try:
+                            # Night-light brightness (percent). The camera reports it on
+                            # GET_LIGHT_STYLE @24; nothing was reading it, so
+                            # `local["brightness"]` was never populated at all — the
+                            # Night Light Brightness number fell back to a hardcoded 100
+                            # regardless of the camera, and the light entity reported no
+                            # brightness despite advertising ColorMode.BRIGHTNESS.
+                            from .tutk.cuboai_messages import build_get_light_style, parse_light_style
+
+                            _rt, _raw = sess.ioctl(*build_get_light_style())
+                            _style = parse_light_style(_raw)
+                            if _style.get("brightness") is not None:
+                                data["brightness"] = _style["brightness"]
+                        except Exception as e:
+                            log_to_file(f"Failed to get light style: {e}")
+
+                        try:
                             data["sleep_mode_on"] = client.get_sleep_mode().get("enabled")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_mode: {e}")
@@ -153,6 +174,11 @@ def _fetch_local_data(
                             ss_status = client.get_sleep_safety_status()
                             data["sleep_safety"] = ss_status.get("enabled")
                             data["baby_presence"] = ss_status.get("baby_presence_alert")
+                            # The camera distinguishes "Covered Face and Rollover" from
+                            # "Covered Face Only"; the sensor's On/Off hides that, and its
+                            # `raw_value` attribute read a key nothing ever wrote.
+                            data["sleep_safety_mode"] = ss_status.get("mode")
+                            data["sleep_safety_mode_desc"] = ss_status.get("mode_desc")
                         except Exception as e:
                             log_to_file(f"Failed to get sleep_safety: {e}")
 
@@ -178,7 +204,25 @@ def _fetch_local_data(
 
                         try:
                             stats = client.get_session_stats()
-                            data["connection_mode"] = stats.get("mode")
+                            mode = stats.get("mode")
+                            if mode:
+                                data["connection_mode"] = mode
+                            else:
+                                # The IOCTL answered but its body carried no parseable JSON,
+                                # so there is no mode in it. Leave the key UNSET so the merge
+                                # in _fetch_all carries the last known mode forward — exactly
+                                # what the except branch below already relies on.
+                                #
+                                # Writing None here instead dropped the Connection Mode sensor
+                                # to `unknown` for one poll and back again. Measured on a live
+                                # camera over 12h: 200 flaps, each lasting a median of 64.6s
+                                # (one poll interval), for a value that never actually changed
+                                # from "lan". "Unknown" is never true here anyway — this GET
+                                # only returns at all because the local session is up.
+                                log_to_file(
+                                    "[CuboAICoordinator] session stats carried no mode "
+                                    f"(raw_len={stats.get('raw_len')}); keeping the last known value"
+                                )
                         except Exception as e:
                             log_to_file(f"Failed to get session stats: {e}")
 
@@ -228,11 +272,32 @@ def _fetch_local_data(
                         data["lullaby_song"] = ls.current_song_uuid
 
                         try:
+                            # get_lullaby_schedule() did not exist on CuboAIClient at all,
+                            # so this raised AttributeError on EVERY poll. The except below
+                            # swallowed it and the old hardcoded `= 50` fallback made the
+                            # result look like a real reading — the lullaby volume Home
+                            # Assistant showed was never once the camera's.
                             sched = client.get_lullaby_schedule()
-                            data["lullaby_volume"] = sched.volume
+                            vol = sched.get("volume")
+                            if vol is not None:
+                                data["lullaby_volume"] = vol
+                            # The camera's ACTUAL sleep timer, echoed on this same
+                            # response (offset 8): 0 = repeat forever, 1800 = 30 min,
+                            # 3600 = 60 min. It was being read and thrown away, so the
+                            # Lullaby Timer number had nothing to reconcile against and
+                            # showed only whatever Home Assistant last set locally —
+                            # "30 minutes" while the camera was actually on repeat.
+                            timer_mode = sched.get("timer_mode")
+                            if timer_mode is not None:
+                                data["lullaby_timer_name"] = sched.get("timer")
+                                data["lullaby_timer_minutes"] = timer_mode // 60 if timer_mode else 0
                         except Exception as e:
+                            # Do NOT invent a volume here. The previous fallback wrote a
+                            # hardcoded 50, which the merge in _fetch_all then treated as
+                            # a real reading and carried forward — so a failed schedule
+                            # read silently reported the wrong volume instead of keeping
+                            # the last known one.
                             log_to_file(f"Failed to get lullaby schedule: {e}")
-                            data["lullaby_volume"] = 50
 
                     except Exception as e:
                         import traceback
