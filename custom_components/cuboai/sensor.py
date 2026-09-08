@@ -466,7 +466,11 @@ class CuboSleepSafetySensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        return {"raw_value": cam.get("local", {}).get("sleep_safety_raw")}
+        local = cam.get("local", {})
+        return {
+            "mode": local.get("sleep_safety_mode"),
+            "mode_description": local.get("sleep_safety_mode_desc"),
+        }
 
     @property
     def device_info(self):
