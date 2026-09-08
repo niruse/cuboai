@@ -2,7 +2,7 @@
 pytest>=9.1.1
 pytest-cov>=4.0.0
 pytest-asyncio>=1.4.0
-aioresponses>=0.7.0
+aioresponses>=0.7.9
 
 # Dependencies from the integration (needed for imports)
 aiofiles>=23.0.0
