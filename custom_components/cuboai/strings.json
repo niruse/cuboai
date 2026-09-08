@@ -52,7 +52,7 @@
       "no_cameras": "No cameras found for this account."
     },
     "abort": {
-      "already_configured": "This camera is already configured."
+      "already_configured": "This CuboAI account is already configured."
     }
   },
   "options": {

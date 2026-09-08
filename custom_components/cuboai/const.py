@@ -24,9 +24,12 @@ def effective_ports(hass, entry_id, rtsp_default: int = 8555) -> tuple[int, int]
     a single-entry install — every install today — is unaffected.
     """
     domain_data = (getattr(hass, "data", None) or {}).get(DOMAIN) or {}
-    entry_data = domain_data.get(entry_id) or {}
-    rtsp = entry_data.get("rtsp_port_effective") or domain_data.get("rtsp_port_effective") or rtsp_default
-    api = entry_data.get("api_port_effective") or domain_data.get("api_port_effective") or DESIRED_API_PORT
+    # `_ports_by_entry` is domain-level (not inside the entry's own store, which
+    # unload pops) so the record survives an entry reload — see
+    # Go2RTCManager._resolve_ports.
+    own = (domain_data.get("_ports_by_entry") or {}).get(entry_id) or {}
+    rtsp = own.get("rtsp") or domain_data.get("rtsp_port_effective") or rtsp_default
+    api = own.get("api") or domain_data.get("api_port_effective") or DESIRED_API_PORT
     return int(rtsp), int(api)
 
 
