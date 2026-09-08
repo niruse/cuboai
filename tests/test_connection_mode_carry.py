@@ -48,8 +48,10 @@ def _session_ctx():
 
 def _fetch(stats):
     client = _client(stats)
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=_session_ctx()), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client):
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=_session_ctx()),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client),
+    ):
         return coordinator._fetch_local_data("uid", "acct", "pw", "192.0.2.10")
 
 
@@ -73,8 +75,10 @@ def test_a_raised_get_also_leaves_the_key_unset():
     """The pre-existing failure path, pinned alongside the new one."""
     client = _client({})
     client.get_session_stats.side_effect = RuntimeError("timeout")
-    with patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=_session_ctx()), \
-         patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client):
+    with (
+        patch("custom_components.cuboai.tutk.cuboai_session.get_session", return_value=_session_ctx()),
+        patch("custom_components.cuboai.tutk.cuboai_messages.CuboAIClient", return_value=client),
+    ):
         data = coordinator._fetch_local_data("uid", "acct", "pw", "192.0.2.10")
     assert "connection_mode" not in data
 
@@ -83,7 +87,7 @@ def test_the_merge_carries_an_absent_key_forward():
     """The other half of the contract: _fetch_all merges onto the previous local
     dict, so a key this poll did not set keeps its previous value."""
     old_local = {"connection_mode": "lan", "temperature": 25.0}
-    local_data = {"temperature": 24.5}          # this poll had no mode
+    local_data = {"temperature": 24.5}  # this poll had no mode
     merged = old_local.copy()
     merged.update(local_data)
     assert merged["connection_mode"] == "lan"

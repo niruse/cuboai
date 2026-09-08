@@ -93,7 +93,7 @@ class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
         cam_minutes = self._camera_minutes
         if self._pending is not None:
             if cam_minutes is not None and int(cam_minutes) == int(self._pending):
-                self._pending = None      # the camera caught up
+                self._pending = None  # the camera caught up
             else:
                 return self._pending
         if cam_minutes is not None:
@@ -111,9 +111,7 @@ class CuboLullabyTimerNumber(CoordinatorEntity, RestoreNumber):
             "pending_change": self._pending,
             # True while Home Assistant is showing a value the camera has not adopted.
             "differs_from_camera": (
-                self._pending is not None
-                and cam_minutes is not None
-                and int(cam_minutes) != int(self._pending)
+                self._pending is not None and cam_minutes is not None and int(cam_minutes) != int(self._pending)
             ),
         }
 

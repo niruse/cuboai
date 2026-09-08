@@ -45,7 +45,7 @@ def _build_av_frag(idx, frag, payload, channel=0):
     struct.pack_into("<H", dec, 46, frag & 0xFFFF)
     struct.pack_into("<H", dec, 52, len(payload))
     struct.pack_into("<H", dec, 56, idx & 0xFFFF)
-    dec[58:64] = b"\x01\x00\x00\x00\x00\x00"          # non-zero AV-unit id => not an IO frame
+    dec[58:64] = b"\x01\x00\x00\x00\x00\x00"  # non-zero AV-unit id => not an IO frame
     dec[64:] = payload
     return cp.transcode(bytes(dec))
 
@@ -75,7 +75,7 @@ def _run_reader(start_idx, n_aus, seed_gate):
 
         # One single-fragment video AU per message-index; +16 trailing AUs so the grace
         # window releases everything under test regardless of the configured _MSG_GRACE.
-        au = b"\x00\x00\x00\x01\x26\x01\xAF" + b"\xAA" * 40   # start code + HEVC IDR_W_RADL
+        au = b"\x00\x00\x00\x01\x26\x01\xaf" + b"\xaa" * 40  # start code + HEVC IDR_W_RADL
         for i in range(n_aus + 16):
             cam.sendto(_build_av_frag(start_idx + i, start_idx + i, au), cli.getsockname())
             time.sleep(0.002)
@@ -135,10 +135,12 @@ def test_survives_a_start_just_below_the_u16_wrap():
 
 
 if __name__ == "__main__":
-    for fn in ("test_gate_defaults_on",
-               "test_fresh_session_path_is_unchanged",
-               "test_mid_session_read_is_dead_without_the_fix_and_alive_with_it",
-               "test_mid_session_output_matches_the_in_window_output",
-               "test_survives_a_start_just_below_the_u16_wrap"):
+    for fn in (
+        "test_gate_defaults_on",
+        "test_fresh_session_path_is_unchanged",
+        "test_mid_session_read_is_dead_without_the_fix_and_alive_with_it",
+        "test_mid_session_output_matches_the_in_window_output",
+        "test_survives_a_start_just_below_the_u16_wrap",
+    ):
         globals()[fn]()
         print("ok:", fn)
