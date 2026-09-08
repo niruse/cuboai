@@ -646,6 +646,16 @@ class Go2RTCManager:
         # so waiting on it would burn the timeout every start (issue #80/#84).
         desired_rtsp = int(self._options.get("rtsp_port", 8555))
         if desired_rtsp != 8555:
+            # The reclaim above keys on the API port, so it MISSES one of our own
+            # orphans that is holding only the RTSP port (its API port already
+            # free or reclaimed). That orphan holds the pinned port for its whole
+            # life, not a transient teardown, so the wait alone can't recover it
+            # and _resolve_ports would hop to desired+1 and stay there. If the
+            # pinned port is busy, kill our own binary directly (matches only our
+            # exact path — a FOREIGN holder is left for the loud fallback in
+            # _resolve_ports), then wait for the release.
+            if not await self.hass.async_add_executor_job(_port_bindable, desired_rtsp):
+                await self.hass.async_add_executor_job(self._terminate_stale_processes)
             await self._wait_for_port_free(desired_rtsp, timeout=30.0)
 
         await self._resolve_ports()
