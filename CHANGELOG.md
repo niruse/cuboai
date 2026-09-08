@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.30]
+
+### Fixed
+- **YouTube songs and playlists failed to play with "This video is unavailable" — for videos that
+  play fine in a browser.** YouTube's web player hands back stream URLs whose signature must be
+  deciphered by running YouTube's own JavaScript, which yt-dlp can only do when a JS runtime (deno)
+  is installed — and Home Assistant images ship none. For a growing share of videos the web client
+  is refused outright, and the error message points at the video rather than the real cause. A
+  playlist hit the same wall on its first track, so the whole list failed too. Playback now asks
+  YouTube as the Android client, which returns pre-signed URLs and needs no JavaScript, falling back
+  to the previous behaviour for anything it cannot serve. No setting to change.
+
 ## [2.6.29]
 
 ### Fixed
