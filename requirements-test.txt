@@ -11,3 +11,7 @@ boto3>=1.43.39
 pycognito>=2024.5.1
 PyYAML>=6.0.3
 av>=10.0.0
+# config_flow.py imports it; test_duplicate_account.py drives the real flow.
+# It happens to be present in a local HA checkout, so a missing entry here only
+# shows up in CI.
+voluptuous>=0.13.1
