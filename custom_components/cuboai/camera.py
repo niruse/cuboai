@@ -5,7 +5,7 @@ from homeassistant.components.camera import Camera
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, live_stream_name
+from .const import DOMAIN, effective_ports, live_stream_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,15 +69,18 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
     def _effective_rtsp_port(self) -> int:
         """The port go2rtc actually bound (it self-heals on conflicts, e.g.
-        HA's built-in go2rtc holding 8555), falling back to the configured one."""
-        return self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective") or self.coordinator.config_entry.options.get(
-            "rtsp_port", self.coordinator.config_entry.data.get("rtsp_port", 8555)
-        )
+        HA's built-in go2rtc holding 8555), falling back to the configured one.
+
+        Scoped to THIS entry: a second CuboAI account runs its own go2rtc on its
+        own ports, and the shared key would point us at the wrong one."""
+        entry = self.coordinator.config_entry
+        configured = entry.options.get("rtsp_port", entry.data.get("rtsp_port", 8555))
+        return effective_ports(self.hass, entry.entry_id, rtsp_default=configured)[0]
 
     def _go2rtc_api_base(self) -> str:
         """Base URL of OUR go2rtc API, using the port it actually bound
         (it self-heals to a free port when 1985 is taken, issue #84)."""
-        port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
+        port = effective_ports(self.hass, self.coordinator.config_entry.entry_id)[1]
         return f"http://127.0.0.1:{port}"
 
     def _go2rtc_ready(self) -> bool:
@@ -586,7 +589,7 @@ class CuboRecordingCamera(CoordinatorEntity, Camera):
         import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        port = self.hass.data.get(DOMAIN, {}).get("api_port_effective", 1985)
+        port = effective_ports(self.hass, self.coordinator.config_entry.entry_id)[1]
         url = f"http://127.0.0.1:{port}/api/frame.jpeg?src=cuboai_dvr_{self._device_id}"
         try:
             session = async_get_clientsession(self.hass)

@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.28]
+
+Multi-camera and multi-account hardening. Nothing here changes single-camera behaviour, and no
+setting was added or altered.
+
+### Fixed
+- **The per-camera poll now runs the cameras concurrently instead of one after another.** Each camera
+  blocks up to 20s on its local TUTK read (40s with history sensors enabled), so with three cameras a
+  poll could take 60–120s against the default 60s update interval — refreshes ran late and every
+  entity went stale. A failing camera no longer aborts the whole poll either: it carries its last
+  good values forward while the healthy cameras update normally, and only a total failure marks the
+  integration unavailable. Local reads are bounded to 4 at a time so a large install cannot burst
+  every camera's discovery onto the LAN at once.
+- **Two cameras discovering their LAN IP in the same poll could lose one of them.** Each camera wrote
+  its own read-modify-write of the entry options, so simultaneous discoveries overwrote each other.
+  All discoveries from one poll are now merged into a single options update.
+- **A second CuboAI account (a second config entry) collided with the first.** Each entry runs its
+  own go2rtc, but the resolved ports were published to a shared key, so whichever entry started last
+  won and the other entry's camera, snapshots and NVR URLs pointed at the wrong go2rtc. Ports are now
+  published and read per config entry.
+- **Two config entries could terminate each other's go2rtc on every restart.** The orphan reclaim
+  identifies a stale instance by "answers the API with `cuboai_*` streams" and terminates by binary
+  path — an exact description of a healthy sibling entry. A running entry's go2rtc is now never
+  treated as an orphan, and the port reclaim skips it, so a second account self-heals onto its own
+  ports instead of fighting for them.
+
+Multi-account and 3-camera behaviour is covered by unit tests; it was not reproduced on hardware
+(the development camera is a single-camera, single-account install).
+
 ## [2.6.27]
 
 ### Fixed

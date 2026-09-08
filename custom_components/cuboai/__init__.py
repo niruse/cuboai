@@ -450,7 +450,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.debug("Starting go2rtc manager...")
     # Setup go2rtc manager
-    go2rtc_manager = Go2RTCManager(hass)
+    go2rtc_manager = Go2RTCManager(hass, entry.entry_id)
     go2rtc_manager.update_streams(entry.data.get("cameras", []), dict(entry.options))
     await go2rtc_manager.start()
     _LOGGER.debug("go2rtc manager started.")

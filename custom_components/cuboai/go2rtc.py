@@ -7,18 +7,11 @@ import sys
 import yaml
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import DESIRED_API_PORT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-
-#: The go2rtc API port the integration aims for. Not user-configurable (unlike
-#: rtsp_port), but NOT a promise either: _resolve_ports self-heals to a nearby
-#: free port when it's taken and publishes the result as api_port_effective in
-#: hass.data — which every consumer (camera entities, sensors, the card) reads
-#: instead of assuming this value. Code touching the API port must use this
-#: constant or api_port_effective, never a bare 1985.
-DESIRED_API_PORT = 1985
+__all__ = ["DESIRED_API_PORT", "Go2RTCManager"]
 
 
 def _port_bindable(port: int) -> bool:
@@ -33,8 +26,14 @@ def _port_bindable(port: int) -> bool:
 class Go2RTCManager:
     """Manages the internal go2rtc subprocess for CuboAI local streaming."""
 
-    def __init__(self, hass: HomeAssistant):
+    def __init__(self, hass: HomeAssistant, entry_id: str | None = None):
         self.hass = hass
+        # Which config entry owns this instance. A second entry (a second CuboAI
+        # account) runs its OWN go2rtc on its own self-healed ports, so every
+        # port publish/read and every process reclaim below is scoped by this id
+        # — otherwise the two instances overwrite each other's published ports
+        # and kill each other's processes.
+        self._entry_id = entry_id
         self.process: asyncio.subprocess.Process | None = None
         self._config_path = os.path.join(os.path.dirname(__file__), "bin", "go2rtc.yaml")
         self._binary_path = os.path.join(os.path.dirname(__file__), "bin", "go2rtc")
@@ -272,6 +271,62 @@ class Go2RTCManager:
         instance in an endless loop (issue #84)."""
         return self.process is not None and self.process.returncode is None
 
+    def _live_siblings(self) -> list["Go2RTCManager"]:
+        """Every OTHER config entry's running Go2RTCManager.
+
+        With two CuboAI accounts each entry runs its own go2rtc. Their processes
+        share our exact binary path and serve cuboai_* streams, so the orphan
+        heuristics below would happily classify a sibling as stale and kill it —
+        the two entries then fight on every restart. Nothing here is an orphan:
+        a manager reachable from hass.data with a live process is owned by an
+        active entry.
+        """
+        siblings: list[Go2RTCManager] = []
+        for key, value in (self.hass.data.get(DOMAIN) or {}).items():
+            if key == self._entry_id or not isinstance(value, dict):
+                continue
+            manager = value.get("go2rtc")
+            if manager is not None and manager is not self and getattr(manager, "is_running", False):
+                siblings.append(manager)
+        return siblings
+
+    def _protected_pids(self) -> set[int]:
+        """PIDs the stale-process sweep must never touch: ours + live siblings'.
+
+        Computed on the EVENT LOOP and passed into the executor — hass.data must
+        not be read from a worker thread.
+        """
+        pids = set()
+        if self.process is not None:
+            pids.add(self.process.pid)
+        for sibling in self._live_siblings():
+            if sibling.process is not None:
+                pids.add(sibling.process.pid)
+        return pids
+
+    def _own_last_ports(self) -> tuple[int | None, int | None]:
+        """The (rtsp, api) ports THIS entry published on its previous start.
+
+        Deliberately NOT effective_ports(): that falls back to the legacy
+        domain-global keys, which on a second entry's first start hold the
+        SIBLING's live ports — start() would then wait on, and reclaim, a
+        healthy other account's go2rtc. Absent means "we have never started".
+        """
+        domain_data = self.hass.data.get(DOMAIN) or {}
+        if self._entry_id is None:
+            own = domain_data  # single-entry legacy layout
+        else:
+            own = domain_data.get(self._entry_id) or {}
+        rtsp = own.get("rtsp_port_effective")
+        api = own.get("api_port_effective")
+        return (int(rtsp) if rtsp else None, int(api) if api else None)
+
+    def _port_held_by_live_sibling(self, port: int) -> bool:
+        """Whether another entry's RUNNING go2rtc owns this port."""
+        return any(
+            port in (getattr(s, "_api_port", None), getattr(s, "_rtsp_port", None)) for s in self._live_siblings()
+        )
+
     async def _reclaim_stale_instance(self, api_port: int) -> None:
         """Terminate an orphaned go2rtc from a previous HA run.
 
@@ -291,11 +346,21 @@ class Go2RTCManager:
         safe: a genuinely foreign holder never matches and is left alone (the
         port fallback in _resolve_ports covers it).
         """
+        # Cheap in-memory checks first — both mean "nothing to reclaim", and
+        # neither needs the HTTP probe below.
+        if await self.hass.async_add_executor_job(_port_bindable, api_port):
+            return  # port is free — nothing is squatting on it
+        if self._port_held_by_live_sibling(api_port):
+            # Another ENTRY's go2rtc is alive on this port. It answers the API
+            # with cuboai_* streams, so every heuristic below would call it an
+            # orphan and kill it. Leave it: _resolve_ports hops us to a free API
+            # port instead, which is exactly what a second account should do.
+            _LOGGER.debug("API port %s belongs to another CuboAI entry's go2rtc — not reclaiming", api_port)
+            return
+
         import aiohttp
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        if await self.hass.async_add_executor_job(_port_bindable, api_port):
-            return  # port is free — nothing is squatting on it
         streams = None
         try:
             session = async_get_clientsession(self.hass)
@@ -310,7 +375,7 @@ class Go2RTCManager:
         if isinstance(streams, dict) and not any(str(s).startswith("cuboai_") for s in streams):
             return  # answers the API but with foreign streams — leave it alone
 
-        killed = await self.hass.async_add_executor_job(self._terminate_stale_processes)
+        killed = await self.hass.async_add_executor_job(self._terminate_stale_processes, self._protected_pids())
         if killed:
             _LOGGER.warning(
                 "Terminated %d orphaned CuboAI go2rtc process(es) from a previous "
@@ -335,14 +400,23 @@ class Go2RTCManager:
             await asyncio.sleep(0.25)
         return await self.hass.async_add_executor_job(_port_bindable, port)
 
-    def _terminate_stale_processes(self) -> int:
+    def _terminate_stale_processes(self, protected_pids: set[int] | None = None) -> int:
         """SIGTERM (then SIGKILL) every process running our go2rtc binary.
 
         Runs in an executor. Linux /proc only — on other platforms there is
         nothing to reclaim because HAOS/container is the deployment target.
+
+        `protected_pids` (from _protected_pids(), computed on the event loop)
+        are spared: our own child plus every OTHER entry's live go2rtc. Matching
+        on the binary path alone would sweep up a second account's healthy
+        instance, since it runs the very same binary.
         """
         import signal
         import time
+
+        protected = set(protected_pids or ())
+        if self.process is not None:
+            protected.add(self.process.pid)
 
         def _pids() -> list[int]:
             pids = []
@@ -354,7 +428,7 @@ class Go2RTCManager:
                 if not name.isdigit():
                     continue
                 pid = int(name)
-                if self.process and self.process.pid == pid:
+                if pid in protected:
                     continue
                 try:
                     with open(f"/proc/{pid}/cmdline", "rb") as f:
@@ -450,7 +524,15 @@ class Go2RTCManager:
         self._api_port = api_port
         # Single source of truth for every port consumer (camera
         # stream_source/snapshots, entity attributes, and through them the card).
+        # Published PER ENTRY — with two entries the domain-global keys were
+        # last-writer-wins, so entry A's consumers followed entry B's go2rtc.
+        # The global keys stay as a legacy mirror for any reader that has no
+        # entry id to hand; effective_ports() prefers the per-entry value.
         domain_data = self.hass.data.setdefault(DOMAIN, {})
+        if self._entry_id is not None:
+            entry_data = domain_data.setdefault(self._entry_id, {})
+            entry_data["rtsp_port_effective"] = rtsp_port
+            entry_data["api_port_effective"] = api_port
         domain_data["rtsp_port_effective"] = rtsp_port
         domain_data["api_port_effective"] = api_port
         await self._sync_webrtc_integration_url(api_port)
@@ -603,7 +685,10 @@ class Go2RTCManager:
         # keep its TUTK sessions against the camera forever while we happily
         # bind the desired port.
         await self._reclaim_stale_instance(DESIRED_API_PORT)
-        last_effective = self.hass.data.get(DOMAIN, {}).get("api_port_effective")
+        # OUR entry's last effective port, not the domain-global one: with two
+        # entries the global value may be the sibling's live port, and
+        # reclaiming that would tear down a healthy second account.
+        previous_rtsp, last_effective = self._own_last_ports()
         if last_effective and last_effective != DESIRED_API_PORT:
             await self._reclaim_stale_instance(last_effective)
 
@@ -629,7 +714,9 @@ class Go2RTCManager:
         # on the desired port unconditionally would burn the full timeout on
         # every start for the common case where 8555 belongs to Home
         # Assistant's built-in go2rtc and is never coming free.
-        previous_rtsp = self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
+        # Read from _own_last_ports() above — the domain-global key can belong to
+        # another entry, and waiting on a live sibling's port would burn the
+        # timeout every start.
         if previous_rtsp:
             await self._wait_for_port_free(int(previous_rtsp), timeout=15.0)
 
@@ -654,8 +741,13 @@ class Go2RTCManager:
             # pinned port is busy, kill our own binary directly (matches only our
             # exact path — a FOREIGN holder is left for the loud fallback in
             # _resolve_ports), then wait for the release.
-            if not await self.hass.async_add_executor_job(_port_bindable, desired_rtsp):
-                await self.hass.async_add_executor_job(self._terminate_stale_processes)
+            # ...unless a live sibling entry legitimately owns it (two entries
+            # pinned to the same port is user error — _resolve_ports says so
+            # loudly — but it must never become "kill the other account").
+            if not await self.hass.async_add_executor_job(
+                _port_bindable, desired_rtsp
+            ) and not self._port_held_by_live_sibling(desired_rtsp):
+                await self.hass.async_add_executor_job(self._terminate_stale_processes, self._protected_pids())
             await self._wait_for_port_free(desired_rtsp, timeout=30.0)
 
         await self._resolve_ports()
@@ -734,10 +826,11 @@ class Go2RTCManager:
         reaches nothing — no producer is ever spawned and no frames arrive.
         This is the same resolution the live camera entity uses.
         """
+        # Our OWN bound port first: with two entries the domain-global key can
+        # be the sibling's, which would send this entry's playback to the other
+        # account's go2rtc, where the stream does not exist.
         rtsp_port = (
-            self.hass.data.get(DOMAIN, {}).get("rtsp_port_effective")
-            or getattr(self, "_rtsp_port", None)
-            or self._options.get("rtsp_port", 8555)
+            getattr(self, "_rtsp_port", None) or self._own_last_ports()[0] or self._options.get("rtsp_port", 8555)
         )
         return f"rtsp://127.0.0.1:{rtsp_port}/{self.playback_stream_name(device_id)}"
 

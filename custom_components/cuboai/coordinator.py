@@ -400,9 +400,14 @@ class CuboAICoordinator(DataUpdateCoordinator):
         self._session: aiohttp.ClientSession | None = None
         # Per-device history caches, kept alive ACROSS polls and handed to
         # get_history_sensors() — this is what lets a failed DVR pull serve
-        # the last-good record re-aged instead of an unavailable gap. Only
-        # this coordinator's (serialized) updates touch them.
+        # the last-good record re-aged instead of an unavailable gap.
+        # Keyed by device_id and only ever touched by that device's own fetch,
+        # so the concurrent poll cannot make two cameras share one cache.
         self._history_caches: dict[str, dict] = {}
+
+        # Bounds how many cameras talk to the LAN at once now that the poll runs
+        # them concurrently (see _local_fetch). A no-op for 1-4 cameras.
+        self._local_fetch_slots = asyncio.Semaphore(4)
 
         # Portable image storage path
         self._images_dir = self._get_images_dir()
@@ -504,6 +509,10 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 return await self._fetch_all(session)
             log_to_file(f"[CuboAICoordinator] ClientResponseError: {e}")
             raise UpdateFailed(f"API error: {e}")
+        except UpdateFailed:
+            # Already a coordinator-level failure with a useful message (e.g.
+            # every camera failed) — don't re-wrap it as "Unexpected error".
+            raise
         except Exception as e:
             import traceback
 
@@ -522,10 +531,282 @@ class CuboAICoordinator(DataUpdateCoordinator):
             if isinstance(res, aiohttp.ClientResponseError) and res.status == 401:
                 raise res
 
-    async def _fetch_all(self, session) -> dict:
-        """Single coordinated fetch of all data."""
+    def _persist_learned_ips(self, learned_ips: dict) -> None:
+        """Write every auto-discovered camera IP in ONE options update.
+
+        Two constraints meet here. Concurrency: each camera used to do its own
+        read-modify-write of entry.options, so simultaneous discoveries dropped
+        all but the last. And async_update_options in __init__.py only skips the
+        (mid-poll, coordinator-killing) reload when EVERY changed key is a
+        camera_ip_* that was previously empty — so this must build a fresh dict,
+        re-check each key is still unset, write nothing else, and not fire at all
+        when there is nothing to learn.
+        """
+        if not learned_ips:
+            return
+        new_options = dict(self._entry.options)
+        applied = {}
+        for device_id, ip in learned_ips.items():
+            key = f"camera_ip_{device_id}"
+            if not new_options.get(key):
+                new_options[key] = ip
+                applied[device_id] = ip
+        if not applied:
+            return
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+        _LOGGER.info("Automatically discovered camera IP(s) in options: %s", applied)
+
+    async def _local_fetch(self, device_id, uid, account, password, camera_ip, fetch_extras):
+        """The blocking TUTK read for one camera, bounded and timed out.
+
+        The semaphore is acquired OUTSIDE the timeout on purpose: wrapping
+        "wait for a slot, then talk to the camera" in one wait_for would let a
+        queued camera burn its whole budget in the queue and time out having
+        never contacted the camera.
+
+        The bound exists for the LAN, not the executor — HA's pool has 64
+        threads, but each PureSession opens a 4 MB-buffer socket and bursts UDP
+        discovery probes, and N of those at once is what makes polls flaky on
+        congested Wi-Fi. It is a no-op at the realistic 1-4 cameras.
+
+        NOTE: get_session is pinned to the pure-Python backend
+        (auto_discover_lib=False). The native TUTKSession holds a process-wide
+        lock for a whole session, so re-enabling it would serialise every camera
+        here and undo the concurrency this method exists to provide.
+        """
+        if not uid:
+            return {}
+        async with self._local_fetch_slots:
+            return await asyncio.wait_for(
+                self.hass.async_add_executor_job(
+                    _fetch_local_data,
+                    uid,
+                    account,
+                    password,
+                    camera_ip,
+                    fetch_extras,
+                    False,
+                    self.history_sensors_enabled,
+                    self._history_caches.setdefault(device_id, {}),
+                ),
+                # The DVR history pull rides RDT and is slower than the instant
+                # GETs, so give the poll more room when it is on — otherwise a
+                # timeout would throw away every other local sensor in the same
+                # call.
+                timeout=40.0 if self.history_sensors_enabled else 20.0,
+            )
+
+    async def _process_camera(self, camera, profiles_by_id, session, prev_local):
+        """Fetch and assemble ONE camera's data.
+
+        Extracted from _fetch_all so the cameras run CONCURRENTLY: each one
+        blocks up to 20s (40s with history sensors) on its local TUTK fetch, so
+        three cameras run sequentially could exceed the whole 60s poll interval
+        and leave every entity stale.
+
+        Returns (device_id, cam_data, learned_ip). The learned IP is RETURNED,
+        never written here: concurrent read-modify-write of entry.options would
+        make the cameras clobber each other's discovery. _fetch_all merges them
+        into a single update.
+        """
         import json as _json
 
+        device_id = camera["device_id"]
+        uid = camera.get("uid")
+        account = camera.get("account")
+        password = camera.get("password")
+        camera_ip = self._entry.options.get(f"camera_ip_{device_id}")
+        if not camera_ip:
+            camera_ip = camera.get("camera_ip")
+        cam_data = {"profile": {}, "alerts": [], "latest_alert": None, "camera_state": {}, "local": {}}
+
+        # 1. Profile Data (indexed once by _fetch_all, not rescanned per camera)
+        item = profiles_by_id.get(device_id)
+        if item is not None:
+            profile_str = item.get("profile", "{}")
+            try:
+                profile = _json.loads(profile_str)
+            except Exception:
+                profile = {}
+
+            gender = profile.get("gender")
+            gender_text = "male" if gender == 0 else "female" if gender == 1 else "unknown"
+            cam_data["profile"] = {
+                "baby": profile.get("baby"),
+                "birth": profile.get("birth"),
+                "gender": gender_text,
+                "device_id": device_id,
+            }
+
+        # Concurrently fetch alerts and state for this camera
+        # prev_local is passed in rather than read from self.data: the cameras
+        # now run concurrently, and a parameter keeps this method free of any
+        # shared-state read.
+        old_local = prev_local or {}
+        learned_ip = None
+        try:
+            fetch_extras = not bool(old_local.get("wifi_ip"))
+
+            alerts_data, state_data, local_data = await asyncio.gather(
+                asyncio.wait_for(
+                    get_n_alerts_paged(
+                        device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
+                    ),
+                    timeout=15.0,
+                ),
+                asyncio.wait_for(
+                    get_camera_state(device_id, self._access_token, self._user_agent, session), timeout=10.0
+                ),
+                self._local_fetch(device_id, uid, account, password, camera_ip, fetch_extras),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            log_to_file(f"[CuboAICoordinator] Error gathering alerts/state/local for {device_id}: {e}")
+            alerts_data, state_data, local_data = [], None, {}
+
+        # An expired token must bubble up so _async_update_data refreshes it
+        self._raise_if_unauthorized(alerts_data, state_data)
+
+        # 2. Camera State
+        if isinstance(state_data, BaseException):
+            log_to_file(f"[CuboAICoordinator] State fetch failed for {device_id}: {state_data}")
+        elif state_data:
+            cam_data["camera_state"] = state_data
+
+        # local_data is a BaseException (timeout/crash) OR a dict that is empty
+        # on failure (the executor fn swallows most errors and returns {}). Treat
+        # "usable" as a truthy, non-exception dict so BOTH failure modes are caught.
+        local_ok = bool(local_data) and not isinstance(local_data, BaseException)
+        if isinstance(local_data, BaseException):
+            log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
+        elif local_ok:
+            old_local_merged = old_local.copy()
+            old_local_merged.update(local_data)
+            cam_data["local"] = old_local_merged
+            # Connection is working again — re-arm the no-IP warning
+            self.hass.data.get(DOMAIN, {}).get("_ip_warned", set()).discard(device_id)
+
+            # Auto-learn the camera's LAN IP now that we can reach it, so future
+            # restarts connect directly without broadcast discovery. RETURNED,
+            # not written: the cameras run concurrently and each write here was a
+            # read-modify-write of entry.options, so two cameras learning an IP
+            # in the same poll would drop one of them. _fetch_all merges.
+            fetched_ip = local_data.get("wifi_ip")
+            if fetched_ip and not self._entry.options.get(f"camera_ip_{device_id}"):
+                learned_ip = fetched_ip
+
+        # This poll produced no FRESH history payload — either the whole
+        # local fetch failed (local_ok False resets "local" to {}), or the
+        # fetch worked but the history pull inside it failed (in which case
+        # the merge above carried the OLD payload with a FROZEN age_s that
+        # would never expire). Both get the same treatment: rebuild from
+        # the last pulled record, RE-AGED to now and marked stale. The
+        # sensors' own 15-minute freshness gate then expires it honestly —
+        # a transient failed poll no longer punches an unavailable gap
+        # into every timeline lane, but carried data can't outlive 15 min.
+        if self.history_sensors_enabled and not (local_ok and "history" in local_data):
+            try:
+                from .tutk import cuboai_sensors as _sensors
+
+                carried = _sensors.history_sensors_from_cache(self._history_caches.get(device_id))
+                if carried is not None:
+                    cam_data.setdefault("local", {})["history"] = _history_payload(carried)
+                    _LOGGER.debug("History carry-forward served for %s", device_id)
+                else:
+                    _LOGGER.warning("History missing from poll for %s and carry-forward cache is empty", device_id)
+            except Exception as e:
+                import traceback
+
+                _LOGGER.warning("History carry-forward failed for %s: %s\n%s", device_id, e, traceback.format_exc())
+
+        if not local_ok and not camera_ip:
+            # The pure-Python transport reaches the camera with a UNICAST probe to
+            # its LAN IP — there is no broadcast auto-discovery, so with no IP set
+            # the handshake fails ("no 0x2041") and local sensors + the stream stay
+            # unavailable (issue #83). It is chicken-and-egg: the IP can only be
+            # auto-learned AFTER a successful connection. Warn once per device.
+            warned = self.hass.data.setdefault(DOMAIN, {}).setdefault("_ip_warned", set())
+            if device_id not in warned:
+                warned.add(device_id)
+                _LOGGER.warning(
+                    "CuboAI %s: local connection failed and no camera IP is set. Local sensors "
+                    "and the camera stream need it. Set the camera's LAN IP under Settings -> "
+                    "Devices & Services -> CuboAI -> Configure (the camera_ip field for this "
+                    "camera) — find the address in your router's client list.",
+                    device_id,
+                )
+
+        # 3. Alerts Processing
+        if isinstance(alerts_data, BaseException):
+            log_to_file(f"[CuboAICoordinator] Alert fetch failed for {device_id}: {alerts_data}")
+            alerts_data = []
+
+        alert_dicts = []
+        if alerts_data:
+            # (the images directory is ensured once per poll in _fetch_all, not
+            # per camera — download_image also creates it on its own)
+            for alert in alerts_data:
+                params = alert.get("params")
+                if isinstance(params, str):
+                    try:
+                        params = _json.loads(params)
+                    except Exception:
+                        pass
+
+                local_image_path = None
+                if self.download_images and alert.get("image"):
+                    filename = f"{device_id}_{alert.get('id')}.jpg"
+                    # Alert images are immutable — never re-download one we
+                    # already hold. Unconditional downloads meant every poll
+                    # re-fetched the WHOLE alert list's images (with
+                    # alerts_count 20, that is 20 cloud downloads a minute),
+                    # and with max_saved_photos below alerts_count the
+                    # pruner then deleted the oldest right after — a
+                    # permanent download-and-delete loop whose visible
+                    # symptom was broken thumbnails on older alerts.
+                    import os as _os
+
+                    if await aiofiles.os.path.exists(_os.path.join(self._images_dir, filename)):
+                        local_image_path = f"{self._web_base}/{filename}"
+                    else:
+                        try:
+                            await download_image(
+                                alert.get("image"),
+                                self._access_token,
+                                self._user_agent,
+                                self._images_dir,
+                                filename,
+                                session,
+                            )
+                            local_image_path = f"{self._web_base}/{filename}"
+                        except Exception as e:
+                            log_to_file(f"[CuboAICoordinator] Image download failed for {device_id}: {e}")
+
+                alert_dicts.append(
+                    {
+                        "type": alert.get("type"),
+                        "created": alert.get("created"),
+                        "params": params,
+                        "image": local_image_path,
+                        "id": alert.get("id"),
+                        "ts": alert.get("ts"),
+                        "device_id": alert.get("device_id"),
+                    }
+                )
+
+            if self.download_images:
+                await self.hass.async_add_executor_job(self._cleanup_old_images, device_id, self.max_saved_photos)
+
+            if alert_dicts:
+                latest = max(alert_dicts, key=lambda a: a.get("ts", 0) or 0)
+                cam_data["latest_alert"] = latest.get("type", "Unknown")
+
+            cam_data["alerts"] = alert_dicts
+
+        return device_id, cam_data, learned_ip
+
+    async def _fetch_all(self, session) -> dict:
+        """Single coordinated fetch of all data."""
         from homeassistant.util.dt import utcnow
 
         cameras = self._entry.data.get("cameras", [])
@@ -559,227 +840,62 @@ class CuboAICoordinator(DataUpdateCoordinator):
             log_to_file(f"[CuboAICoordinator] Error fetching common data: {e}")
             profiles_raw = []
 
-        # Process per-camera data
-        for camera in cameras:
-            device_id = camera["device_id"]
-            uid = camera.get("uid")
-            account = camera.get("account")
-            password = camera.get("password")
-            camera_ip = self._entry.options.get(f"camera_ip_{device_id}")
-            if not camera_ip:
-                camera_ip = camera.get("camera_ip")
-            cam_data = {"profile": {}, "alerts": [], "latest_alert": None, "camera_state": {}, "local": {}}
+        # Index the shared profile blob once instead of rescanning it per camera
+        profiles_by_id = {
+            item["device_id"]: item for item in (profiles_raw or []) if isinstance(item, dict) and item.get("device_id")
+        }
+        # Snapshot the previous poll ONCE. self.data is only reassigned after
+        # this method returns, but passing a snapshot keeps _process_camera free
+        # of shared reads and gives the failure path something to carry forward.
+        prev_cams = (self.data or {}).get("cameras", {}) if getattr(self, "data", None) else {}
 
-            # 1. Profile Data
-            for item in profiles_raw:
-                if isinstance(item, dict) and item.get("device_id") == device_id:
-                    profile_str = item.get("profile", "{}")
-                    try:
-                        profile = _json.loads(profile_str)
-                    except Exception:
-                        profile = {}
-
-                    gender = profile.get("gender")
-                    gender_text = "male" if gender == 0 else "female" if gender == 1 else "unknown"
-                    cam_data["profile"] = {
-                        "baby": profile.get("baby"),
-                        "birth": profile.get("birth"),
-                        "gender": gender_text,
-                        "device_id": device_id,
-                    }
-                    break
-
-            # Concurrently fetch alerts and state for this camera
-            old_local = {}
+        # Ensure the images directory once per poll rather than once per camera.
+        if self.download_images and not await aiofiles.os.path.exists(self._images_dir):
             try:
-                if hasattr(self, "data") and self.data and "cameras" in self.data and device_id in self.data["cameras"]:
-                    old_local = self.data["cameras"][device_id].get("local", {})
-                fetch_extras = not bool(old_local.get("wifi_ip"))
-
-                async def _dummy_async():
-                    return {}
-
-                alerts_data, state_data, local_data = await asyncio.gather(
-                    asyncio.wait_for(
-                        get_n_alerts_paged(
-                            device_id, self._access_token, self._user_agent, self.max_alerts, self.hours_back, session
-                        ),
-                        timeout=15.0,
-                    ),
-                    asyncio.wait_for(
-                        get_camera_state(device_id, self._access_token, self._user_agent, session), timeout=10.0
-                    ),
-                    asyncio.wait_for(
-                        self.hass.async_add_executor_job(
-                            _fetch_local_data,
-                            uid,
-                            account,
-                            password,
-                            camera_ip,
-                            fetch_extras,
-                            False,
-                            self.history_sensors_enabled,
-                            self._history_caches.setdefault(device_id, {}),
-                        )
-                        if uid
-                        else _dummy_async(),
-                        # The DVR history pull rides RDT and is slower than the
-                        # instant GETs, so give the poll more room when it is on
-                        # — otherwise a timeout would throw away every other
-                        # local sensor in the same call.
-                        timeout=40.0 if self.history_sensors_enabled else 20.0,
-                    ),
-                    return_exceptions=True,
-                )
+                await aiofiles.os.makedirs(self._images_dir, exist_ok=True)
             except Exception as e:
-                log_to_file(f"[CuboAICoordinator] Error gathering alerts/state/local for {device_id}: {e}")
-                alerts_data, state_data, local_data = [], None, {}
+                log_to_file(f"[CuboAICoordinator] Failed to create images dir: {e}")
 
-            # An expired token must bubble up so _async_update_data refreshes it
-            self._raise_if_unauthorized(alerts_data, state_data)
+        # Cameras run concurrently — see _process_camera. return_exceptions=True
+        # is load-bearing: with it False, gather propagates the first error but
+        # does NOT cancel the siblings, and since _async_update_data re-calls
+        # _fetch_all after a 401 that would leave a full second set of TUTK
+        # sessions running against the same cameras.
+        outcomes = await asyncio.gather(
+            *(
+                self._process_camera(cam, profiles_by_id, session, prev_cams.get(cam["device_id"], {}).get("local", {}))
+                for cam in cameras
+            ),
+            return_exceptions=True,
+        )
 
-            # 2. Camera State
-            if isinstance(state_data, BaseException):
-                log_to_file(f"[CuboAICoordinator] State fetch failed for {device_id}: {state_data}")
-            elif state_data:
-                cam_data["camera_state"] = state_data
+        learned_ips: dict[str, str] = {}
+        failures = []
+        for cam, outcome in zip(cameras, outcomes):
+            device_id = cam.get("device_id")
+            if isinstance(outcome, BaseException):
+                # A 401 must reach _async_update_data so it refreshes the token.
+                if isinstance(outcome, aiohttp.ClientResponseError) and outcome.status == 401:
+                    raise outcome
+                failures.append(device_id)
+                log_to_file(f"[CuboAICoordinator] Camera {device_id} failed this poll: {outcome}")
+                _LOGGER.warning(
+                    "CuboAI %s: poll failed (%s) — carrying the previous values forward", device_id, outcome
+                )
+                # Omitting the camera and giving it an empty dict look identical
+                # to the entities (both blank them), so carry the last good
+                # payload instead of punching a hole in every sensor.
+                carried = prev_cams.get(device_id)
+                if carried:
+                    result["cameras"][device_id] = carried
+                continue
+            did, cam_data, learned_ip = outcome
+            result["cameras"][did] = cam_data
+            if learned_ip:
+                learned_ips[did] = learned_ip
 
-            # local_data is a BaseException (timeout/crash) OR a dict that is empty
-            # on failure (the executor fn swallows most errors and returns {}). Treat
-            # "usable" as a truthy, non-exception dict so BOTH failure modes are caught.
-            local_ok = bool(local_data) and not isinstance(local_data, BaseException)
-            if isinstance(local_data, BaseException):
-                log_to_file(f"[CuboAICoordinator] Local data fetch failed for {device_id}: {local_data}")
-            elif local_ok:
-                old_local_merged = old_local.copy()
-                old_local_merged.update(local_data)
-                cam_data["local"] = old_local_merged
-                # Connection is working again — re-arm the no-IP warning
-                self.hass.data.get(DOMAIN, {}).get("_ip_warned", set()).discard(device_id)
+        if cameras and len(failures) == len(cameras):
+            raise UpdateFailed(f"All {len(cameras)} camera(s) failed to update: {failures}")
 
-                # Auto-learn and persist the camera's LAN IP now that we can reach it,
-                # so future restarts connect directly without broadcast discovery.
-                fetched_ip = local_data.get("wifi_ip")
-                current_ip = self._entry.options.get(f"camera_ip_{device_id}")
-                if fetched_ip and not current_ip:
-                    new_options = dict(self._entry.options)
-                    new_options[f"camera_ip_{device_id}"] = fetched_ip
-                    self.hass.config_entries.async_update_entry(self._entry, options=new_options)
-                    _LOGGER.info(f"Automatically updated camera IP for {device_id} to {fetched_ip} in options")
-
-            # This poll produced no FRESH history payload — either the whole
-            # local fetch failed (local_ok False resets "local" to {}), or the
-            # fetch worked but the history pull inside it failed (in which case
-            # the merge above carried the OLD payload with a FROZEN age_s that
-            # would never expire). Both get the same treatment: rebuild from
-            # the last pulled record, RE-AGED to now and marked stale. The
-            # sensors' own 15-minute freshness gate then expires it honestly —
-            # a transient failed poll no longer punches an unavailable gap
-            # into every timeline lane, but carried data can't outlive 15 min.
-            if self.history_sensors_enabled and not (local_ok and "history" in local_data):
-                try:
-                    from .tutk import cuboai_sensors as _sensors
-
-                    carried = _sensors.history_sensors_from_cache(self._history_caches.get(device_id))
-                    if carried is not None:
-                        cam_data.setdefault("local", {})["history"] = _history_payload(carried)
-                        _LOGGER.debug("History carry-forward served for %s", device_id)
-                    else:
-                        _LOGGER.warning("History missing from poll for %s and carry-forward cache is empty", device_id)
-                except Exception as e:
-                    import traceback
-
-                    _LOGGER.warning("History carry-forward failed for %s: %s\n%s", device_id, e, traceback.format_exc())
-
-            if not local_ok and not camera_ip:
-                # The pure-Python transport reaches the camera with a UNICAST probe to
-                # its LAN IP — there is no broadcast auto-discovery, so with no IP set
-                # the handshake fails ("no 0x2041") and local sensors + the stream stay
-                # unavailable (issue #83). It is chicken-and-egg: the IP can only be
-                # auto-learned AFTER a successful connection. Warn once per device.
-                warned = self.hass.data.setdefault(DOMAIN, {}).setdefault("_ip_warned", set())
-                if device_id not in warned:
-                    warned.add(device_id)
-                    _LOGGER.warning(
-                        "CuboAI %s: local connection failed and no camera IP is set. Local sensors "
-                        "and the camera stream need it. Set the camera's LAN IP under Settings -> "
-                        "Devices & Services -> CuboAI -> Configure (the camera_ip field for this "
-                        "camera) — find the address in your router's client list.",
-                        device_id,
-                    )
-
-            # 3. Alerts Processing
-            if isinstance(alerts_data, BaseException):
-                log_to_file(f"[CuboAICoordinator] Alert fetch failed for {device_id}: {alerts_data}")
-                alerts_data = []
-
-            alert_dicts = []
-            if alerts_data:
-                exists = await aiofiles.os.path.exists(self._images_dir)
-                if self.download_images and not exists:
-                    try:
-                        await aiofiles.os.makedirs(self._images_dir, exist_ok=True)
-                    except Exception as e:
-                        log_to_file(f"[CuboAICoordinator] Failed to create images dir: {e}")
-
-                for alert in alerts_data:
-                    params = alert.get("params")
-                    if isinstance(params, str):
-                        try:
-                            params = _json.loads(params)
-                        except Exception:
-                            pass
-
-                    local_image_path = None
-                    if self.download_images and alert.get("image"):
-                        filename = f"{device_id}_{alert.get('id')}.jpg"
-                        # Alert images are immutable — never re-download one we
-                        # already hold. Unconditional downloads meant every poll
-                        # re-fetched the WHOLE alert list's images (with
-                        # alerts_count 20, that is 20 cloud downloads a minute),
-                        # and with max_saved_photos below alerts_count the
-                        # pruner then deleted the oldest right after — a
-                        # permanent download-and-delete loop whose visible
-                        # symptom was broken thumbnails on older alerts.
-                        import os as _os
-
-                        if await aiofiles.os.path.exists(_os.path.join(self._images_dir, filename)):
-                            local_image_path = f"{self._web_base}/{filename}"
-                        else:
-                            try:
-                                await download_image(
-                                    alert.get("image"),
-                                    self._access_token,
-                                    self._user_agent,
-                                    self._images_dir,
-                                    filename,
-                                    session,
-                                )
-                                local_image_path = f"{self._web_base}/{filename}"
-                            except Exception as e:
-                                log_to_file(f"[CuboAICoordinator] Image download failed for {device_id}: {e}")
-
-                    alert_dicts.append(
-                        {
-                            "type": alert.get("type"),
-                            "created": alert.get("created"),
-                            "params": params,
-                            "image": local_image_path,
-                            "id": alert.get("id"),
-                            "ts": alert.get("ts"),
-                            "device_id": alert.get("device_id"),
-                        }
-                    )
-
-                if self.download_images:
-                    await self.hass.async_add_executor_job(self._cleanup_old_images, device_id, self.max_saved_photos)
-
-                if alert_dicts:
-                    latest = max(alert_dicts, key=lambda a: a.get("ts", 0) or 0)
-                    cam_data["latest_alert"] = latest.get("type", "Unknown")
-
-                cam_data["alerts"] = alert_dicts
-
-            result["cameras"][device_id] = cam_data
-
+        self._persist_learned_ips(learned_ips)
         return result
