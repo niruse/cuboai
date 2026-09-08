@@ -25,6 +25,7 @@ sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.entity"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 
+
 # Entity base classes and exceptions must be REAL objects, not MagicMock attributes:
 # the platform modules subclass them (and combine several by multiple inheritance, so
 # they must also be distinct classes), and `except HomeAssistantError` needs a real
@@ -87,8 +88,7 @@ _ha_module(
     RepeatMode=MagicMock(),
 )
 _ha_module("homeassistant.helpers.entity_registry", async_get=MagicMock())
-_ha_module("homeassistant.helpers.dispatcher", async_dispatcher_send=MagicMock(),
-           async_dispatcher_connect=MagicMock())
+_ha_module("homeassistant.helpers.dispatcher", async_dispatcher_send=MagicMock(), async_dispatcher_connect=MagicMock())
 _ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
 _ha_module("homeassistant.util")
 _ha_module("homeassistant.util.dt", utcnow=lambda: datetime.datetime.now(datetime.UTC))

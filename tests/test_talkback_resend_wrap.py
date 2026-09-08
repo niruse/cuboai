@@ -40,7 +40,7 @@ def test_identity_below_the_wrap():
 
 
 def test_resolves_across_the_wrap():
-    cur = 70000                       # ~74 min of talkback
+    cur = 70000  # ~74 min of talkback
     # the camera asks for frame 69990, which on the wire is 69990 % 65536
     assert cp._unwrap_index_back(69990 % 65536, cur) == 69990
     # the frame right at the wrap boundary
@@ -88,7 +88,7 @@ def test_lookup_misses_without_the_fix_and_hits_with_it():
     """The concrete failure: ~70 minutes in, the camera asks for three recent
     frames and the legacy u16 lookup resolves none of them."""
     talk_frag = 70000
-    sent_buf = dict.fromkeys(range(talk_frag - 128, talk_frag), b"au")   # the real 128-frame buffer
+    sent_buf = dict.fromkeys(range(talk_frag - 128, talk_frag), b"au")  # the real 128-frame buffer
     wanted = [69995, 69996, 69997]
     C = wanted[0] & 0xFFFF
     dec = _sack(C, [w - wanted[0] for w in wanted])
@@ -112,8 +112,9 @@ def test_source_still_applies_the_lift_at_the_lookup():
     src = open(_SRC, encoding="utf-8").read()
     m = re.search(r"frag = \(C \+ struct\.unpack_from.*?au = sent_buf\.get\(frag\)", src, re.S)
     assert m, "the talkback SACK-replay lookup could not be located"
-    assert "_unwrap_index_back(frag, talk_frag)" in m.group(0), \
+    assert "_unwrap_index_back(frag, talk_frag)" in m.group(0), (
         "the SACK-replay lookup no longer lifts the u16 into talk_frag's space"
+    )
 
 
 if __name__ == "__main__":

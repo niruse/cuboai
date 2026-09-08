@@ -23,11 +23,9 @@ import os
 import re
 import sys
 
-_TUTK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "custom_components", "cuboai", "tutk")
+_TUTK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "cuboai", "tutk")
 
-_spec = importlib.util.spec_from_file_location("cuboai_messages_under_test",
-                                               os.path.join(_TUTK, "cuboai_messages.py"))
+_spec = importlib.util.spec_from_file_location("cuboai_messages_under_test", os.path.join(_TUTK, "cuboai_messages.py"))
 msgs = importlib.util.module_from_spec(_spec)
 # Registered before exec: the module defines @dataclass types, and dataclasses
 # resolves annotations through sys.modules[cls.__module__].
@@ -41,7 +39,7 @@ def _greedy(raw: bytes):
     if not m:
         return None
     txt = m.group(0).decode("latin1", "replace")
-    txt = re.sub(r':\s*(\d{1,3}(?:\.\d{1,3}){3})\s*([,}\]])', r': "\1"\2', txt)
+    txt = re.sub(r":\s*(\d{1,3}(?:\.\d{1,3}){3})\s*([,}\]])", r': "\1"\2', txt)
     try:
         return json.loads(txt)
     except Exception:
