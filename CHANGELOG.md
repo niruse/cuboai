@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.27]
+
+### Fixed
+- **A pinned `rtsp_port` could still hop after a restart if one of our own go2rtc processes was left
+  holding it.** v2.6.24 waits for the configured port to free, but the orphan *reclaim* before that
+  wait was keyed on the API port (1985) — so an orphaned instance holding only the RTSP port (its
+  API port already free) was never killed, and the port hopped to the next one and stayed, silently
+  breaking an NVR that stores the port. Startup now, when a pinned port is busy, terminates our own
+  go2rtc processes by binary path (never a foreign holder) before waiting, so the pinned port is
+  reclaimed instead of abandoned. Keeps `nvr_rtsp_url` stable across restarts.
+
 ## [2.6.26]
 
 Correctness and engine-parity fixes contributed by **Fredrik Ringertz (@Fredde87)** — thank you.

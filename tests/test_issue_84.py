@@ -239,6 +239,22 @@ class TestPinnedRtspPortIsSticky:
         assert "if desired_rtsp != 8555:" in src
         assert "_wait_for_port_free(desired_rtsp, timeout=30.0)" in src
 
+    def test_start_reclaims_our_orphan_holding_only_the_pinned_rtsp_port(self):
+        """The API-port reclaim misses an orphan of ours that holds only the
+        RTSP port (API port free), so a pinned port would hop to desired+1 and
+        stay. start() must, when the pinned port is unbindable, kill our own
+        binary (which _terminate_stale_processes matches by exact path) before
+        the wait — inside the `desired_rtsp != 8555` branch only."""
+        import inspect
+
+        src = inspect.getsource(go2rtc_module.Go2RTCManager.start)
+        # the guard + the reclaim call live together in the pinned branch
+        branch = src[src.index("if desired_rtsp != 8555:") :]
+        assert "await self.hass.async_add_executor_job(_port_bindable, desired_rtsp)" in branch
+        assert "self._terminate_stale_processes" in branch
+        # and the reclaim is gated on the port being busy, not unconditional
+        assert "if not await self.hass.async_add_executor_job(_port_bindable, desired_rtsp):" in branch
+
 
 # =============================================================================
 # Camera entities go quiet when go2rtc is down
