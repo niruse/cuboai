@@ -162,25 +162,22 @@ class TestDecodeIdToken:
 
     def test_decodes_sub_claim(self):
         """Should decode the 'sub' claim from ID token."""
-        # Create a valid JWT structure (header.payload.signature)
-        # Payload: {"sub": "user-uuid-12345"}
-        import base64
+        # Build the token with PyJWT itself so the signature segment is well-formed on every
+        # PyJWT version. A hand-assembled `header.payload.fake-signature` is rejected by newer
+        # PyJWT (>=2.10) with "Invalid crypto padding" even when verify_signature is off, because
+        # it still base64url-decodes the crypto segment. decode_id_token verifies nothing, so the
+        # signing key here is irrelevant; a real Cognito token is always well-formed.
+        import jwt
 
-        header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
-        payload = base64.urlsafe_b64encode(b'{"sub":"user-uuid-12345"}').decode().rstrip("=")
-        token = f"{header}.{payload}.fake-signature"
-
+        token = jwt.encode({"sub": "user-uuid-12345"}, "secret", algorithm="HS256")
         result = cuboai_functions.decode_id_token(token)
         assert result == "user-uuid-12345"
 
     def test_returns_none_for_missing_sub(self):
         """Should return None if 'sub' claim is missing."""
-        import base64
+        import jwt
 
-        header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').decode().rstrip("=")
-        payload = base64.urlsafe_b64encode(b'{"name":"test"}').decode().rstrip("=")
-        token = f"{header}.{payload}.fake-signature"
-
+        token = jwt.encode({"name": "test"}, "secret", algorithm="HS256")
         result = cuboai_functions.decode_id_token(token)
         assert result is None
 
