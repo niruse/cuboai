@@ -613,6 +613,12 @@ def _clamp_env_knobs():
         ('CUBOAI_GAP_HOLD_MS', 1, 600000, None, False),
         ('CUBOAI_VERBOSE_INTERVAL', 0.1, 3600, 5.0, True),
         ('CUBOAI_VERBOSE_CAMERA_STATS_INTERVAL', 1, 86400, None, False),
+        ('CUBOAI_STALL_S', 0, 60, 4.0, True),
+        ('CUBOAI_OUTPUT_STALL_S', 0, 60, 6.0, True),
+        ('CUBOAI_FIRST_AU_S', 0, 120, 15.0, True),
+        ('CUBOAI_RECONNECT_MAX', 0, 20, 3, False),
+        ('CUBOAI_RECONNECT_TIMEOUT_S', 1, 60, 5.0, True),
+        ('CUBOAI_DESYNC_S', 0, 60, 8.0, True),
     ]
     for env, lo, hi, dflt, isf in KNOBS:
         raw = os.environ.get(env)

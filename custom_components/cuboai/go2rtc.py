@@ -132,7 +132,7 @@ class Go2RTCManager:
             # at another with a cross-stream ffmpeg: reference. That was tried
             # (commit bb4bf13) and reverted (3942771): the reference does
             # resolve and reuse does begin, but the nested ffmpeg defaults to
-            # a 5-SECOND RTSP dial timeout while the pure-python engine needs
+            # a 5-SECOND RTSP socket timeout while the pure-python engine needs
             # ~10s from cold, so on a cold start it times out and go2rtc
             # reports producer(None) medias=[] tracks=[]. One live stream
             # name remains the rule; the sanctioned self/cross references
@@ -140,6 +140,15 @@ class Go2RTCManager:
             # honors it since 1.9.x) so a cold engine can no longer starve
             # them (#85 round 4: HomeKit DESCRIBE -> 404 when the pre-warm
             # had failed and the nested ffmpeg lost the 5s race).
+            #
+            # NOTE: #timeout maps to ffmpeg's RTSP `-timeout`, which is the
+            # socket I/O (READ) timeout — not merely the dial (read straight
+            # off a live go2rtc.log: `-timeout 20000000`). So it also bounds
+            # any MID-STREAM silence: if the engine stops writing for 20 s,
+            # every nested transcode leg (h264 / stamped / opus) dies with
+            # it. The engine's own stall recovery (CUBOAI_STALL_S in
+            # cuboai_stream_video.py, issue #105) is sized to finish well
+            # inside that window.
             #
             # The three sources below are ordered and must stay ordered:
             #   1. exec: the pure-python engine, native A/V MPEG-TS producer.
@@ -182,10 +191,11 @@ class Go2RTCManager:
             #   1. camera.stream_source() pre-warms the combined stream AND
             #      then THIS stream, so by the time the URL is handed out the
             #      transcode has already found an IDR and is emitting H.264.
-            #   2. #timeout=20 on the reference (default 5s): even when the
-            #      pre-warm fails or expires, the nested ffmpeg now outlasts
-            #      the engine's ~10s cold start plus the up-to-one-GOP wait
-            #      for a decodable keyframe instead of dying into a 404.
+            #   2. #timeout=20 on the reference (default 5s; a socket READ
+            #      timeout, see the note above): even when the pre-warm fails
+            #      or expires, the nested ffmpeg now outlasts the engine's
+            #      ~10s cold start plus the up-to-one-GOP wait for a decodable
+            #      keyframe instead of dying into a 404.
             if force_h264:
                 # Cap at 1080p / H.264 High level 4.0 for HomeKit (and HLS).
                 # HomeKit cameras top out at 1920x1080 (~level 4.0); a Cubo 3
