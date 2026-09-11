@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.32]
+
+### Fixed
+- **The live stream could go dark for good when the camera fell silent mid-session (issue #105).**
+  On a Cubo Plus this happens roughly once an hour — sometimes after a burst of packet loss,
+  sometimes with no warning at all — and the streaming engine never noticed: it kept waiting on
+  an empty queue with its output open and no bytes, so go2rtc never saw the stream end. The
+  producer was only replaced once the last viewer gave up (an NVR after ~10–15 s, a cast to a
+  Nest Hub as soon as its buffer ran dry), at which point go2rtc reaped it and the next viewer
+  started a fresh one from scratch. On an NVR that showed up as a ~15 s gap in the recording
+  about 28 times a day; on a cast it was the dead stream reported in #105.
+
+  The engine now detects total silence (no access unit for 4 s **and** no packet from the camera
+  for as long — a survivable loss burst, where packets still arrive, is deliberately not treated as
+  a stall) and the producer **reconnects in place**: the session is torn down and re-established
+  on the same process, the timeline and muxer carry on, and viewers see a short gap of a few
+  seconds instead of a dead stream. The muxer covers the other way a stream dies while data still
+  flows — a loss burst that keeps damaging keyframes, so nothing decodable goes out for a long
+  stretch (seen live: 21 s) — by requesting the same reconnect after 8 s without a clean keyframe,
+  since a fresh session starts on one. Continuity counters, stream identity and presentation
+  timestamps all continue, so HLS/MSE/fMP4 consumers survive it. And it covers the in-between
+  case seen on the same soak — the camera goes nearly silent while a few late resends still
+  trickle in, so the engine holds partial frames internally and sends *nothing* out (no picture,
+  and nothing for the keyframe check to react to) while the trickle keeps the silence check from
+  firing — by reconnecting after 6 s with no picture delivered, whatever the camera is still
+  dribbling. A session that never streams is abandoned after 15 s and retried; after three
+  consecutive failures the producer exits so go2rtc respawns it as a last resort.
+
+  Everything is visible in `go2rtc.log` with debug logs on: a `[stall]` line saying how long the
+  camera was quiet and what it last sent, then `[reconnect] ok #n in Ns`, and the `[health]` line
+  gains a `RECOVERED reconn N … stalls N` suffix whenever a recovery has happened. Tunables (env
+  on the producer): `CUBOAI_STALL_S` (4, dead-silent), `CUBOAI_OUTPUT_STALL_S` (6, no picture out
+  while data still arrives), `CUBOAI_DESYNC_S` (8, picture out but none decodable),
+  `CUBOAI_FIRST_AU_S` (15), `CUBOAI_RECONNECT_MAX` (3).
+
+- **Three teardown bugs the DVR engine had already fixed, now fixed in the live engine too.**
+  go2rtc stops a producer with SIGTERM, and Python's default action terminates without running
+  the `finally`, so the session-close message was never sent and the camera kept that session
+  slot until its own timeout — a slow leak of camera slots on every stream stop. The close
+  message was also sent on a non-blocking socket and could be silently dropped at teardown.
+  And the health line never showed the recovery counters the engine already kept. All three are
+  ported.
+
+- **Corrected a misleading comment in `go2rtc.py`**: the `#timeout=20` on transcode legs is
+  ffmpeg's RTSP socket *read* timeout (it bounds mid-stream silence too), not just a dial timeout.
+
+### Not changed
+The persistent warm-hold requested in #105 was not added — with a silent producer it would have
+pinned the *dead* one and served it to the next viewer. Reconnecting the producer itself is the fix.
+
 ## [2.6.31]
 
 ### Changed
