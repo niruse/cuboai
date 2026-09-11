@@ -106,6 +106,18 @@ class PureSession:
         self._inner.disconnect()
         self.session_hdr = None
 
+    def reconnect(self, timeout_sec: float = 5.0, settle: float = 0.3) -> bool:
+        """Tear down and re-establish the session on the same engine object (mid-stream
+        recovery). Returns True on a granted session; never raises for a refused handshake."""
+        ok = bool(self._inner.reconnect(timeout=float(timeout_sec), settle=settle))
+        self.session_hdr = self._inner.session_hdr if ok else None
+        return ok
+
+    @property
+    def last_stall_info(self):
+        """Why the engine's AV generator last ended on its own (see TUTKDirectSession._stall_snapshot)."""
+        return getattr(self._inner, '_last_stall_info', None)
+
     @property
     def connected(self) -> bool:
         return self.session_hdr is not None
@@ -221,11 +233,11 @@ class PureSession:
         """Yield ('video'|'audio', bytes) access units as they arrive."""
         yield from self._inner.av_frames(duration=duration)
 
-    def av_frames_timed(self, duration=None) -> Iterator:
+    def av_frames_timed(self, duration=None, stop_when=None) -> Iterator:
         """Yield (kind, bytes, frameinfo) — the parsed per-AU FRAMEINFO (carrying the
         camera timestamp) travels with its AU for PTS assignment. frameinfo is None for
-        audio / unparsed AUs."""
-        yield from self._inner.av_frames_timed(duration=duration)
+        audio / unparsed AUs. stop_when: polled while idle; True ends the generator."""
+        yield from self._inner.av_frames_timed(duration=duration, stop_when=stop_when)
 
     def video_frames_timed(self, duration=None, max_frames=None) -> Iterator:
         """Yield (video_bytes, frameinfo) for video AUs only (drives the mpegts PTS path)."""

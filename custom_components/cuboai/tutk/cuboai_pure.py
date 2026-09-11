@@ -1936,6 +1936,40 @@ class TUTKDirectSession:
         if not self.camera_ip:
             self.camera_ip = "255.255.255.255"
         self._stat_keepalive_err = 0           # L1: keepalive-reply send failures (surfaces a wedged socket)
+        # ── stall detection (gated CUBOAI_STALL_S / CUBOAI_FIRST_AU_S; engine default 0 = OFF) ──
+        # A camera session can go silent mid-stream (observed on a CB02 roughly once an hour:
+        # a loss burst, then zero fragments forever). Nothing in the reader notices — it keeps
+        # select()ing, maybe_ack() stops sending because nothing advanced, and _read_av_units
+        # spins on an empty queue with stdout open and no bytes, so go2rtc never sees EOF and
+        # the producer is only replaced when the last consumer gives up. With these gates on,
+        # _read_av_units ENDS its generator (normal return) once no AU has been dequeued for
+        # _stall_s seconds AND no AV fragment has arrived for as long (so a survivable head-
+        # of-line hold, where fragments still flow but no AU can seal, never trips it), or
+        # once a fresh session has produced nothing for _first_au_s. The caller decides what to
+        # do next (cuboai_stream_video reconnects on the same timeline). Both floats below are
+        # written only by the reader thread on paths that already run, like every _stat_*.
+        def _env_secs(name):
+            try:
+                return max(0.0, float(os.environ.get(name, "") or "0"))
+            except (TypeError, ValueError):
+                return 0.0
+        self._stall_s = _env_secs("CUBOAI_STALL_S")
+        self._first_au_s = _env_secs("CUBOAI_FIRST_AU_S")
+        # Wedged-output gate: no COMPLETE AU delivered for this long, even though the camera is
+        # not silent (late resends still arrive, so the _stall_s AND-on-silence never trips, and
+        # nothing — not even an incomplete AU — reaches the muxer's desync gate). Observed live:
+        # ~19 s of no output while resends trickled, and the NVR reset (#105). Must sit above the
+        # ~2.4 s legitimate in-order recovery-hold; 6 s clears it with margin.
+        self._output_stall_s = _env_secs("CUBOAI_OUTPUT_STALL_S")
+        self._last_rx = None                   # wall time of the last datagram from the camera
+        self._last_av_rx = None                # wall time of the last AV DATA fragment
+        self._last_stall_info = None           # dict describing the last stall/first-AU timeout
+        self._stat_stalls = 0                  # times the AV generator ended on a mid-stream stall
+        self._stat_output_stalls = 0           # of those, the wedged-output kind (frags flow, no AU out)
+        self._stat_first_au_timeouts = 0       # times a session was abandoned for never streaming
+        self._stat_reconnects = 0              # reconnect() calls (session torn down + re-established)
+        self._stat_reconnect_fail = 0          # of those, handshakes that failed
+        self._stat_reconnect_s = 0.0           # cumulative seconds spent inside reconnect()
         # Talk (two-way audio): the camera advertises a 4.3.x capability word at [32:36] of its own
         # av-connect grant; we mirror it into OUR talk grant so the camera accepts us as an av-server.
         # Captured live in connect(); None until then (falls back to the proven constant if absent).
@@ -2803,6 +2837,12 @@ class TUTKDirectSession:
             'gap_cap_jumps': self._stat_gap_cap_jumps,
             'lone_skips': self._stat_lone_skips,
             'keepalive_err': self._stat_keepalive_err,   # L1
+            'stalls': self._stat_stalls,
+            'output_stalls': self._stat_output_stalls,
+            'first_au_timeouts': self._stat_first_au_timeouts,
+            'reconnects': self._stat_reconnects,
+            'reconnect_fail': self._stat_reconnect_fail,
+            'reconnect_s': round(self._stat_reconnect_s, 1),
             'ts_valid': self._stat_ts_valid,
             'ts_garbage': self._stat_ts_garbage,
             'ts_regress': self._stat_ts_regress,
@@ -3308,6 +3348,7 @@ class TUTKDirectSession:
                         raw, addr = s.recvfrom(8192)
                     except (BlockingIOError, OSError):
                         break
+                    self._last_rx = time.time()        # stall detector: anything from the camera
                     if len(raw) < 30:
                         # Answer the camera's 24-byte IOTC keepalive (alive-check)
                         # probe, as native does. Native replies to every probe;
@@ -3353,6 +3394,7 @@ class TUTKDirectSession:
                     avlen = struct.unpack("<H", dec[52:54])[0]
                     chunk = bytes(dec[64:64 + max(0, avlen)])
                     nframes += 1                       # verbose: camera AV fragment counter
+                    self._last_av_rx = time.time()     # stall detector: an AV DATA fragment arrived
                     if self._kf_grace and idx not in kf_idxs and is_kf_marker(chunk):
                         kf_idxs.add(idx)               # KF-grace: this AU is a keyframe (GOP root)
                     # ── filter out-of-band frames before reassembly ──
@@ -3461,7 +3503,27 @@ class TUTKDirectSession:
         finally:
             out_q.put(None)         # signal end-of-stream to the consumer
 
-    def _read_av_units(self, timeout=None, max_items=None):
+    def _stall_snapshot(self, now, kind, since_s, emitted):
+        """Describe why the AV generator is ending, for the caller's [stall] log line.
+
+        Ages are measured from `now` so the line reads as "how long ago" at the moment the
+        decision was taken; None means "never seen this session".
+        """
+        def _age(t):
+            return round(now - t, 1) if t else None
+        return {
+            'kind': kind,                          # 'stall' | 'output_stall' | 'first_au' | 'external'
+            'since_s': round(since_s, 1),          # seconds since the last dequeued AU (or session start)
+            'emitted': emitted,                    # AUs this session delivered before ending
+            'last_pkt_age': _age(self._last_rx),   # ANY datagram — probes included
+            'last_frag_age': _age(self._last_av_rx),
+            'cam_clock_age': _age(getattr(self, '_cam_clock_ts', None)),
+            'keepalive_err': self._stat_keepalive_err,
+            'stalls': self._stat_stalls,
+            'first_au_timeouts': self._stat_first_au_timeouts,
+        }
+
+    def _read_av_units(self, timeout=None, max_items=None, stop_when=None):
         """Yield ('video'|'audio', access_unit_bytes) tuples from the camera stream.
 
         Sends the video-start IOCTLs, then spawns `_av_reader` to receive/ACK/reassemble
@@ -3508,6 +3570,7 @@ class TUTKDirectSession:
 
         emitted = 0
         t0 = time.time()
+        t_last = t0                            # wall time of the last DEQUEUED AU
         try:
             while True:
                 if timeout is not None and time.time() - t0 >= timeout:
@@ -3519,15 +3582,59 @@ class TUTKDirectSession:
                 except _queue.Empty:
                     if not reader.is_alive():
                         return
+                    now = time.time()
+                    # External deadline (the streamer's decode-stall clock): the muxer can only
+                    # check it when an AU arrives; this idle loop wakes every 0.2 s regardless,
+                    # so a stall is caught on time even when nothing arrives at all.
+                    if stop_when is not None and stop_when():
+                        self._last_stall_info = self._stall_snapshot(now, 'external', now - t_last, emitted)
+                        return
+                    # ── stall / first-AU gates (0 = off; see __init__) ──────────────
+                    # This branch is the only code in the whole stack that wakes up while
+                    # the camera is silent, so the decision lives here. The generator just
+                    # ENDS (a normal return, reader joined in `finally`); the caller owns
+                    # the recovery policy.
+                    if emitted == 0:
+                        if self._first_au_s > 0 and now - t0 >= self._first_au_s:
+                            self._stat_first_au_timeouts += 1
+                            self._last_stall_info = self._stall_snapshot(now, 'first_au', now - t0, 0)
+                            return
+                    else:
+                        idle = now - t_last               # since the last COMPLETE AU was dequeued
+                        last_frag = self._last_av_rx
+                        # SILENT: no AU AND no fragment for _stall_s — the camera has stopped.
+                        # React fast (4 s); the AND keeps a survivable recovery-hold, where
+                        # fragments still arrive, from tripping it.
+                        silent = (self._stall_s > 0 and idle >= self._stall_s
+                                  and (last_frag is None or now - last_frag >= self._stall_s))
+                        # WEDGED: no AU for _output_stall_s regardless of fragments — the reader
+                        # is stuck behind an unrecoverable hole while resends trickle. Invisible
+                        # to `silent` and to the muxer's desync gate (nothing reaches it), so it
+                        # needs its own, longer deadline (#105, the 10:56 NVR reset).
+                        wedged = self._output_stall_s > 0 and idle >= self._output_stall_s
+                        if silent or wedged:
+                            kind = 'stall' if silent else 'output_stall'
+                            self._stat_stalls += 1
+                            if not silent:
+                                self._stat_output_stalls += 1
+                            self._last_stall_info = self._stall_snapshot(now, kind, idle, emitted)
+                            return
                     continue
                 if item is None:               # reader ended
                     return
+                # Stamp at DEQUEUE, before the yield: a slow consumer downstream (go2rtc back-
+                # pressure on stdout) must never be mistaken for a silent camera.
+                t_last = time.time()
                 yield item
                 emitted += 1
         finally:
             stop_evt.set()
             reader.join(timeout=1.5)
-            if self._av_reader_thread is reader:
+            # Only forget the reader once it is actually gone. A reader that outlived the
+            # join would otherwise be invisible to _stop_reader()/disconnect(), have its
+            # socket closed underneath it, and — because _send_ack/_send_nak go through
+            # self._sock — could end up sending on a NEW socket with stale state.
+            if self._av_reader_thread is reader and not reader.is_alive():
                 self._av_reader_thread = None
                 self._av_stop_evt = None
 
@@ -3545,10 +3652,11 @@ class TUTKDirectSession:
         for kind, unit, _fi in self._read_av_units(timeout=duration):
             yield (kind, unit)
 
-    def av_frames_timed(self, duration=None):
+    def av_frames_timed(self, duration=None, stop_when=None):
         """Like av_frames but yields (kind, bytes, frameinfo); frameinfo is the parsed FRAMEINFO
-        dict for that AU (video, when CUBOAI_STRIP_FRAMEINFO is on) or None (audio/unparsed)."""
-        yield from self._read_av_units(timeout=duration)
+        dict for that AU (video, when CUBOAI_STRIP_FRAMEINFO is on) or None (audio/unparsed).
+        stop_when: optional callable polled while the queue is idle; True ends the generator."""
+        yield from self._read_av_units(timeout=duration, stop_when=stop_when)
 
     def video_frames(self, max_frames=None):
         """Yield raw video access-unit bytes (video only; H.264 or HEVC Annex-B)."""
@@ -4051,6 +4159,41 @@ class TUTKDirectSession:
         self._av_stop_evt = None
         self._av_reader_thread = None
 
+    def reconnect(self, timeout=5.0, settle=0.3):
+        """Tear the session down and bring it back up on the SAME object.
+
+        For mid-stream recovery: the caller keeps its muxer/timeline and simply starts a
+        new av_frames_timed() afterwards (which re-issues the start IOCTLs itself).
+        connect() already resets every per-session field and deliberately keeps the
+        cumulative _stat_* counters and the learned RTT, so get_stats() stays continuous.
+
+        Joins any still-live reader FIRST — a reader that survived _read_av_units'
+        1.5 s join must never coexist with a new socket (it is the sole sender while
+        streaming; _send_ack/_send_nak use self._sock). Then disconnect() sends the close
+        burst so the camera frees its slot, `settle` lets that land before the new probe
+        (the ioctl() retry path uses the same pause), then connect().
+        Returns True on a granted session.
+        """
+        th = self._av_reader_thread
+        ev = self._av_stop_evt
+        if ev is not None:
+            ev.set()
+        while th is not None and th is not threading.current_thread() and th.is_alive():
+            th.join(timeout=1.0)
+        self.disconnect()
+        if settle and settle > 0:
+            time.sleep(settle)
+        self._stat_reconnects += 1
+        t0 = time.time()
+        ok = False
+        try:
+            ok = bool(self.connect(timeout=timeout))
+        finally:
+            self._stat_reconnect_s += time.time() - t0
+            if not ok:
+                self._stat_reconnect_fail += 1
+        return ok
+
     def disconnect(self):
         """Tear down the session the way native does, then release all state.
 
@@ -4068,13 +4211,27 @@ class TUTKDirectSession:
         # 2. best-effort session-close (3x, as native). UDP: unacked is fine. Guard
         #    on having a live socket + the session R/peer the close frame needs.
         if self._sock is not None and self._R is not None and self._cam is not None:
+            # build_close is the camera's session-stop signal (Linux capture: 3x 24-byte
+            # build_close, then the camera goes silent). Send it BLOCKING so it is
+            # guaranteed to leave: the socket is non-blocking, and at teardown — send
+            # buffer still full from the ACK burst — a plain sendto() can silently
+            # EWOULDBLOCK-drop it. A dropped close leaves the camera holding the slot
+            # until its own alive-timeout, which is exactly what an immediate reconnect
+            # must not race. (Same fix the playback engine carries.)
             try:
                 # Echo the camera's stored session token if we observed it in a probe;
                 # else build_close falls back to the seeded template (same wire).
                 frame = build_close(self._R, session_fp=self._session_fp)
+                try:
+                    self._sock.setblocking(True)
+                except OSError:
+                    pass
                 for _ in range(3):
-                    self._sock.sendto(frame, self._cam)
-            except OSError:
+                    try:
+                        self._sock.sendto(frame, self._cam)
+                    except OSError:
+                        pass
+            except Exception:
                 pass
         # 3. close the socket.
         if self._sock is not None:

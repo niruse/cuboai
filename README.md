@@ -570,6 +570,23 @@ connection to the camera, which is deliberate ([issue #85](https://github.com/ni
 a second session broke HomeKit on the Cubo 3). Recording continuously is fine;
 the camera is opened once no matter how many things are watching.
 
+### A note on mid-stream stalls
+
+The camera's session can go silent for good every hour or two — sometimes after a
+burst of packet loss, sometimes with no warning — and a bad enough burst can keep
+damaging keyframes for a while so that nothing decodable comes through even though
+data still flows. Since v2.6.32 the streaming engine detects both (no picture
+**and** no packet for 4 s; or no clean keyframe for 8 s) and **reconnects in
+place**: viewers see a gap of a few seconds, then the stream continues on the
+same timeline, so an NVR keeps recording and an HLS/MSE/cast viewer keeps
+playing. If you watch `go2rtc.log` with debug logs on you will see a `[stall]`
+line followed by `[reconnect] ok`. A recorder that gives up in under ~8 s would
+still drop the connection once and reconnect; every recorder we have seen waits
+longer than that. Tunables on the producer environment if you ever need them:
+`CUBOAI_STALL_S` (default 4, dead-silent), `CUBOAI_OUTPUT_STALL_S` (6, fragments
+arriving but no picture out), `CUBOAI_DESYNC_S` (8, picture out but none
+decodable), `CUBOAI_FIRST_AU_S` (15), `CUBOAI_RECONNECT_MAX` (3).
+
 ## 📈 Sleep windows and the timeline chart
 
 CuboAI keeps Total Sleep, Wake-ups, Longest Sleep and the sleep-routine chart
@@ -844,7 +861,7 @@ If you are experiencing issues (stream not playing, HomeKit "No Response", senso
 | Log file | Location | What it contains |
 |---|---|---|
 | `cuboai_debug.log` | HA `config` folder | Every debug/info/error message from the whole integration (sensors, camera, media player, coordinator) |
-| `go2rtc.log` | `config/custom_components/cuboai/bin/` | Streaming diagnostics (since v2.4.5): detected video codec (`[mpegts] muxing ...`), per-frame codec census of the first 300 frames (`FICENSUS`), fps/bitrate/loss health line every 10 s, GOP sync events, RTSP session negotiation |
+| `go2rtc.log` | `config/custom_components/cuboai/bin/` | Streaming diagnostics (since v2.4.5): detected video codec (`[mpegts] muxing ...`), per-frame codec census of the first 300 frames (`FICENSUS`), fps/bitrate/loss health line every 10 s (with a `RECOVERED …` suffix once a reconnect has happened), GOP sync events, camera-silence recoveries (`[stall] …` then `[reconnect] ok`, since v2.6.32), RTSP session negotiation |
 | `cuboai_last_alert_debug.log` | HA `config` folder | Alert polling / image download trace |
 | Home Assistant log | **Settings > System > Logs** | The integration's debug messages also appear here automatically — no `logger:` changes in `configuration.yaml` needed |
 

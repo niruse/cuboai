@@ -48,6 +48,11 @@ class PTSClock:
     def set_base(self, base_ms):
         if self._base_ms is None:
             self._base_ms = base_ms
+    def shift_base(self, delta_ms):
+        """Move an already-set epoch by delta_ms. Only AVTimeline calls this, and it shifts
+        BOTH tracks' clocks by the same delta so the inter-track offset is preserved."""
+        if self._base_ms is not None:
+            self._base_ms += int(delta_ms)
     @property
     def base_ms(self):
         return self._base_ms
@@ -178,11 +183,21 @@ class AVTimeline:
     monotonic timeline independent while the shared epoch preserves the inter-track offset.
     Returns the PTSClock dict (pts_ms, pts_90k, keyframe, interpolated) for each AU.
     """
-    def __init__(self, audio_nominal_ms=64.0):
+    # A camera-clock step across a reconnect larger than this is treated as a clock change
+    # (reboot, NTP correction) rather than real elapsed time. Far above per-frame jitter,
+    # far below any reboot.
+    REBASE_TOLERANCE_MS = 2000.0
+
+    def __init__(self, audio_nominal_ms=64.0, clock=None):
+        import time
         self._v = PTSClock()
         self._a = PTSClock(nominal_ms=audio_nominal_ms)
         self._atl = AudioTimeline()
         self._base = None
+        self._clock = clock or time.time         # injectable for tests
+        self._last_wall = None                   # wall time of the last video AU
+        self._disc = False                       # a discontinuity was announced; resolve on next valid ts
+        self.n_rebase = 0
 
     def _ensure_base(self, ts_ms):
         if self._base is None:
@@ -190,15 +205,51 @@ class AVTimeline:
             self._v.set_base(self._base)
             self._a.set_base(self._base)
 
+    def mark_discontinuity(self):
+        """Announce that the camera session was re-established (a gap of unknown length).
+
+        Normally nothing changes: the shared base is kept, so the next video PTS jumps forward
+        by exactly the real outage — a genuine gap that fMP4/MSE consumers handle. The one case
+        that needs help is a camera whose clock stepped (rebooted, NTP corrected) while we were
+        away: its timestamps would land BEHIND the last PTS and the strict-monotonic clamp
+        would then advance the timeline by +1 ms per frame forever — video at ~1/77 speed —
+        or, for a forward step, jump hours ahead. So on the first valid video timestamp after
+        this mark, compare where the camera clock says we are with where wall time says we
+        should be; if they disagree by more than REBASE_TOLERANCE_MS, shift the SHARED base so
+        PTS continues from last + real elapsed time. Both clocks shift together, so A/V sync
+        is preserved.
+        """
+        self._disc = True
+
+    def _maybe_rebase(self, ts_ms):
+        if not self._disc:
+            return
+        self._disc = False
+        if self._base is None or self._v._last_pts_ms is None or self._last_wall is None:
+            return
+        raw = float(ts_ms - self._base)
+        expected = self._v._last_pts_ms + (self._clock() - self._last_wall) * 1000.0
+        delta = raw - expected
+        if abs(delta) > self.REBASE_TOLERANCE_MS:
+            d = int(round(delta))
+            self._base += d
+            self._v.shift_base(d)
+            self._a.shift_base(d)
+            self.n_rebase += 1
+
     def video(self, fi, nal_keyframe=None):
         if fi is not None:
             if fi.get('ts_valid'):                       # only a VALID ts seeds the shared base
                 self._ensure_base(fi['timestamp_ms'])
-            return self._v.feed(timestamp_ms=fi['timestamp_ms'], ts_valid=fi.get('ts_valid', False),
-                                is_keyframe=fi.get('is_keyframe', False), frame_no=fi.get('frame_no'),
-                                nal_keyframe=nal_keyframe)
-        return self._v.feed(timestamp_ms=None, ts_valid=False, is_keyframe=bool(nal_keyframe),
-                            nal_keyframe=nal_keyframe)
+                self._maybe_rebase(fi['timestamp_ms'])
+            r = self._v.feed(timestamp_ms=fi['timestamp_ms'], ts_valid=fi.get('ts_valid', False),
+                             is_keyframe=fi.get('is_keyframe', False), frame_no=fi.get('frame_no'),
+                             nal_keyframe=nal_keyframe)
+        else:
+            r = self._v.feed(timestamp_ms=None, ts_valid=False, is_keyframe=bool(nal_keyframe),
+                             nal_keyframe=nal_keyframe)
+        self._last_wall = self._clock()
+        return r
 
     def audio(self, fi):
         if fi is not None and fi.get('ts_valid'):
@@ -208,7 +259,9 @@ class AVTimeline:
         return self._a.feed(timestamp_ms=None, ts_valid=False, is_keyframe=True)
 
     def stats(self):
-        return self._v.stats()
+        d = self._v.stats()
+        d['rebase'] = self.n_rebase
+        return d
 
 
 # ── self-test (unit tests for the edge cases) ──────────────────────────────────
