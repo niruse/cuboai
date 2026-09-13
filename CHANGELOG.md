@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.33]
+
+### Fixed
+- **A crashed streaming engine stayed down until someone noticed.** The internal go2rtc server was
+  started once and its exit code checked once, a second later. After that nothing watched it, so
+  if it ever died on its own the integration carried on as if all was well: the config entry still
+  reported *loaded*, every camera, sensor and switch kept its last state, and the only symptom was
+  the card showing `Cannot connect to host …:1985` the next time somebody opened it.
+
+  This is not hypothetical — it happened here. go2rtc took a segmentation fault inside its own
+  fMP4/MSE consumer while a phone that had the card open dropped its connection mid-frame, exited
+  at 23:24, and the camera was blank for **12.5 hours** until it was opened the next morning. On a
+  baby monitor that is the worst possible failure mode: silent, total, and indistinguishable from
+  a quiet night.
+
+  The engine is now supervised. Every 15 seconds the integration checks whether the process is
+  still alive and restarts it if not, turning a permanent outage into a gap of roughly twenty
+  seconds. The restart is logged as a warning, so a crash that used to be invisible now leaves a
+  trace. A binary that dies repeatedly within a minute of starting is treated as crash-looping
+  rather than unlucky: after five such attempts the supervisor logs an error, points at
+  `go2rtc.log` and stops, instead of hammering the camera with fresh sessions forever. Reloading
+  the integration arms it again.
+
+### Added
+- **A notification when the streaming engine had to be restarted**, on by default. A crash that is
+  silently repaired is still worth knowing about: an engine that restarts once a month is noise,
+  but one that restarts every hour is a problem you want to see rather than discover. The notice
+  says what happened, that no action is needed, and where to switch it off. The crash-loop case
+  gets its own notification instead, which *does* ask for action and points at `go2rtc.log`.
+
+  Turn it off under **Settings → Devices & Services → CuboAI → Configure**, with
+  *Notify me when the streaming engine restarts*. Notifications are per config entry, and each kind
+  replaces its own previous notice rather than stacking up.
+
 ## [2.6.32]
 
 ### Fixed

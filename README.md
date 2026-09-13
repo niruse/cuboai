@@ -887,6 +887,9 @@ Additional protections (since v2.4.4):
 
 - **Orphaned go2rtc cleanup**: if a previous go2rtc process survived a hard Home Assistant crash and still holds the ports, the integration detects it (by its `cuboai_*` streams) and terminates it on startup, reclaiming the standard ports.
 - **No retry storms**: if the internal go2rtc could not start at all, camera entities stop offering stream sources and live snapshots instead of hammering a port that may belong to another process (which previously caused an endless `Using native library` loop and resource exhaustion — see issue [#84](https://github.com/niruse/cuboai/issues/84)).
+- **Crash supervision (since v2.6.33)**: go2rtc is checked every 15 seconds and restarted if it has exited. Before this, a crash was completely silent — the integration stayed *loaded*, every entity kept its last state, and the only symptom was `Cannot connect to host …:1985` the next time the card was opened, which could easily go unnoticed overnight. A restart is logged as a warning (`go2rtc exited on its own with code … — restarting it`) and raises a Home Assistant notification, so a stream that keeps dying is visible rather than merely survivable. If go2rtc dies within a minute of starting five times in a row it is treated as crash-looping: the integration logs an error, notifies you that the cameras will stay unavailable, points at `go2rtc.log` and stops restarting it, rather than opening fresh camera sessions forever. Reloading the integration arms the supervisor again.
+
+  The notification is on by default and can be switched off under **Settings → Devices & Services → CuboAI → Configure** with *Notify me when the streaming engine restarts*.
 
 ---
 
