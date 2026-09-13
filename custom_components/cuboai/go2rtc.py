@@ -3,15 +3,60 @@ import logging
 import os
 import socket
 import sys
+import time
 
 import yaml
 from homeassistant.core import HomeAssistant
 
-from .const import DESIRED_API_PORT, DOMAIN
+from .const import DESIRED_API_PORT, DOMAIN, NOTIFY_ON_RESTART_DEFAULT, OPT_NOTIFY_ON_RESTART
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["DESIRED_API_PORT", "Go2RTCManager"]
+# ── go2rtc process watchdog ───────────────────────────────────────────────────
+#
+# go2rtc can die on its own, and until now nothing noticed. Observed live: a
+# nil-pointer panic inside go2rtc's OWN mp4/fMP4 consumer (pkg/mp4/consumer.go
+# -> core.WriteBuffer.Write -> http.response.Flush) when a browser holding an
+# MSE stream dropped its connection mid-write. The Go process took SIGSEGV and
+# exited; the config entry stayed "loaded", every entity kept its state, and the
+# camera was simply blank for 12.5 hours until a human opened the card and saw
+# "Cannot connect to host …:1985".
+#
+# The subprocess is spawned once in start() and its exit code is checked once,
+# one second later. After that nobody looks. These three knobs close that hole.
+WATCHDOG_INTERVAL = 15.0
+# A respawned instance that dies again sooner than this is a failed restart, not
+# a recovery — the binary is crash-looping (bad config, unusable port, corrupt
+# download) and respawning it faster will not help.
+WATCHDOG_MIN_HEALTHY_S = 60.0
+# Consecutive failed restarts before the watchdog gives up and stays quiet. A
+# crash-loop must not become an infinite spawn loop against the camera: every
+# start reclaims ports and re-opens TUTK sessions. Reloading the entry (or
+# restarting HA) arms it again.
+WATCHDOG_MAX_RESTARTS = 5
+
+__all__ = [
+    "DESIRED_API_PORT",
+    "NOTIFY_ON_RESTART_DEFAULT",
+    "OPT_NOTIFY_ON_RESTART",
+    "WATCHDOG_INTERVAL",
+    "WATCHDOG_MAX_RESTARTS",
+    "WATCHDOG_MIN_HEALTHY_S",
+    "Go2RTCManager",
+]
+
+
+def _humanize_uptime(seconds: float) -> str:
+    """How long the engine had been up, in the largest unit that reads naturally.
+
+    A crash-loop restart can be seconds old and a healthy one hours old, and
+    "0 minutes" or "312 minutes" both read as a bug in the message.
+    """
+    if seconds < 120:
+        return f"{seconds:.0f} seconds"
+    if seconds < 7200:
+        return f"{seconds / 60:.0f} minutes"
+    return f"{seconds / 3600:.1f} hours"
 
 
 def _port_bindable(port: int) -> bool:
@@ -40,6 +85,11 @@ class Go2RTCManager:
         self._streams = {}
         self._cameras = []
         self._options = {}
+        # Watchdog state. `_started_at` is monotonic (wall clock can step under
+        # NTP and would make a long healthy run look instantaneous).
+        self._watchdog_task: asyncio.Task | None = None
+        self._watchdog_restarts = 0
+        self._started_at: float | None = None
 
     def update_streams(self, cameras: list[dict], options: dict = None):
         """Update the streams list based on configured cameras. The actual resolution happens in start()."""
@@ -816,8 +866,138 @@ class Go2RTCManager:
         except Exception as e:
             _LOGGER.error(f"Failed to start go2rtc: {e}")
 
+        # Arm the watchdog only for a process that actually survived the health
+        # check above. Doing this AFTER the try/except means a start that threw
+        # leaves no watchdog running against a process that never existed.
+        if self.process is not None:
+            self._started_at = time.monotonic()
+            self._start_watchdog()
+
+    # ── watchdog ──────────────────────────────────────────────────────────────
+
+    def _start_watchdog(self) -> None:
+        """(Re)arm the supervisor task for the current process."""
+        self._cancel_watchdog()
+        self._watchdog_task = self.hass.async_create_task(self._watchdog())
+
+    def _cancel_watchdog(self) -> None:
+        """Disarm the supervisor.
+
+        Skips cancelling the task we are RUNNING IN. The watchdog restarts
+        go2rtc by calling start(), which calls stop() — so without this guard a
+        restart would cancel the very task performing it, half way through, and
+        leave go2rtc down for good. The task retires by itself right after
+        start() has armed a fresh one.
+        """
+        task, self._watchdog_task = self._watchdog_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def _notify(self, title: str, message: str, suffix: str) -> None:
+        """Raise a Home Assistant notification about the streaming engine.
+
+        Best-effort and never fatal: a supervisor that cannot file a notice must
+        still do its actual job, which is getting the camera back.
+        """
+        if not self._options.get(OPT_NOTIFY_ON_RESTART, NOTIFY_ON_RESTART_DEFAULT):
+            return
+        try:
+            # Imported here, not at module scope: the test harness stubs
+            # `homeassistant` as a plain module, so a top-level submodule import
+            # breaks collection for every test that touches this package.
+            from homeassistant.components import persistent_notification
+
+            persistent_notification.async_create(
+                self.hass,
+                f"{message}\n\nYou can turn these notifications off in "
+                "Settings → Devices & Services → CuboAI → Configure.",
+                title=title,
+                # Per entry and per kind, so a camera that restarts repeatedly
+                # replaces its own notice instead of burying the dashboard.
+                notification_id=f"cuboai_engine_{suffix}_{self._entry_id or 'default'}",
+            )
+        except Exception:  # noqa: BLE001 - never let a notice break recovery
+            _LOGGER.debug("Could not create the go2rtc notification", exc_info=True)
+
+    def _watchdog_should_restart(self, uptime: float) -> bool:
+        """Whether a go2rtc that just exited after `uptime` seconds is worth
+        respawning, updating the consecutive-failure budget as a side effect."""
+        # A run that lasted a while was healthy; whatever killed it is worth
+        # recovering from, and the failure budget starts over.
+        if uptime >= WATCHDOG_MIN_HEALTHY_S:
+            self._watchdog_restarts = 0
+            return True
+        self._watchdog_restarts += 1
+        if self._watchdog_restarts >= WATCHDOG_MAX_RESTARTS:
+            _LOGGER.error(
+                "go2rtc died after only %.0fs, %s times in a row — not restarting it again. "
+                "Reload the CuboAI integration once the cause is fixed; see %s",
+                uptime,
+                self._watchdog_restarts,
+                os.path.join(os.path.dirname(self._config_path), "go2rtc.log"),
+            )
+            self._notify(
+                "CuboAI streaming engine keeps crashing",
+                f"The streaming engine died within {uptime:.0f} seconds of starting, "
+                f"{self._watchdog_restarts} times in a row, so CuboAI has stopped restarting it. "
+                "Your cameras will stay unavailable until this is fixed. "
+                "Check go2rtc.log in config/custom_components/cuboai/bin/, then reload the "
+                "CuboAI integration.",
+                "gaveup",
+            )
+            return False
+        return True
+
+    async def _watchdog(self) -> None:
+        """Restart go2rtc if it exits on its own.
+
+        Runs until cancelled by stop(), or until it hands over to the fresh task
+        that start() arms. Never raises into the event loop: an unexpected error
+        here must not take the integration down with it.
+        """
+        try:
+            while True:
+                await asyncio.sleep(WATCHDOG_INTERVAL)
+                if self.process is None:
+                    # stop() ran without cancelling us (or start() failed).
+                    # Nothing to supervise.
+                    return
+                if self.process.returncode is None:
+                    continue
+                code = self.process.returncode
+                # No start stamp should be impossible here (start() sets it
+                # before arming us). Treat it as a healthy run anyway: the
+                # fail-safe direction is to bring the camera back.
+                uptime = time.monotonic() - self._started_at if self._started_at else WATCHDOG_MIN_HEALTHY_S
+                if not self._watchdog_should_restart(uptime):
+                    return
+                _LOGGER.warning("go2rtc exited on its own with code %s after %.0fs — restarting it", code, uptime)
+                # start() arms a replacement watchdog; this one retires.
+                await self.start()
+                # Notified AFTER the restart so the message can state the
+                # outcome rather than an intention — and so a restart that
+                # itself fails is not announced as a recovery.
+                if self.is_running:
+                    self._notify(
+                        "CuboAI streaming engine restarted",
+                        f"The streaming engine stopped unexpectedly (exit code {code}) after "
+                        f"{_humanize_uptime(uptime)} and CuboAI restarted it automatically. "
+                        "Your cameras were unavailable for a few seconds. No action is needed — "
+                        "this notice exists so a repeating crash does not go unnoticed.",
+                        "restarted",
+                    )
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a supervisor must not die silently
+            _LOGGER.exception("go2rtc watchdog stopped unexpectedly; go2rtc is no longer supervised")
+
     async def stop(self):
         """Stop the go2rtc subprocess."""
+        # Disarm first: a watchdog that ticks between terminate() and the
+        # process reference being cleared would see a dead process and respawn
+        # the instance we are deliberately shutting down.
+        self._cancel_watchdog()
         if self.process:
             _LOGGER.info("Stopping internal go2rtc streaming server...")
             try:
@@ -829,6 +1009,7 @@ class Go2RTCManager:
                 pass
             finally:
                 self.process = None
+                self._started_at = None
                 _LOGGER.info("go2rtc stopped.")
 
     # ── DVR playback ──────────────────────────────────────────────────────
