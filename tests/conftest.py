@@ -89,6 +89,9 @@ class _DataUpdateCoordinator:
 
 _ha_module("homeassistant.components")
 _ha_module("homeassistant.components.switch", SwitchEntity=_entity_base("SwitchEntity"))
+# Real module (not a MagicMock attribute) so `from homeassistant.components import
+# persistent_notification` resolves, and so tests can assert on async_create.
+_ha_module("homeassistant.components.persistent_notification", async_create=MagicMock())
 _ha_module("homeassistant.helpers.restore_state", RestoreEntity=_entity_base("RestoreEntity"))
 _ha_module(
     "homeassistant.helpers.update_coordinator",

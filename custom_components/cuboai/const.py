@@ -9,6 +9,18 @@ DEFAULT_UPDATE_INTERVAL = 60
 #: constant or effective_ports(), never a bare 1985.
 DESIRED_API_PORT = 1985
 
+#: Option key for the notification raised when the streaming engine had to be
+#: restarted (or gave up). Lives here rather than in go2rtc.py so the options
+#: flow can offer the toggle without importing the streaming module — that
+#: import is deliberately deferred there (see config_flow's _port_bindable).
+#:
+#: ON by default, unlike every other toggle: this reports a failure that used
+#: to be entirely silent — a crashed engine left the entry "loaded" and every
+#: entity holding its last state, so a dead camera could go unnoticed all
+#: night. The notification says how to switch it off, so it surprises once.
+OPT_NOTIFY_ON_RESTART = "notify_on_engine_restart"
+NOTIFY_ON_RESTART_DEFAULT = True
+
 
 def effective_ports(hass, entry_id, rtsp_default: int = 8555) -> tuple[int, int]:
     """The (rtsp, api) ports go2rtc ACTUALLY bound, for ONE config entry.

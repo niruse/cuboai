@@ -6,7 +6,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 
 from .api import cuboai_functions as api
-from .const import DOMAIN, effective_ports
+from .const import DOMAIN, NOTIFY_ON_RESTART_DEFAULT, OPT_NOTIFY_ON_RESTART, effective_ports
 
 # Dedicated file logger for CuboAI
 _LOGGER = logging.getLogger(__name__)
@@ -451,6 +451,13 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(
                 "history_sensors",
                 default=self.config_entry.options.get("history_sensors", False),
+            ): bool,
+            # Defaults ON, unlike every other toggle here: it reports a failure
+            # that used to be completely silent, and a crash you never hear
+            # about is the reason a camera can stay dead all night.
+            vol.Optional(
+                OPT_NOTIFY_ON_RESTART,
+                default=self.config_entry.options.get(OPT_NOTIFY_ON_RESTART, NOTIFY_ON_RESTART_DEFAULT),
             ): bool,
             vol.Required(
                 "rtsp_port",

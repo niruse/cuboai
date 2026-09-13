@@ -76,12 +76,14 @@
           "enable_debug_logs": "Enable debug logs",
           "history_sensors": "Baby-present & DVR history sensors",
           "h264_cameras": "Transcode these cameras to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)",
-          "rtsp_port": "RTSP port for the local camera stream"
+          "rtsp_port": "RTSP port for the local camera stream",
+          "notify_on_engine_restart": "Notify me when the streaming engine restarts"
         },
         "data_description": {
           "rtsp_port": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
           "h264_cameras": "Check a camera only if it is H.265/HEVC (e.g. Cubo 3 / SW05) and fails in HomeKit or the HA stream view with a 'demuxing timed out' error. Leave native-H.264 cameras (Cubo 2 / CB02) unchecked — transcoding uses extra CPU.",
-          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url})."
+          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
+          "notify_on_engine_restart": "The streaming engine is restarted automatically if it stops unexpectedly. Leave this on to be told when that happens — a crash used to be completely silent, and an engine that keeps dying is worth knowing about. Turn it off if you would rather not see the notification."
         }
       }
     }
