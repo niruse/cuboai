@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import socket
 import sys
 import time
@@ -34,6 +35,13 @@ WATCHDOG_MIN_HEALTHY_S = 60.0
 # start reclaims ports and re-opens TUTK sessions. Reloading the entry (or
 # restarting HA) arms it again.
 WATCHDOG_MAX_RESTARTS = 5
+#: Size at which go2rtc.log is rolled into go2rtc.log.1. This was only ever
+#: enforced when go2rtc STARTED, so a healthy long-running instance appended
+#: forever: a user on issue #105 reported 549 MB, and this box was found sitting
+#: on an 11 MB "2 MB" backup. Debug logs are meant to be cheap to leave on; an
+#: unbounded file on a Home Assistant OS box is not. The watchdog now enforces
+#: it while go2rtc runs.
+LOG_MAX_BYTES = 2 * 1024 * 1024
 
 __all__ = [
     "DESIRED_API_PORT",
@@ -836,7 +844,10 @@ class Go2RTCManager:
             if debug_logs:
 
                 def _open_log():
-                    if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 2 * 1024 * 1024:
+                    # A rename is right HERE and only here: no process holds the
+                    # old inode yet, so this rotation is lossless. While go2rtc
+                    # runs, _rotate_oversized_log has to copy-and-truncate instead.
+                    if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > LOG_MAX_BYTES:
                         backup_path = f"{log_file_path}.1"
                         if os.path.exists(backup_path):
                             os.remove(backup_path)
@@ -892,6 +903,54 @@ class Go2RTCManager:
         task, self._watchdog_task = self._watchdog_task, None
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
+
+    def _log_file_path(self) -> str:
+        """Where go2rtc's stdout/stderr is written when debug logs are on."""
+        return os.path.join(os.path.dirname(self._config_path), "go2rtc.log")
+
+    def _rotate_oversized_log(self) -> int:
+        """Roll go2rtc.log into go2rtc.log.1 if it has grown past the cap.
+
+        Blocking — call from the executor. Returns the size rolled, or 0.
+
+        COPY-then-TRUNCATE, never rename. go2rtc holds an inherited O_APPEND file
+        descriptor on this inode for its whole life: a rename leaves it writing
+        happily into the renamed backup, so the "rotation" would reclaim nothing
+        and the next start would rotate an already-rotated file. Truncating the
+        very inode it is holding does work, because O_APPEND recomputes the write
+        offset from the file size on every write — the next line lands at byte 0
+        rather than leaving a multi-megabyte hole.
+
+        The lines written between the copy and the truncate are lost. That is an
+        acceptable price for a debug log that would otherwise fill the disk, and
+        it is why this only runs at the cap rather than continuously.
+        """
+        path = self._log_file_path()
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return 0
+        if size <= LOG_MAX_BYTES:
+            return 0
+        try:
+            shutil.copyfile(path, f"{path}.1")
+            os.truncate(path, 0)
+        except OSError:
+            _LOGGER.debug("Could not rotate %s", path, exc_info=True)
+            return 0
+        return size
+
+    async def _maybe_rotate_log(self) -> None:
+        """Enforce the log cap, without ever putting supervision at risk."""
+        if not self._options.get("enable_debug_logs", False):
+            return
+        try:
+            rolled = await self.hass.async_add_executor_job(self._rotate_oversized_log)
+        except Exception:  # noqa: BLE001 - housekeeping must never kill the watchdog
+            _LOGGER.debug("go2rtc log rotation check failed", exc_info=True)
+            return
+        if rolled:
+            _LOGGER.info("go2rtc.log reached %.1f MB — rolled into go2rtc.log.1", rolled / (1024 * 1024))
 
     def _notify(self, title: str, message: str, suffix: str) -> None:
         """Raise a Home Assistant notification about the streaming engine.
@@ -963,6 +1022,9 @@ class Go2RTCManager:
                     # Nothing to supervise.
                     return
                 if self.process.returncode is None:
+                    # Alive: the only other standing job is keeping the debug log
+                    # from eating the disk.
+                    await self._maybe_rotate_log()
                     continue
                 code = self.process.returncode
                 # No start stamp should be impossible here (start() sets it

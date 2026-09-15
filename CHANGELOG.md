@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.34]
+
+Both of these came out of issue [#105](https://github.com/niruse/cuboai/issues/105), where a
+reporter soaked a failing stream for weeks against a **549 MB** `go2rtc.log` that contained 21
+"verbose ON" banners and **zero** health lines. Neither the stream nor the fix was at fault — the
+diagnostics were.
+
+### Fixed
+- **The stream-health census could die silently and never come back.** With debug logs on, the
+  engine writes a `[health t=…]` line every 10 seconds — fps, bitrate, packet loss, and (since
+  v2.6.32) any reconnects it has recovered from. That whole loop ran unguarded, so a single
+  unexpected value would end the thread for the rest of the producer's life. The log kept the
+  "verbose ON" banner as its last word on the subject, which reads exactly like a stream with
+  nothing to report. A monitor that can fail invisibly is worse than no monitor at all.
+
+  The census now survives its own failures: a bad tick is reported once with a traceback, then on
+  a 1 / 10 / 100 backoff so a permanent fault stays greppable without flooding the log, and the
+  loop keeps running. When it recovers it says so. The failure lines carry the word `health`, so
+  the same `grep '\[health\]'` used for the census also finds the reason it stopped.
+
+- **`go2rtc.log` could grow without limit.** The 2 MB cap was only ever applied when go2rtc
+  started, so a healthy long-running instance appended to the same file indefinitely — which on a
+  Home Assistant OS box means a debug setting left on quietly eats the disk. The cap is now
+  enforced while go2rtc runs, and the log is rolled into `go2rtc.log.1` as documented.
+
+  It is rolled by copying and truncating rather than renaming: go2rtc holds an open append handle
+  on that file for its whole life, so a rename would leave it writing into the backup and reclaim
+  nothing — which is how 549 MB happened.
+
 ## [2.6.33]
 
 ### Fixed

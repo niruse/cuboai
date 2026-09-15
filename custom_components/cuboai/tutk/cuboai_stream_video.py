@@ -166,53 +166,77 @@ def _verbose_loop(sess, interval, camera_stats, stop):
     Decoupled from the engine's own verbose (_vlog prints to stdout) so media stays clean.
     """
     import time as _t
-    import cuboai_pure as cp
+    try:
+        import cuboai_pure as cp
+    except Exception as e:                  # pragma: no cover - import shape varies by install
+        _stderr(f"[health] DISABLED — cannot import the engine module: {e!r}")
+        return
     if not hasattr(sess, 'get_stats'):
         _stderr("[health] verbose stats need the pure-Python backend — disabled.")
         return
     prev = None
     t0 = _t.time()
     tick = 0
+    errors = 0
     while not stop.wait(interval):          # first line after `interval` s; exits when stopped
+        # ONE try around the WHOLE body. Everything below used to run bare, so a single
+        # exception — a renamed stats key, a None where a number was expected — killed this
+        # thread for the life of the producer. The census simply stopped, the `verbose ON`
+        # banner stayed as the last word on the subject, and the only diagnostic that can
+        # explain a wedged stream was gone with no trace in the log anyone would grep for
+        # (issue #105: a reporter soaked for weeks on a 549 MB log holding 21 banners and
+        # zero census lines). A monitor that can die silently is worse than no monitor: it
+        # reads as "nothing to report".
         try:
             cur = sess.get_stats()
-        except Exception:
-            continue
-        d = cp.stats_delta(prev, cur)
-        prev = cur
-        tsv = cur['ts_valid'] + cur['ts_garbage']
-        gpct = (100.0 * cur['ts_garbage'] / tsv) if tsv else 0.0
-        line = (f"[health t={_t.time() - t0:.0f}s] fps {d['fps']:.1f} "
-                f"{d['bitrate_kbps'] / 1000.0:.1f}Mbps | loss {d['loss_pct']:.1f}% "
-                f"recov {cur['recovery_pct']:.0f}% (req {d['resend_req']} rec {d['recovery_events']}) | "
-                f"gap {cur['gap_now']} (max {cur['gap_max']}, capjmp {cur['gap_cap_jumps']}) | "
-                f"incAU {d['au_incomplete']} kf {d['kf_incomplete']}/{d['kf_total']} | "
-                f"ts garbage {gpct:.0f}% regress {cur['ts_regress']}")
-        # Recovery visibility: a path that quietly heals must never read as healthy. Print
-        # only when something happened, so a clean session's line is unchanged and any
-        # occurrence stands out. (Same rule as the playback engine's health line.)
-        _rec = (cur.get('reconnects', 0), cur.get('stalls', 0), cur.get('first_au_timeouts', 0),
-                cur.get('keepalive_err', 0))
-        if any(_rec):
-            line += (f" | RECOVERED reconn {_rec[0]} (fail {cur.get('reconnect_fail', 0)}, "
-                     f"{cur.get('reconnect_s', 0)}s) stalls {_rec[1]} first_au {_rec[2]} "
-                     f"kaerr {_rec[3]}")
-        # Never poll the camera through a session that is mid-reconnect: the inject slot
-        # would fall back to an ioctl() with its OWN disconnect/connect on this thread.
-        if camera_stats and tick % 6 == 0 and getattr(sess, 'connected', True):   # slow cadence
-            try:
-                ss = sess.get_during_stream('get_session_stats', timeout=1.5) or {}
-                vs = ss.get('video') or {}
-                if ss.get('mode'):
-                    line += f" | cam {ss['mode']}"
-                    if vs.get('resendBufferUsage'):
-                        line += f" rbuf {vs['resendBufferUsage']}"
-                    if vs.get('send_err_count'):
-                        line += f" serr {vs['send_err_count']}"
-            except Exception:
-                pass
-        tick += 1
-        _stderr(line)
+            d = cp.stats_delta(prev, cur)
+            prev = cur
+            tsv = cur['ts_valid'] + cur['ts_garbage']
+            gpct = (100.0 * cur['ts_garbage'] / tsv) if tsv else 0.0
+            line = (f"[health t={_t.time() - t0:.0f}s] fps {d['fps']:.1f} "
+                    f"{d['bitrate_kbps'] / 1000.0:.1f}Mbps | loss {d['loss_pct']:.1f}% "
+                    f"recov {cur['recovery_pct']:.0f}% (req {d['resend_req']} rec {d['recovery_events']}) | "
+                    f"gap {cur['gap_now']} (max {cur['gap_max']}, capjmp {cur['gap_cap_jumps']}) | "
+                    f"incAU {d['au_incomplete']} kf {d['kf_incomplete']}/{d['kf_total']} | "
+                    f"ts garbage {gpct:.0f}% regress {cur['ts_regress']}")
+            # Recovery visibility: a path that quietly heals must never read as healthy. Print
+            # only when something happened, so a clean session's line is unchanged and any
+            # occurrence stands out. (Same rule as the playback engine's health line.)
+            _rec = (cur.get('reconnects', 0), cur.get('stalls', 0), cur.get('first_au_timeouts', 0),
+                    cur.get('keepalive_err', 0))
+            if any(_rec):
+                line += (f" | RECOVERED reconn {_rec[0]} (fail {cur.get('reconnect_fail', 0)}, "
+                         f"{cur.get('reconnect_s', 0)}s) stalls {_rec[1]} first_au {_rec[2]} "
+                         f"kaerr {_rec[3]}")
+            # Never poll the camera through a session that is mid-reconnect: the inject slot
+            # would fall back to an ioctl() with its OWN disconnect/connect on this thread.
+            if camera_stats and tick % 6 == 0 and getattr(sess, 'connected', True):   # slow cadence
+                try:
+                    ss = sess.get_during_stream('get_session_stats', timeout=1.5) or {}
+                    vs = ss.get('video') or {}
+                    if ss.get('mode'):
+                        line += f" | cam {ss['mode']}"
+                        if vs.get('resendBufferUsage'):
+                            line += f" rbuf {vs['resendBufferUsage']}"
+                        if vs.get('send_err_count'):
+                            line += f" serr {vs['send_err_count']}"
+                except Exception:
+                    pass
+            tick += 1
+            if errors:
+                line += f" | (census recovered after {errors} failed tick(s))"
+                errors = 0
+            _stderr(line)
+        except Exception as e:
+            # Say so, on a backoff, and keep going: a transient blip must not cost the rest
+            # of the session's visibility, and a permanent fault must be greppable. The word
+            # "health" is in the line so the census grep everyone is told to run finds it.
+            errors += 1
+            if errors in (1, 10, 100) or errors % 1000 == 0:
+                import traceback
+                _stderr(f"[health] census tick FAILED ({errors}x, still running): {e!r}")
+                if errors == 1:
+                    _stderr(traceback.format_exc().strip())
 
 
 def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log=_stderr,
