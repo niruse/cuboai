@@ -398,6 +398,25 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
             self._warm_hold_task = None
         await super().async_will_remove_from_hass()
 
+    def _remember_stream_handed_out(self, name: str) -> None:
+        """Keep the last few streams this camera handed to a caller, for diagnostics.
+
+        HomeKit asks for a stream_source at the start of every session, but its
+        session only lives ~25 s: by the time anyone downloads diagnostics the
+        consumer is gone from go2rtc. This keeps the answer to "which stream did
+        HomeKit actually get?" (issue #85) after the fact. In memory only, five
+        entries per camera, never persisted.
+        """
+        import datetime as dt
+
+        try:
+            store = self.hass.data.setdefault(DOMAIN, {}).setdefault(self.coordinator.config_entry.entry_id, {})
+            calls = store.setdefault("stream_source_calls", {}).setdefault(self._device_id, [])
+            calls.append({"stream": name, "at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds")})
+            del calls[:-5]
+        except Exception:  # noqa: BLE001 - bookkeeping must never cost a stream
+            pass
+
     async def stream_source(self) -> str | None:
         """Return the stream source. MUST return fast: HomeKit's session setup
         awaits this, and its budget is ~10s total — blocking here (the 2.6.16
@@ -428,6 +447,7 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
         # every internal ffmpeg leg carries #timeout=20 (#85 round 4), so a
         # cold dial waits instead of 404ing.
         name = live_stream_name(self._device_id, self.coordinator.config_entry.options)
+        self._remember_stream_handed_out(name)
         self._kick_warm_hold(name)
 
         # With debug logs on, capture go2rtc's view of the stream right now
