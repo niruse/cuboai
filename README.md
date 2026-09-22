@@ -849,6 +849,18 @@ now points at nothing and the recorder fails **silently**. Re-copy the address
 from the WebRTC Stream sensor's `nvr_rtsp_url` attribute. Everything inside Home
 Assistant (card, HLS, HomeKit, snapshots) migrated automatically.
 
+### Download diagnostics (start here)
+
+Since v2.6.35 there is a one-click report that is **already redacted and safe to attach to a GitHub issue**:
+
+1. **Settings → Devices & Services → CuboAI → Configure** → turn on **"Enable debug logs"** (so `go2rtc.log` has something to read), then reproduce the problem once — for HomeKit, tap the camera in the Home app.
+2. **Settings → Devices & Services → CuboAI → ⋮ (three dots) → Download diagnostics.**
+3. Attach the `.json` file to your issue.
+
+It collects, per camera: whether the **H.264 transcode** is on, which stream the camera hands to Home Assistant / HomeKit (and the last few it handed out), the **codec** go2rtc actually sees, who is connected to each stream, which streams RTSP clients dialed according to `go2rtc.log`, and — if you use the HomeKit integration — whether the camera is exposed and any per-entity HomeKit config that overrides the stream. It then states its conclusions in plain words under `verdicts` (for example: *"camera_1 sends HEVC and 'Transcode these cameras to H.264' is OFF for it…"*).
+
+Passwords, account e-mails, tokens, camera UIDs and your baby's name are removed or replaced with aliases like `camera_1` before the file is written.
+
 ### Debug logs
 
 If you are experiencing issues (stream not playing, HomeKit "No Response", sensors showing as "Unknown", the configuration flow hanging), one toggle collects everything needed for a report:
@@ -865,7 +877,9 @@ If you are experiencing issues (stream not playing, HomeKit "No Response", senso
 | `cuboai_last_alert_debug.log` | HA `config` folder | Alert polling / image download trace |
 | Home Assistant log | **Settings > System > Logs** | The integration's debug messages also appear here automatically — no `logger:` changes in `configuration.yaml` needed |
 
-> ⚠️ **Redact before sharing:** `go2rtc.log` (like `go2rtc.yaml`) contains your cameras' `CUBOAI_UID`, `CUBOAI_ACCOUNT` and `CUBOAI_PASSWORD` values on the exec command lines — replace them with `XXX` before attaching anything to a GitHub issue.
+> ⚠️ **Redact before sharing:** `go2rtc.log` (like `go2rtc.yaml`) contains your cameras' `CUBOAI_UID`, `CUBOAI_ACCOUNT` and `CUBOAI_PASSWORD` values on the exec command lines — replace them with `XXX` before attaching anything to a GitHub issue. (The **Download diagnostics** file above does this for you, and already includes the useful parts of `go2rtc.log`.)
+>
+> Note that the `go2rtc stream plan for …` line (is the H.264 transcode applied?) is written to **`cuboai_debug.log` / the Home Assistant log**, not to `go2rtc.log`.
 
 Log files are capped at 2 MB with rotation to protect disk space. Turning the toggle off restores the quiet defaults.
 

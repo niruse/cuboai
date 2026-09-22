@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.35]
+
+### Added
+- **Download diagnostics** — **Settings → Devices & Services → CuboAI → ⋮ → Download diagnostics**
+  now produces a single report that is already redacted and safe to attach to a GitHub issue.
+
+  Built for issue [#85](https://github.com/niruse/cuboai/issues/85), where a HomeKit "No Response" on
+  a Cubo 3 has outlived five releases because the one question that decides it could not be answered
+  from the thread: does HomeKit receive the H.264 transcode, or the camera's native HEVC? The facts
+  lived in four places — the integration's options, go2rtc's live state, `go2rtc.log`, and HomeKit's
+  own per-entity config, which can override the stream the integration hands out. The report brings
+  them together per camera: whether the H.264 transcode is on, which stream the camera hands out (and
+  the last five it handed out, so a HomeKit session that ended 25 seconds later is still visible), the
+  codec go2rtc actually sees, who is connected, which streams RTSP clients dialed, and whether HomeKit
+  exposes the camera with an overriding `stream_source`. It then states its conclusions in plain words,
+  e.g. that a camera sends HEVC while its H.264 transcode is off.
+
+  Passwords, account e-mails, login tokens, camera UIDs and the baby's name are removed or replaced
+  with aliases such as `camera_1` — including in `go2rtc.log` lines and in HomeKit config. The
+  redaction is layered, and each layer is tested on its own.
+
+### Fixed
+- The README now says where the `go2rtc stream plan for …` line is actually written: the Home
+  Assistant log / `cuboai_debug.log`, not `go2rtc.log`.
+
 ## [2.6.34]
 
 Both of these came out of issue [#105](https://github.com/niruse/cuboai/issues/105), where a
