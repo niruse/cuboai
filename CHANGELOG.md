@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.36]
+
+### Fixed
+- **Diagnostics now recognises a camera that never connects, and says why.** The first real
+  diagnostics report ([#107](https://github.com/niruse/cuboai/issues/107)) came from a user whose
+  camera never answered the connection handshake at all. The report told them to open the live view
+  for 15 seconds and download it again, which is exactly what they had just done, while the actual
+  cause sat in their log. The report now reads the two ways the handshake can fail and gives the
+  advice that fits each:
+  - **Never answered:** the network path. The camera replies from a different UDP port than the one
+    it was probed on, so a NAT or stateful firewall between Home Assistant and the camera drops the
+    reply. The report lists what to check in order: the camera IP is still current; bridged (not NAT)
+    networking for a VM; camera → Home Assistant UDP allowed as *new* traffic across subnets/VLANs
+    (the fix for [#98](https://github.com/niruse/cuboai/issues/98)); the same subnet as a test.
+  - **Answered but refused:** the camera itself limits how many sessions it grants and how fast, so
+    close extra viewers and retry.
+
+  A camera that fails now and then but streams at other times is reported as an intermittent path
+  rather than handed the checklist. Attempts are counted once each: go2rtc repeats every failure to
+  each waiting viewer, which made one report look like 30 failures when there were 2. The camera IP
+  being probed is now shown too, since a stale address gives the same symptom.
+
 ## [2.6.35]
 
 ### Added
