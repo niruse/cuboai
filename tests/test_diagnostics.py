@@ -352,6 +352,108 @@ def test_homekit_exposure_follows_home_assistants_filter_precedence(filt, expose
 
 
 # =============================================================================
+# A camera that never connects (issue #107)
+# =============================================================================
+# The first real download (#107) told a user whose camera never answered the
+# handshake to "open its live view for ~15 seconds, then download again" — which
+# is exactly what they had just done. The cause was in their log the whole time.
+# Line shapes below are the real ones from that log, with synthetic values.
+
+CAM_IP = "10.20.30.40"
+NO_REPLY_ENGINE = (
+    "13:41:51.417 DBG [exec] Connection failed: Pure Python handshake failed — the camera never "
+    "answered the discovery probe (no nO reply). Packets are not reaching the camera"
+)
+NO_REPLY_ECHO = (
+    '13:41:51.420 WRN [rtsp] error="streams: exec/pipe: EOF\\nUsing pure Python transport\\n'
+    "Connection failed: Pure Python handshake failed — the camera never answered the discovery "
+    'probe (no nO reply)."'
+)
+NO_GRANT_ENGINE = (
+    "13:50:00.000 DBG [exec] Connection failed: Pure Python handshake failed — camera answered "
+    "discovery but did not grant the session (no 0x2041 after nO). Retry"
+)
+CONSUMER_ONLY = [f"13:40:43.926 DBG [rtsp] new consumer stream=cuboai_combined_{DEV}"]
+
+
+async def _diagnose_failure(log, cameras=None):
+    entry = _entry(options={f"camera_ip_{DEV}": CAM_IP}, cameras=cameras)
+    return (await _diagnose(_hass(), entry, streams={}, log=log))[0]
+
+
+@pytest.mark.asyncio
+async def test_a_camera_that_never_answers_gets_the_network_verdict_not_codec_advice():
+    """THE #107 case. Kill: discovery-failure detection removed, or the
+    'open its live view' advice no longer suppressed by it."""
+    report = await _diagnose_failure(CONSUMER_ONLY + [NO_REPLY_ENGINE] + [NO_REPLY_ECHO] * 3)
+    joined = " ".join(report["verdicts"])
+
+    assert "never answered the connection probe" in joined, report["verdicts"]
+    assert "DIFFERENT UDP port" in joined and "#98" in joined, "the verdict must say why and how to fix it"
+    assert CAM_IP in joined, "name the address being probed — a stale IP gives the same symptom"
+    assert "open its live view" not in joined, "the advice that sent #107 round in a circle is back"
+
+
+@pytest.mark.asyncio
+async def test_failures_are_counted_as_attempts_not_log_lines():
+    """go2rtc echoes one engine failure to every waiting consumer (#107: 30 lines,
+    2 attempts). Kill: echoes counted alongside the engine's own line."""
+    report = await _diagnose_failure([NO_REPLY_ENGINE] + [NO_REPLY_ECHO] * 5)
+    assert report["go2rtc_log"]["handshake_failures"]["no_discovery_reply"] == 1
+
+
+@pytest.mark.asyncio
+async def test_echoes_still_count_when_the_engine_line_is_missing():
+    """A log without the engine's own line must not read as 'no failures'.
+
+    Kill: the echo fallback removed."""
+    report = await _diagnose_failure([NO_REPLY_ECHO] * 3)
+    assert report["go2rtc_log"]["handshake_failures"]["no_discovery_reply"] == 3
+    assert any("never answered" in v for v in report["verdicts"]), report["verdicts"]
+
+
+@pytest.mark.asyncio
+async def test_an_answered_but_refused_session_blames_the_camera_not_the_network():
+    """The opposite cause gets the opposite advice. Kill: grant-refusal detection
+    removed, or it routed to the network verdict."""
+    report = await _diagnose_failure([NO_GRANT_ENGINE])
+    joined = " ".join(report["verdicts"])
+
+    assert "refused the session" in joined, report["verdicts"]
+    assert "never answered" not in joined and "DIFFERENT UDP port" not in joined
+    assert "open its live view" not in joined
+
+
+@pytest.mark.asyncio
+async def test_a_camera_that_sometimes_connects_is_called_intermittent():
+    """A handful of failed probes on a camera that otherwise streams is a flaky
+    path, not a firewall rule — the fix-your-network checklist would be wrong.
+
+    Kill: the ever-streamed branch removed."""
+    streamed = "12:00:01.000 DBG [exec] FICENSUS n=57 kind=video codec=h264 kf=1"
+    report = await _diagnose_failure([streamed, NO_REPLY_ENGINE])
+    joined = " ".join(report["verdicts"])
+
+    assert "streamed at other times" in joined, report["verdicts"]
+    assert "Check, in order" not in joined
+
+
+@pytest.mark.asyncio
+async def test_a_multi_camera_install_does_not_blame_a_particular_camera():
+    """go2rtc.log lines do not say which camera failed. Kill: `who` always names
+    the first camera."""
+    two = [
+        {"device_id": DEV, "uid": UID, "baby_name": BABY, "password": CAM_PW, "account": ACCOUNT},
+        {"device_id": "CB02FFEEDDCCBBAA", "baby_name": "Noam"},
+    ]
+    report = await _diagnose_failure([NO_REPLY_ENGINE], cameras=two)
+    hit = next(v for v in report["verdicts"] if "never answered" in v)
+
+    assert hit.startswith("A camera"), hit
+    assert CAM_IP not in hit, "an address was pinned on a camera the log never identified"
+
+
+# =============================================================================
 # Robustness
 # =============================================================================
 

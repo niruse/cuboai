@@ -45,6 +45,16 @@ _CONSUMER = re.compile(r"\[rtsp\] new consumer stream=(\S+)")
 _VIDEO_CODEC = re.compile(r"kind=video\b.*?\bcodec=([a-z0-9]+)")
 _MUXING = re.compile(r"\[mpegts\] muxing ([a-z0-9]+)")
 
+# The two ways the camera handshake fails (see cuboai_transport_py.connect, #98).
+# They look identical to go2rtc but have opposite causes, so they get opposite
+# advice: nothing came back = the network path; answered-but-refused = the camera.
+_NO_DISCOVERY_REPLY = "no nO reply"
+_NO_GRANT = "no 0x2041 after nO"
+# The engine's OWN failure line. go2rtc then echoes the same failure to every
+# consumer waiting on the stream ("WRN [rtsp] error=…", "ERR …mjpeg…"), so a raw
+# line count overstates the attempts ~15x (#107: 30 lines, 2 attempts).
+_ENGINE_FAILURE_LINE = "[exec] Connection failed"
+
 _ENV_SECRET = re.compile(r"(CUBOAI_(?:UID|ACCOUNT|PASSWORD))=\S+")
 _URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/\s@:]+:[^/\s@]*@", re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -151,6 +161,8 @@ def log_facts(lines: list[str], scrubber: Scrubber) -> dict:
     consumers: dict[str, int] = {}
     codecs: dict[str, int] = {}
     key_events: list[str] = []
+    # [engine lines, echo lines] per failure kind
+    failures = {_NO_DISCOVERY_REPLY: [0, 0], _NO_GRANT: [0, 0]}
     for line in lines:
         m = _CONSUMER.search(line)
         if m:
@@ -159,12 +171,20 @@ def log_facts(lines: list[str], scrubber: Scrubber) -> dict:
         m = _VIDEO_CODEC.search(line) or _MUXING.search(line)
         if m:
             codecs[m.group(1)] = codecs.get(m.group(1), 0) + 1
+        for phrase, counts in failures.items():
+            if phrase in line:
+                counts[0 if _ENGINE_FAILURE_LINE in line else 1] += 1
         if _KEY_EVENT.search(line):
             key_events.append(line)
     return {
         "lines_read": len(lines),
         "rtsp_consumers_by_stream": consumers,
         "video_codecs_seen": codecs,
+        # Attempts, not lines: the engine's own line when present, else the echoes.
+        "handshake_failures": {
+            "no_discovery_reply": failures[_NO_DISCOVERY_REPLY][0] or failures[_NO_DISCOVERY_REPLY][1],
+            "answered_but_no_grant": failures[_NO_GRANT][0] or failures[_NO_GRANT][1],
+        },
         # FICENSUS lines alone would fill the budget; keep the few that show the
         # codec and every other kind of event.
         "key_events": [scrubber.text(x) for x in _thin_census(key_events)[-LOG_KEY_EVENTS:]],
@@ -307,6 +327,45 @@ def our_camera_entities(hass, entry) -> dict[str, str]:
 # ── verdicts ─────────────────────────────────────────────────────────────────
 
 
+def _handshake_verdicts(report: dict, no_reply: int, no_grant: int, ever_streamed: bool) -> list[str]:
+    """Advice for a camera session that could not be set up at all.
+
+    go2rtc.log lines do not say WHICH camera failed, so a single-camera install
+    names it and a multi-camera one says "a camera".
+    """
+    cams = report["cameras"]
+    who = next(iter(cams)) if len(cams) == 1 else "A camera"
+    ip = next(iter(cams.values())).get("camera_ip") if len(cams) == 1 else None
+    out = []
+    if no_reply:
+        where = f" ({ip})" if ip else ""
+        if ever_streamed:
+            out.append(
+                f"{who}{where} failed to answer the connection probe {no_reply} time(s), but streamed at "
+                "other times — an intermittent network path (Wi-Fi drops, a mesh node hand-over, a "
+                "firewall that sometimes loses its state) rather than a configuration problem."
+            )
+        else:
+            out.append(
+                f"{who}{where} never answered the connection probe ({no_reply} attempt(s) in go2rtc.log), "
+                "so no video was ever received — this is the network path, not the video codec. The probe "
+                "goes to the camera's UDP port 32761 but the camera answers from a DIFFERENT UDP port, so "
+                "anything stateful between Home Assistant and the camera drops the answer as unrelated "
+                "traffic. Check, in order: (1) the camera IP set in Configure is still the camera's "
+                "current address; (2) if Home Assistant runs in a VM, use bridged networking, not NAT; "
+                "(3) if they are on different subnets/VLANs, allow camera -> Home Assistant UDP as NEW "
+                "traffic, not only established/related (that fixed issue #98); (4) as a test, put both "
+                "on the same subnet."
+            )
+    if no_grant:
+        out.append(
+            f"{who} answered the connection probe but refused the session {no_grant} time(s). That is "
+            "the camera, not the network: it limits how many sessions it grants and how fast. Close "
+            "extra viewers (the Cubo app on several phones counts), wait a minute, and try again."
+        )
+    return out
+
+
 def verdicts(report: dict) -> list[str]:
     """Plain-language conclusions. Each rule states one thing that is true of
     this box and matters for HomeKit / HA's stream player."""
@@ -318,7 +377,12 @@ def verdicts(report: dict) -> list[str]:
             "Debug logs are OFF, so go2rtc.log holds no stream details. Turn on 'Enable debug logs' "
             "(Configure), reproduce the problem, then download diagnostics again."
         )
-    log_codecs = set((report.get("go2rtc_log") or {}).get("video_codecs_seen") or {})
+    log = report.get("go2rtc_log") or {}
+    log_codecs = set(log.get("video_codecs_seen") or {})
+    handshake = log.get("handshake_failures") or {}
+    no_reply = handshake.get("no_discovery_reply", 0)
+    no_grant = handshake.get("answered_but_no_grant", 0)
+    out += _handshake_verdicts(report, no_reply, no_grant, bool(log_codecs))
     for alias, cam in report["cameras"].items():
         live = cam["streams"]["combined"].get("video_codec") or []
         hevc = any(c.upper() in ("H265", "HEVC") for c in live) or (
@@ -335,7 +399,10 @@ def verdicts(report: dict) -> list[str]:
                 f"{alias} sends HEVC and its H.264 transcode is ON: HomeKit is handed "
                 f"{cam['stream_handed_out']}, which should be H.264."
             )
-        if not live and not log_codecs:
+        # Only when nothing else explains it. With a failed handshake in the log
+        # this advice is wrong — the user already opened the live view, and it
+        # failed; telling them to do it again sent #107 round in a circle.
+        if not live and not log_codecs and not (no_reply or no_grant):
             out.append(
                 f"No video codec is known yet for {alias}. With debug logs on, open its live view for "
                 "~15 seconds, then download diagnostics again."
@@ -410,6 +477,7 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
         mine = [eid for eid, uid in our_entities.items() if dev and dev in uid]
         report_cams[alias] = {
             "h264_transcode": dev in (options.get("h264_cameras") or []),
+            "camera_ip": options.get(f"camera_ip_{dev}") or cam.get("camera_ip") or None,
             "stream_handed_out": live_stream_name(dev, options),
             "recent_stream_requests": calls.get(dev) or [],
             "streams": {
