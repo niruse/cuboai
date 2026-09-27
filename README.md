@@ -612,9 +612,14 @@ camera without one), and save. The camera's *WebRTC Stream* sensor then shows th
 
 - **One camera per Home Assistant host.** Protect tells third-party cameras apart by the MAC address
   of the host it talks to. With several CuboAI cameras, pick which one Protect shows.
-- **H.264 only.** A Cubo 2 / Cubo Plus (CB02) streams H.264 natively. A **Cubo 3** streams HEVC,
-  which Protect can't play, so also check *Transcode these cameras to H.264* for it. Download
-  diagnostics will point this out.
+- **H.264 recommended.** A Cubo 2 / Cubo Plus (CB02) streams H.264 natively. A **Cubo 3** streams
+  HEVC (H.265). Protect passes H.265 straight through to your viewing device without converting it,
+  so only devices that can decode H.265 will show the picture. Checking *Transcode these cameras to
+  H.264* for a Cubo 3 makes it play everywhere, at the cost of about one CPU core on a Raspberry Pi 5.
+- **Changing the H.264 option works without re-adding the camera.** Protect is pointed at one fixed
+  stream (`cuboai_protect_<camera>`), and the option only changes what that stream carries, from the
+  next reconnect. A camera added with v2.6.37 or v2.6.38 is still on an older address, so remove it
+  in Protect and add it again **once**. Download diagnostics tells you when this is needed.
 - **Video only, for now.** Protect cannot play the camera's AAC audio.
 - **Recording needs a disk in the console.** Protect records only to a drive in its bays. Without
   one, the camera still adopts and live-views, but Protect won't record it.

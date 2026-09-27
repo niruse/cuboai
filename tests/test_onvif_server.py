@@ -27,6 +27,7 @@ from custom_components.cuboai.const import (
     OPT_PROTECT_USERNAME,
     protect_camera_id,
     protect_stream_name,
+    protect_stream_target,
 )
 
 DEV = "CB02AABBCCDD0011"
@@ -382,14 +383,25 @@ def test_the_chosen_camera_is_served_and_a_removed_one_falls_back_to_the_first()
     assert protect_camera_id({}, []) is None
 
 
+def test_protect_gets_one_fixed_stream_name_whatever_the_h264_option():
+    """Protect locks in the stream address at adoption (seen live: a reconnect,
+    its own re-adopt and a go2rtc restart all kept it on the old stream). So
+    the name handed out never changes; the H.264 option only changes what is
+    behind it. Kill: the name following the option again."""
+    off = onvif.OnvifService(_hass(), _entry({})).spec()
+    on = onvif.OnvifService(_hass(), _entry({"h264_cameras": [DEV]})).spec()
+    assert off.stream == on.stream == protect_stream_name(DEV, {}) == f"cuboai_protect_{DEV}"
+    assert protect_stream_target(DEV, {}) == f"cuboai_combined_{DEV}"
+    assert protect_stream_target(DEV, {"h264_cameras": [DEV]}) == f"cuboai_h264_{DEV}"
+
+
 def test_the_spec_follows_the_h264_option_and_nvr_auth():
-    """One rule for the stream (protect_stream_name) and the profile follows
-    it. Kill: stream or profile ignoring the H.264 option; NVR creds dropped."""
+    """The profile follows the option; NVR auth reaches the stream URI.
+    Kill: profile ignoring the option; NVR creds dropped."""
     opts = {"h264_cameras": [DEV], "nvr_enabled": True, "nvr_username": "nvr", "nvr_password": "p w"}
-    service = onvif.OnvifService(_hass(), _entry(opts))
-    spec = service.spec()
-    assert spec.stream == protect_stream_name(DEV, service.entry.options) == f"cuboai_h264_{DEV}"
+    spec = onvif.OnvifService(_hass(), _entry(opts)).spec()
     assert spec.h264_profile == "High"
+    assert onvif.OnvifService(_hass(), _entry({})).spec().h264_profile == "Main"
     assert spec.rtsp_userinfo == "nvr:p%20w@"
     assert spec.rtsp_port == 8557 and spec.username == "cuboai"
 
@@ -493,7 +505,7 @@ async def test_the_snapshot_follows_go2rtc_when_its_port_moves():
                 async with session.get(f"http://127.0.0.1:{onvif_port}/onvif/snapshot") as resp:
                     assert resp.status == 200
                     assert await resp.read() == jpeg
-            assert got["src"] == f"cuboai_combined_{DEV}"
+            assert got["src"] == f"cuboai_protect_{DEV}"
         finally:
             await service.stop()
             await runner.cleanup()

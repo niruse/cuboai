@@ -532,6 +532,33 @@ async def test_unhandled_operations_and_auth_failures_are_reported():
     assert "3 request(s)" in joined
 
 
+def _protect_pulling(stream_name):
+    return {
+        stream_name: {
+            "producers": [{"medias": ["video, recvonly, H264"]}],
+            "consumers": [{"user_agent": "Media Server (www.ui.com)", "protocol": "rtsp"}],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_protect_stuck_on_an_old_stream_is_told_to_re_adopt_once():
+    """Protect keeps the address it got at adoption. A camera adopted before
+    the fixed stream existed keeps pulling the old one. Kill: the stale-stream
+    verdict removed."""
+    report = await _diagnose_protect(_protect_service(), streams=_protect_pulling(f"cuboai_combined_{DEV}"))
+    hit = next((v for v in report["verdicts"] if "adopt it again" in v), None)
+    assert hit and "cuboai_combined_camera_1" in hit and "cuboai_protect_camera_1" in hit, report["verdicts"]
+    assert report["unifi_protect"]["protect_pulling"] == ["cuboai_combined_camera_1"]
+
+
+@pytest.mark.asyncio
+async def test_protect_on_the_fixed_stream_raises_nothing():
+    """Kill: the verdict firing on the correct stream too."""
+    report = await _diagnose_protect(_protect_service(), streams=_protect_pulling(f"cuboai_protect_{DEV}"))
+    assert not any("adopt it again" in v for v in report["verdicts"]), report["verdicts"]
+
+
 @pytest.mark.asyncio
 async def test_protect_switched_off_adds_nothing():
     report = (await _diagnose(_hass(), _entry(), streams=H264_LIVE, log=[LOG[2]]))[0]
