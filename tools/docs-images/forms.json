@@ -1,0 +1,394 @@
+{
+  "setup-login": {
+    "title": "CuboAI Login",
+    "description": "Enter your CuboAI account credentials.",
+    "fields": [
+      {
+        "key": "username",
+        "label": "Email",
+        "help": "",
+        "type": "text",
+        "default": null,
+        "required": true
+      },
+      {
+        "key": "password",
+        "label": "Password",
+        "help": "",
+        "type": "password",
+        "default": null,
+        "required": true
+      }
+    ]
+  },
+  "setup-mfa": {
+    "title": "Two-Factor Authentication",
+    "description": "Enter the verification code from your authenticator app.",
+    "fields": [
+      {
+        "key": "mfa_code",
+        "label": "Verification Code",
+        "help": "",
+        "type": "text",
+        "default": null,
+        "required": true
+      }
+    ]
+  },
+  "setup-cameras": {
+    "title": "Select Cameras",
+    "description": "Choose which cameras from your CuboAI account to add. Nothing is added automatically — you can change this later in the integration Options.",
+    "fields": [
+      {
+        "key": "cameras",
+        "label": "Cameras to add",
+        "help": "",
+        "type": "multi",
+        "default": [
+          "CB02XXXXXXXX0001",
+          "SW05XXXXXXXX0002"
+        ],
+        "required": true,
+        "choices": {
+          "CB02XXXXXXXX0001": "Baby (CB02XXXXXXXX0001)",
+          "SW05XXXXXXXX0002": "Nursery (SW05XXXXXXXX0002)"
+        }
+      }
+    ]
+  },
+  "setup-options": {
+    "title": "Configure CuboAI Integration",
+    "description": "Configure the alert and download behavior for your CuboAI cameras.",
+    "fields": [
+      {
+        "key": "download_images",
+        "label": "Download alert images locally",
+        "help": "",
+        "type": "bool",
+        "default": true,
+        "required": true
+      },
+      {
+        "key": "enable_debug_logs",
+        "label": "Enable debug logs",
+        "help": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "rtsp_port",
+        "label": "RTSP port for the local camera stream",
+        "help": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
+        "type": "int",
+        "default": 8557,
+        "required": true,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "alerts_count",
+        "label": "Number of alerts to retain in state attributes",
+        "help": "",
+        "type": "int",
+        "default": 5,
+        "required": true,
+        "min": 1,
+        "max": 50
+      },
+      {
+        "key": "max_saved_photos",
+        "label": "Maximum number of downloaded photos to keep",
+        "help": "",
+        "type": "int",
+        "default": 10,
+        "required": true,
+        "min": 1,
+        "max": 100
+      },
+      {
+        "key": "hours_back",
+        "label": "Time window to check for alerts (hours)",
+        "help": "",
+        "type": "int",
+        "default": 12,
+        "required": true,
+        "min": 1,
+        "max": 72
+      },
+      {
+        "key": "update_interval",
+        "label": "Update interval (seconds)",
+        "help": "",
+        "type": "int",
+        "default": 60,
+        "required": true,
+        "min": 15,
+        "max": 300
+      },
+      {
+        "key": "camera_ip_CB02XXXXXXXX0001",
+        "label": "camera_ip_CB02XXXXXXXX0001",
+        "help": "",
+        "type": "text",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "camera_ip_SW05XXXXXXXX0002",
+        "label": "camera_ip_SW05XXXXXXXX0002",
+        "help": "",
+        "type": "text",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "unifi_protect_enabled",
+        "label": "Make your first camera available to UniFi Protect (ONVIF)",
+        "help": "Lets UniFi Protect find your first camera and add it as a third-party camera. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add it by address (shown as unifi_protect_address on its WebRTC Stream sensor). A Cubo 3 sends H.265, which Protect passes to viewers unconverted: turn on 'Transcode these cameras to H.264' for it in Configure if a phone or browser shows no picture. More cameras can be added later in Configure.",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "unifi_protect_username",
+        "label": "UniFi Protect username",
+        "help": "",
+        "type": "text",
+        "default": "cuboai",
+        "required": false
+      },
+      {
+        "key": "unifi_protect_password",
+        "label": "UniFi Protect password",
+        "help": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password.",
+        "type": "password",
+        "default": "",
+        "required": false
+      }
+    ]
+  },
+  "configure": {
+    "title": "CuboAI Options",
+    "description": "",
+    "fields": [
+      {
+        "key": "cameras",
+        "label": "Cameras to add (uncheck to remove)",
+        "help": "",
+        "type": "multi",
+        "default": [
+          "CB02XXXXXXXX0001",
+          "SW05XXXXXXXX0002"
+        ],
+        "required": true,
+        "choices": {
+          "CB02XXXXXXXX0001": "Baby (CB02XXXXXXXX0001)",
+          "SW05XXXXXXXX0002": "Nursery (SW05XXXXXXXX0002)"
+        }
+      },
+      {
+        "key": "download_images",
+        "label": "Download alert images locally",
+        "help": "",
+        "type": "bool",
+        "default": true,
+        "required": true
+      },
+      {
+        "key": "cache_youtube_songs",
+        "label": "Save YouTube/Spotify songs to local cache",
+        "help": "",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "enable_debug_logs",
+        "label": "Enable debug logs",
+        "help": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "history_sensors",
+        "label": "Baby-present & DVR history sensors",
+        "help": "",
+        "type": "bool",
+        "default": true,
+        "required": false
+      },
+      {
+        "key": "notify_on_engine_restart",
+        "label": "Notify me when the streaming engine restarts",
+        "help": "The streaming engine is restarted automatically if it stops unexpectedly. Leave this on to be told when that happens — a crash used to be completely silent, and an engine that keeps dying is worth knowing about. Turn it off if you would rather not see the notification.",
+        "type": "bool",
+        "default": true,
+        "required": false
+      },
+      {
+        "key": "rtsp_port",
+        "label": "RTSP port for the local camera stream",
+        "help": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
+        "type": "int",
+        "default": 8555,
+        "required": true,
+        "min": 1024,
+        "max": 65535
+      },
+      {
+        "key": "nvr_enabled",
+        "label": "Expose RTSP stream for NVR (shows a copyable URL on the WebRTC Stream sensor)",
+        "help": "",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "nvr_username",
+        "label": "NVR stream username",
+        "help": "",
+        "type": "text",
+        "default": "cuboai",
+        "required": false
+      },
+      {
+        "key": "nvr_password",
+        "label": "NVR stream password (leave EMPTY for no password — most compatible with Hikvision/HiLook)",
+        "help": "",
+        "type": "password",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "alerts_count",
+        "label": "Number of alerts to retain in state attributes",
+        "help": "",
+        "type": "int",
+        "default": 5,
+        "required": true,
+        "min": 1,
+        "max": 50
+      },
+      {
+        "key": "max_saved_photos",
+        "label": "Maximum number of downloaded photos to keep",
+        "help": "",
+        "type": "int",
+        "default": 10,
+        "required": true,
+        "min": 1,
+        "max": 100
+      },
+      {
+        "key": "hours_back",
+        "label": "Time window to check for alerts (hours)",
+        "help": "",
+        "type": "int",
+        "default": 12,
+        "required": true,
+        "min": 1,
+        "max": 72
+      },
+      {
+        "key": "update_interval",
+        "label": "Update interval (seconds)",
+        "help": "",
+        "type": "int",
+        "default": 60,
+        "required": true,
+        "min": 15,
+        "max": 300
+      },
+      {
+        "key": "camera_ip_CB02XXXXXXXX0001",
+        "label": "camera_ip_CB02XXXXXXXX0001",
+        "help": "",
+        "type": "text",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "camera_ip_SW05XXXXXXXX0002",
+        "label": "camera_ip_SW05XXXXXXXX0002",
+        "help": "",
+        "type": "text",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "h264_cameras",
+        "label": "Transcode these cameras to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)",
+        "help": "Check a camera only if it is H.265/HEVC (e.g. Cubo 3 / SW05) and fails in HomeKit or the HA stream view with a 'demuxing timed out' error. Leave native-H.264 cameras (Cubo 2 / CB02) unchecked — transcoding uses extra CPU.",
+        "type": "multi",
+        "default": [],
+        "required": false,
+        "choices": {
+          "CB02XXXXXXXX0001": "Baby (CB02XXXXXXXX0001)",
+          "SW05XXXXXXXX0002": "Nursery (SW05XXXXXXXX0002)"
+        }
+      },
+      {
+        "key": "rtsp_timestamp_cameras",
+        "label": "Burn the date and time into these cameras' NVR recordings",
+        "help": "Only the stream an NVR records (the nvr_rtsp_url on the camera's WebRTC Stream sensor) gets the time burned into the picture. Live view and HomeKit are unchanged. Costs a transcode on this machine per checked camera.",
+        "type": "multi",
+        "default": [],
+        "required": false,
+        "choices": {
+          "CB02XXXXXXXX0001": "Baby (CB02XXXXXXXX0001)",
+          "SW05XXXXXXXX0002": "Nursery (SW05XXXXXXXX0002)"
+        }
+      },
+      {
+        "key": "unifi_protect_enabled",
+        "label": "Make cameras available to UniFi Protect (ONVIF)",
+        "help": "Lets UniFi Protect find the chosen cameras and add them as third-party cameras. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add each camera by address (shown as unifi_protect_address on its WebRTC Stream sensor). Each camera gets its own port. A Cubo 3 sends H.265, which Protect passes to viewers unconverted: check 'Transcode these cameras to H.264' for it if a phone or browser shows no picture.",
+        "type": "bool",
+        "default": false,
+        "required": false
+      },
+      {
+        "key": "unifi_protect_cameras",
+        "label": "Cameras to show in UniFi Protect",
+        "help": "Each camera appears in Protect under its name in Home Assistant. Once a camera has a port it keeps it, even if you untick it and tick it again later.",
+        "type": "multi",
+        "default": [
+          "CB02XXXXXXXX0001"
+        ],
+        "required": false,
+        "choices": {
+          "CB02XXXXXXXX0001": "Baby (CB02XXXXXXXX0001)",
+          "SW05XXXXXXXX0002": "Nursery (SW05XXXXXXXX0002)"
+        }
+      },
+      {
+        "key": "unifi_protect_username",
+        "label": "UniFi Protect username",
+        "help": "",
+        "type": "text",
+        "default": "cuboai",
+        "required": false
+      },
+      {
+        "key": "unifi_protect_password",
+        "label": "UniFi Protect password",
+        "help": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password.",
+        "type": "password",
+        "default": "",
+        "required": false
+      },
+      {
+        "key": "unifi_protect_port",
+        "label": "UniFi Protect (ONVIF) port of the first camera",
+        "help": "Protect remembers each camera's port when it adds it, so ports are never changed automatically. The first camera uses this port; each further camera the next free one.",
+        "type": "int",
+        "default": 8899,
+        "required": false,
+        "min": 1024,
+        "max": 65535
+      }
+    ]
+  }
+}

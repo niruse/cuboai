@@ -37,8 +37,9 @@ play_recording:
   name: Play a recording
   description: >-
     Play footage from the camera's own on-board DVR on its Recording camera
-    entity. No cloud subscription needed. The camera keeps roughly the last 72
-    hours and serves up to about a minute behind live.
+    entity. No cloud subscription needed. How far back depends on the SD card:
+    typically about two days, or 18-20 hours with baby-presence detection on.
+    Serves up to about a minute behind live.
   fields:
     device_id:
       name: Camera

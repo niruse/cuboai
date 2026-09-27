@@ -1,7 +1,7 @@
 # The example dashboard — what to change before it works
 
 These files are a **worked example, not a drop-in**. They are written against a
-camera whose baby is called `mia`, and Home Assistant builds entity ids from
+camera named `baby` (entity ids like `sensor.cuboai_baby_…_baby`), and Home Assistant builds entity ids from
 *your* camera's name, your area and your own renames. Copy them unchanged and
 every card renders empty or errors.
 
@@ -10,7 +10,7 @@ card, it does not break your camera — but nothing will work until you swap the
 ids over.
 
 > **Copying to a machine that already has these files?** Your live copy holds
-> *your* ids. Re-copying from the repo overwrites them with `mia` again and the
+> *your* ids. Re-copying from the repo overwrites them with `baby` again and the
 > dashboard goes blank. Edit in place, or re-apply the replacements below.
 
 ## 1. Find your own entity ids
@@ -26,10 +26,10 @@ are:
 
 | Purpose | Example id | Yours will look like |
 |---|---|---|
-| Presence from the DVR history | `sensor.cuboai_mia_cuboai_baby_present_mia` | `sensor.<area>_cuboai_<baby>_cuboai_baby_present_<baby>` |
-| Motion | `sensor.cuboai_mia_cuboai_motion_mia` | same shape, `_motion_` |
-| Noise level | `sensor.cuboai_mia_cuboai_noise_level_mia` | same shape, `_noise_level_` |
-| Camera online | `sensor.cuboai_camera_state_mia` | `sensor.cuboai_camera_state_<baby>` |
+| Presence from the DVR history | `sensor.cuboai_baby_cuboai_baby_present_baby` | `sensor.<area>_cuboai_<baby>_cuboai_baby_present_<baby>` |
+| Motion | `sensor.cuboai_baby_cuboai_motion_baby` | same shape, `_motion_` |
+| Noise level | `sensor.cuboai_baby_cuboai_noise_level_baby` | same shape, `_noise_level_` |
+| Camera online | `sensor.cuboai_camera_state_baby` | `sensor.cuboai_camera_state_<baby>` |
 
 The area prefix (`nursery_`, `upstairs_`, …) appears only if you have
 assigned the device to an area, which is why the example cannot guess it. **Copy
@@ -41,28 +41,28 @@ Both files must match — the package builds the sensors, the dashboard displays
 them.
 
 ```bash
-# Replace mia_baby_present with YOUR full entity id, and so on.
-sed -i 's/sensor\.cuboai_mia_cuboai_baby_present_mia/sensor.YOUR_PRESENCE_ID/g' \
+# Replace baby_baby_present with YOUR full entity id, and so on.
+sed -i 's/sensor\.cuboai_baby_cuboai_baby_present_baby/sensor.YOUR_PRESENCE_ID/g' \
        dashboards/cuboai.yaml dashboards/packages/cuboai_sleep.yaml
-sed -i 's/sensor\.cuboai_mia_cuboai_motion_mia/sensor.YOUR_MOTION_ID/g' \
+sed -i 's/sensor\.cuboai_baby_cuboai_motion_baby/sensor.YOUR_MOTION_ID/g' \
        dashboards/cuboai.yaml
-sed -i 's/sensor\.cuboai_mia_cuboai_noise_level_mia/sensor.YOUR_NOISE_ID/g' \
+sed -i 's/sensor\.cuboai_baby_cuboai_noise_level_baby/sensor.YOUR_NOISE_ID/g' \
        dashboards/cuboai.yaml
-sed -i 's/sensor\.cuboai_camera_state_mia/sensor.YOUR_CAMERA_STATE_ID/g' \
+sed -i 's/sensor\.cuboai_camera_state_baby/sensor.YOUR_CAMERA_STATE_ID/g' \
        dashboards/cuboai.yaml
 ```
 
 On Windows, or if you would rather not use `sed`, open both files and use your
 editor's find-and-replace on the same four strings.
 
-### The `mia_` sensors are different — leave them alone
+### The `baby_` sensors are different — leave them alone
 
-`sensor.mia_night_in_crib`, `sensor.mia_week_coverage` and friends are **created
+`sensor.baby_night_in_crib`, `sensor.baby_week_coverage` and friends are **created
 by the package itself**, from the `name:` fields in `cuboai_sleep.yaml`. They are
 not your camera's entities.
 
-Either leave every `Mia` name in that file exactly as it is (the sensors will be
-called `sensor.mia_night_in_crib` and the dashboard already points at them), or
+Either leave every `Baby` name in that file exactly as it is (the sensors will be
+called `sensor.baby_night_in_crib` and the dashboard already points at them), or
 rename them **in both files together**. Renaming in only one is the one mistake
 here that produces a dashboard of "Entity not available" with no obvious cause.
 
@@ -113,4 +113,4 @@ landed.**
 | `packages/cuboai_sleep.yaml` | `/config/packages/cuboai_sleep.yaml` | The `history_stats` sensors behind them |
 
 Full installation steps, including registering the dashboard in
-`configuration.yaml`, are in the main [README](../README.md#-installing-the-full-dashboard).
+`configuration.yaml`, are in the main [README](../README.md#the-example-dashboard).

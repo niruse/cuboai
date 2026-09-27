@@ -42,16 +42,16 @@
 sensor:
   # ── Nighttime: 19:00 yesterday → 07:00 today ────────────────────────────
   - platform: history_stats
-    name: Mia night in crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby night in crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: time
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
 
   - platform: history_stats
-    name: Mia night out of crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby night out of crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "not in crib"
       - "0"
@@ -60,16 +60,16 @@ sensor:
     end: "{{ today_at('07:00') }}"
 
   - platform: history_stats
-    name: Mia night sleeps
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby night sleeps
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: count
     start: "{{ today_at('19:00') - timedelta(days=1) }}"
     end: "{{ today_at('07:00') }}"
 
   - platform: history_stats
-    name: Mia night no reading
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby night no reading
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "unavailable"
       - "unknown"
@@ -79,16 +79,16 @@ sensor:
 
   # ── Daytime: 07:00 → 19:00 today ────────────────────────────────────────
   - platform: history_stats
-    name: Mia day in crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby day in crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: time
     start: "{{ today_at('07:00') }}"
     end: "{{ today_at('19:00') }}"
 
   - platform: history_stats
-    name: Mia day out of crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby day out of crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "not in crib"
       - "0"
@@ -97,16 +97,16 @@ sensor:
     end: "{{ today_at('19:00') }}"
 
   - platform: history_stats
-    name: Mia day sleeps
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby day sleeps
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: count
     start: "{{ today_at('07:00') }}"
     end: "{{ today_at('19:00') }}"
 
   - platform: history_stats
-    name: Mia day no reading
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby day no reading
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "unavailable"
       - "unknown"
@@ -116,16 +116,16 @@ sensor:
 
   # ── Summary: the last 7 days ────────────────────────────────────────────
   - platform: history_stats
-    name: Mia week in crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby week in crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: time
     start: "{{ now() - timedelta(days=7) }}"
     end: "{{ now() }}"
 
   - platform: history_stats
-    name: Mia week out of crib
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby week out of crib
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "not in crib"
       - "0"
@@ -134,16 +134,16 @@ sensor:
     end: "{{ now() }}"
 
   - platform: history_stats
-    name: Mia week sleeps
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby week sleeps
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state: "in crib"
     type: count
     start: "{{ now() - timedelta(days=7) }}"
     end: "{{ now() }}"
 
   - platform: history_stats
-    name: Mia week no reading
-    entity_id: sensor.cuboai_mia_cuboai_baby_present_mia
+    name: Baby week no reading
+    entity_id: sensor.cuboai_baby_cuboai_baby_present_baby
     state:
       - "unavailable"
       - "unknown"
@@ -153,30 +153,30 @@ sensor:
 
 template:
   - sensor:
-      - name: Mia average day in crib
-        unique_id: cuboai_mia_avg_day_in_crib
+      - name: Baby average day in crib
+        unique_id: cuboai_baby_avg_day_in_crib
         unit_of_measurement: h
         state_class: measurement
         # Divided by seven days, not by the number of days that happen to hold
         # data: a week with two days of camera downtime should read low, not
         # flatter itself by averaging over the days that worked.
         state: >
-          {% set wk = states('sensor.mia_week_in_crib') | float(0) %}
+          {% set wk = states('sensor.baby_week_in_crib') | float(0) %}
           {{ (wk / 7) | round(2) }}
         availability: >
-          {{ states('sensor.mia_week_in_crib') not in
+          {{ states('sensor.baby_week_in_crib') not in
              ['unknown', 'unavailable', 'none', ''] }}
 
       # A confidence figure for everything above. Time in crib is only as
       # trustworthy as the proportion of the window the camera was actually
       # answering, and that proportion is not otherwise visible anywhere.
-      - name: Mia week coverage
-        unique_id: cuboai_mia_week_coverage
+      - name: Baby week coverage
+        unique_id: cuboai_baby_week_coverage
         unit_of_measurement: "%"
         state_class: measurement
         state: >
-          {% set blind = states('sensor.mia_week_no_reading') | float(0) %}
+          {% set blind = states('sensor.baby_week_no_reading') | float(0) %}
           {{ (100 * (1 - (blind / (7 * 24)))) | round(1) }}
         availability: >
-          {{ states('sensor.mia_week_no_reading') not in
+          {{ states('sensor.baby_week_no_reading') not in
              ['unknown', 'unavailable', 'none', ''] }}
