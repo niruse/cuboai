@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.43]
+
+### Fixed
+- **Sound and picture away from home.** When WebRTC can't connect (for example on mobile data
+  through a Cloudflare tunnel, with no VPN), the WebRTC Camera player falls back to MSE, and two
+  things in its MSE code broke playback there:
+  - It sets the playback speed to the number of seconds it has buffered, many times a second, so
+    over a bursty connection the speed swings between about 0.1x and 3x. The stream carried a song
+    continuously (measured) while an iPhone played one-second fragments of it.
+  - It trims its buffer to the last 5 seconds, and a browser removes video up to the next
+    keyframe. The camera sends one every 4 seconds, so a trim can delete the frames being played:
+    the picture freezes and the sound with it.
+
+  The card now keeps the trim at least 8 seconds (two keyframe intervals) behind the playhead, and
+  sets the speed itself from the real buffer: normal while 2–4 seconds are buffered, 0.8x below
+  that, 1.25x above, changing rarely. Against the live camera with the real player and simulated
+  mobile-data delivery, the picture kept moving 99.5% of the time (62% before; the old player
+  ended frozen), with no trims into the playing frames and 8 speed changes a minute instead of
+  about 500. Away from home the picture runs about 3–4 seconds behind live. At home (WebRTC)
+  nothing changes. Nothing in the WebRTC Camera integration is modified; the card hooks only its
+  own video element. Confirmed on an iPhone on 5G: continuous sound, moving picture.
+
 ## [2.6.42]
 
 ### Fixed
