@@ -4,7 +4,7 @@
 [![codecov](https://codecov.io/gh/niruse/cuboai/branch/main/graph/badge.svg)](https://codecov.io/gh/niruse/cuboai)
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
-Bring your CuboAI baby monitor into Home Assistant: live video with two-way audio, recorded
+Bring your CuboAI baby monitor into Home Assistant: live video with sound, recorded
 playback from the camera's own storage, alerts, room and sleep-mat readings, lullabies, and
 controls for the night light and camera — plus recording to an NVR and showing the camera in
 UniFi Protect.
@@ -31,7 +31,7 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
 
 - **Live video, locally** — straight from the camera on your network, with a cloud-free fallback
   that also plays over Home Assistant Cloud. [The camera card](#the-camera-card)
-- **Two-way audio and picture-in-picture** in the bundled card.
+- **Picture-in-picture** in the bundled card.
 - **Recorded playback** — scrub back through the camera's own recordings, in the same card or from
   an automation. [Recorded playback](#recorded-playback)
 - **Sensors** — alerts with photos, temperature, humidity, sleep-mat BPM, thermometer, detection
@@ -225,7 +225,7 @@ device_id: CB02XXXXXXXXXXXX   # optional with one camera
   <img src="docs/images/card-editor.png" width="48%" alt="The card's visual editor">
 </p>
 
-**On the video:** the microphone button for two-way audio, the sleep-mat BPM, temperature and
+**On the video:** the sleep-mat BPM, temperature and
 humidity, an optional timestamp, and the speaker mute. Picture-in-picture works natively on Android
 and Apple devices; on desktop Chrome the floating window keeps the badges. Sound plays over WebRTC
 with an MSE/HLS fallback, including away from home over Home Assistant Cloud.
