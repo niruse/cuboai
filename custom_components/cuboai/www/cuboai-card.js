@@ -16,8 +16,8 @@
 // "babyName" token derived by string-slicing the speaker's entity id. None of
 // that is guaranteed. camera.py sets only _attr_name ("<baby> Local Camera")
 // and never _attr_has_entity_name, so the object id is whatever Home Assistant
-// composes from the device and entity names — `camera.cuboai_mia_mia_local_camera`
-// on one install, `camera.mia_local_camera` on another, depending on HA version,
+// composes from the device and entity names — `camera.cuboai_baby_baby_local_camera`
+// on one install, `camera.baby_local_camera` on another, depending on HA version,
 // device naming and any rename the user has made. HA's "_2" duplicate suffix
 // breaks the endsWith test outright, and the babyName token (the last
 // underscore-separated part of the speaker id) need not appear in the camera id

@@ -259,7 +259,7 @@ out.empty = {
 };
 
 // ── reading it off hass.states ──────────────────────────────────────────────
-const row = { entity: 'sensor.cuboai_last_alert_mia', events: 'alerts' };
+const row = { entity: 'sensor.cuboai_last_alert_zuzu', events: 'alerts' };
 const withStates = (states) => { card._hass = states === null ? null : { states }; return card._eventList(row).length; };
 out.from_states = {
   present: withStates({ [row.entity]: { state: 'CUBO_ALERT_TEMPERATURE', attributes: { alerts: [tsAlert('A1', 'CUBO_ALERT_TEMPERATURE', at(2, 0))] } } }),
@@ -453,13 +453,13 @@ new Function(fs.readFileSync(process.argv[2], 'utf8') + ';globalThis.__TL = Cubo
 const start = new Date(2026, 7, 7, 19, 0, 0, 0);
 const end   = new Date(2026, 7, 8, 7, 0, 0, 0);
 const secs  = (h, m) => Math.floor(new Date(2026, 7, h < 19 ? 8 : 7, h, m || 0, 0, 0).getTime() / 1000);
-const ALERT_ENTITY = 'sensor.cuboai_last_alert_mia';
+const ALERT_ENTITY = 'sensor.cuboai_last_alert_zuzu';
 const alert = (id, type, h, image) => ({
   id, device_id: 'DEV1', type, ts: secs(h), created: '2026-08-07',
   image: image === undefined ? '/local/cuboai_images/DEV1_' + id + '.jpg' : image, params: {},
 });
 const eventsRow = { entity: ALERT_ENTITY, label: 'Alerts', icon: 'mdi:bell-ring', events: 'alerts', color: '#ff453a' };
-const historyRow = { entity: 'sensor.cuboai_mia_cuboai_baby_present_mia', label: 'In crib', match: 'in crib', color: '#2a9d8f' };
+const historyRow = { entity: 'sensor.cuboai_zuzu_cuboai_baby_present_zuzu', label: 'In crib', match: 'in crib', color: '#2a9d8f' };
 
 const statesWith = (list) => ({ [ALERT_ENTITY]: { state: list.length ? list[0].type : 'No alerts', attributes: { alerts: list } } });
 
@@ -681,7 +681,7 @@ class TestTheLaneOnScreen:
 
     def test_a_mixed_card_asks_only_about_its_history_rows(self, drawn):
         assert drawn["load"]["mixed"]["calls"] == 1
-        assert drawn["load"]["mixed"]["ids"] == ["sensor.cuboai_mia_cuboai_baby_present_mia"]
+        assert drawn["load"]["mixed"]["ids"] == ["sensor.cuboai_zuzu_cuboai_baby_present_zuzu"]
 
     def test_a_new_alert_appears_without_waiting_out_the_fetch_throttle(self, drawn):
         """The throttle exists to spare the recorder. Alerts do not come from

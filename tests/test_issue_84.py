@@ -112,7 +112,7 @@ class TestDuplicateProfiles:
         stored = [
             {"device_id": "A", "baby_name": "Dragon"},
             {"device_id": "A", "baby_name": "Draco Room"},
-            {"device_id": "B", "baby_name": "Mia"},
+            {"device_id": "B", "baby_name": "Zuzu"},
         ]
         unique = list({c.get("device_id", id(c)): c for c in stored}.values())
         assert [c["device_id"] for c in unique] == ["A", "B"]
@@ -279,7 +279,7 @@ def _make_camera(manager):
     coordinator.config_entry.entry_id = "entry1"
     coordinator.config_entry.options = {}
     coordinator.config_entry.data = {}
-    cam = camera_platform.CuboLocalCamera(coordinator, {"device_id": "DEV1", "baby_name": "Mia"})
+    cam = camera_platform.CuboLocalCamera(coordinator, {"device_id": "DEV1", "baby_name": "Zuzu"})
     cam.hass = MagicMock()
     cam.hass.data = {DOMAIN: {"entry1": {"go2rtc": manager} if manager else {}}}
     return cam

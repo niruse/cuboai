@@ -71,7 +71,7 @@ def _make_camera(options=None, data=None):
     coordinator.config_entry.entry_id = "entry1"
     coordinator.config_entry.options = options if options is not None else {}
     coordinator.config_entry.data = data if data is not None else {}
-    cam = camera_platform.CuboLocalCamera(coordinator, {"device_id": "DEV1", "baby_name": "Mia"})
+    cam = camera_platform.CuboLocalCamera(coordinator, {"device_id": "DEV1", "baby_name": "Zuzu"})
     cam.hass = MagicMock()
     cam.hass.data = {DOMAIN: {"entry1": {}}}
     cam.hass.async_add_executor_job = AsyncMock()
@@ -201,13 +201,13 @@ class TestCardMatcherInNode:
     def test_matching_behaviour(self, tmp_path):
         cases = [
             # Exact device_id match on the real entity id shape.
-            {"deviceId": "DEV1", "hass": {"states": {"camera.mia_local_camera": _cam("DEV1")}}},
+            {"deviceId": "DEV1", "hass": {"states": {"camera.zuzu_local_camera": _cam("DEV1")}}},
             # The #89 fix: a renamed entity must still resolve.
             {"deviceId": "DEV1", "hass": {"states": {"camera.zzz_renamed": _cam("DEV1")}}},
             # HA's duplicate "_2" suffix must still resolve.
-            {"deviceId": "DEV1", "hass": {"states": {"camera.mia_local_camera_2": _cam("DEV1")}}},
+            {"deviceId": "DEV1", "hass": {"states": {"camera.zuzu_local_camera_2": _cam("DEV1")}}},
             # uid is accepted as a secondary key.
-            {"deviceId": "UID9", "hass": {"states": {"camera.mia_local_camera": _cam("DEV1", uid="UID9")}}},
+            {"deviceId": "UID9", "hass": {"states": {"camera.zuzu_local_camera": _cam("DEV1", uid="UID9")}}},
             # Two cameras and a device_id matching neither: refuse rather than
             # show the wrong baby (the old code took the first arbitrary match).
             {
@@ -215,7 +215,7 @@ class TestCardMatcherInNode:
                 "hass": {"states": {"camera.a_local_camera": _cam("DEV1"), "camera.b_local_camera": _cam("DEV2")}},
             },
             # Unpinned card with exactly one CuboAI camera: safe to use it.
-            {"deviceId": None, "hass": {"states": {"camera.mia_local_camera": _cam("DEV1")}}},
+            {"deviceId": None, "hass": {"states": {"camera.zuzu_local_camera": _cam("DEV1")}}},
             # Nothing to match.
             {"deviceId": "DEV1", "hass": {"states": {}}},
             # A foreign camera without our attributes is never claimed.
@@ -223,12 +223,12 @@ class TestCardMatcherInNode:
         ]
 
         assert _run_matcher(tmp_path, cases) == [
-            "camera.mia_local_camera",
+            "camera.zuzu_local_camera",
             "camera.zzz_renamed",
-            "camera.mia_local_camera_2",
-            "camera.mia_local_camera",
+            "camera.zuzu_local_camera_2",
+            "camera.zuzu_local_camera",
             None,
-            "camera.mia_local_camera",
+            "camera.zuzu_local_camera",
             None,
             None,
         ]

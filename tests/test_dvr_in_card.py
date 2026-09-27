@@ -66,7 +66,7 @@ CARD = Path(__file__).parent.parent / "custom_components" / "cuboai" / "www" / "
 
 def _make_recording():
     coordinator = MagicMock()
-    rec = camera_platform.CuboRecordingCamera(coordinator, {"device_id": "DEV1", "baby_name": "Mia"})
+    rec = camera_platform.CuboRecordingCamera(coordinator, {"device_id": "DEV1", "baby_name": "Zuzu"})
     rec.hass = MagicMock()
     rec.async_write_ha_state = MagicMock()
     return rec
@@ -353,7 +353,7 @@ def test_recording_matcher(tmp_path):
     harness = tmp_path / "h.js"
     harness.write_text(_HARNESS, encoding="utf-8")
 
-    one = {"camera.mia_local_camera": _live("DEV1"), "camera.mia_recording": _rec("DEV1")}
+    one = {"camera.zuzu_local_camera": _live("DEV1"), "camera.zuzu_recording": _rec("DEV1")}
     two = dict(
         one,
         **{
@@ -373,7 +373,7 @@ def test_recording_matcher(tmp_path):
         # One camera and no pin: unambiguous.
         {"hass": {"states": one}, "deviceId": None},
         # The live camera must never be mistaken for the recording one.
-        {"hass": {"states": {"camera.mia_local_camera": _live("DEV1")}}, "deviceId": "DEV1"},
+        {"hass": {"states": {"camera.zuzu_local_camera": _live("DEV1")}}, "deviceId": "DEV1"},
         # An install that has not been reloaded yet.
         {"hass": {"states": {}}, "deviceId": "DEV1"},
         {"hass": None, "deviceId": "DEV1"},
@@ -390,11 +390,11 @@ def test_recording_matcher(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
     assert json.loads(proc.stdout) == [
-        "camera.mia_recording",
+        "camera.zuzu_recording",
         "camera.zzz",
         "camera.leo_recording",
         None,
-        "camera.mia_recording",
+        "camera.zuzu_recording",
         None,
         None,
         None,

@@ -24,13 +24,13 @@ from custom_components.cuboai.const import DOMAIN
 
 DEV = "SW05AABBCCDD1122"
 UID = "TUTKUID0000XYZ9"
-BABY = "Mia Rose"
+BABY = "Zuzu Pell"
 CAM_PW = "s3cretCamPass"
 ACCOUNT = "someone@example.com"
 LOGIN_PW = "LoginPw123"
 TOKEN = "tok_eyJhbGciOiJIUzI1NiJ9abcdef"
 NVR_PW = "nvrPw77"
-ENTITY = "camera.cuboai_mia_rose"
+ENTITY = "camera.cuboai_zuzu_pell"
 
 LOG = [
     f'12:00:00.000 DBG [exec] run pipe args=["env","CUBOAI_UID={UID}","CUBOAI_ACCOUNT={ACCOUNT}",'
@@ -40,7 +40,7 @@ LOG = [
     "12:00:03.000 WRN [rtsp] error=461 Unsupported transport",
     "12:00:04.000 DBG [exec] [health t=10s] fps 10.0 1.2Mbps",
     f"12:00:05.000 DBG [rtsp] url rtsp://admin:{NVR_PW}@192.168.1.5:8557/cuboai_combined_{DEV}",
-    "12:00:06.000 DBG [homekit] linked binary_sensor.cuboai_mia_rose_crying",
+    "12:00:06.000 DBG [homekit] linked binary_sensor.cuboai_zuzu_pell_crying",
 ]
 
 H265_LIVE = {
@@ -114,7 +114,7 @@ async def test_nothing_personal_survives_anywhere_in_the_download():
     report, _ = await _diagnose(_hass(homekit_entries=[hk]), _entry())
     blob = json.dumps(report)
 
-    for secret in (DEV, UID, CAM_PW, ACCOUNT, LOGIN_PW, TOKEN, NVR_PW, "Mia", "mia_rose", "Rose"):
+    for secret in (DEV, UID, CAM_PW, ACCOUNT, LOGIN_PW, TOKEN, NVR_PW, "Zuzu", "zuzu_pell", "Pell"):
         assert secret.lower() not in blob.lower(), f"{secret!r} leaked into the diagnostics download"
 
 
