@@ -60,8 +60,8 @@ def _auth(uuid="cognito-sub-aaa", username="Parent@Example.com"):
     return {
         "uuid": uuid,
         "username": username,
-        "cameras": [{"device_id": "DEV1", "baby_name": "Mia"}],
-        "all_cameras": [{"device_id": "DEV1", "baby_name": "Mia"}],
+        "cameras": [{"device_id": "DEV1", "baby_name": "Zuzu"}],
+        "all_cameras": [{"device_id": "DEV1", "baby_name": "Zuzu"}],
     }
 
 

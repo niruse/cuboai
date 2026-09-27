@@ -147,7 +147,7 @@ def _make_sensor(history, monkeypatch, field="baby_present", labelled=True):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, "cuboai_pkg.sensor", module)
     spec.loader.exec_module(module)
-    return module.CuboHistorySensor(_FakeCoordinator(history), "DEV1", "Mia", field, "Baby Present", None, labelled)
+    return module.CuboHistorySensor(_FakeCoordinator(history), "DEV1", "Zuzu", field, "Baby Present", None, labelled)
 
 
 def test_fresh_reading_is_available_and_uses_the_note(monkeypatch):
