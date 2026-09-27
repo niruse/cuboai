@@ -79,7 +79,10 @@ def test_prewrap_is_byte_identical():
         seq_off.append(off._data_ack)
     assert seq_on == seq_off, "PRE-WRAP divergence between ON and OFF _data_ack sequences"
     assert on._data_ack == 399
-    kw = {"R": 0x1234, "seq": 7, "relseq": 3, "ackord": 1, "C": 100, "D": 110, "sack": None}
+    # ts32 pinned: without it build_data_ack stamps [48:52] from the live ms clock,
+    # and two calls that straddle a millisecond differ in byte 48 — a flake that
+    # failed CI (0xe1 vs 0xe0) and has nothing to do with the wrap under test.
+    kw = {"R": 0x1234, "seq": 7, "relseq": 3, "ackord": 1, "C": 100, "D": 110, "sack": None, "ts32": 0x1A220123}
     assert cp.build_data_ack(data_ack=on._data_ack, **kw) == cp.build_data_ack(data_ack=off._data_ack, **kw)
 
 
