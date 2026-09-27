@@ -19,6 +19,10 @@ All notable changes to this project will be documented in this file.
   answer stays H.264, as before. Media v1 keeps answering for clients that only speak v1, and
   still says H.264 there, the only value v1 allows.
 - Download diagnostics shows the codec Protect is told (`unifi_protect.advertised_encoding`).
+- Tested on a live UDM in both directions: Protect re-reads the codec about once a minute, and
+  after switching *Transcode these cameras to H.264* its label and the video it serves followed
+  within about 20 seconds, with no re-adding. A camera added before v2.6.40 stays on Media v1
+  (which can only say H.264), so a Cubo 3 needs to be removed and added again once.
 
 ### Changed
 - The diagnostics verdict for an H.265 camera in Protect no longer says Protect "cannot play" it.
