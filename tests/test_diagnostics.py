@@ -473,7 +473,8 @@ def _protect_service(**stats):
         "clients": [],
     }
     base.update(stats)
-    return SimpleNamespace(stats=lambda: dict(base), camera_id=lambda: DEV)
+    service = SimpleNamespace(stats=lambda: dict(base), camera_id=lambda: DEV)
+    return SimpleNamespace(services={DEV: service}, start_error=None)
 
 
 async def _diagnose_protect(service, options=None, streams=H265_LIVE, log=LOG):
@@ -497,8 +498,9 @@ async def test_the_protect_password_never_reaches_the_download():
 @pytest.mark.asyncio
 async def test_protect_section_names_the_camera_by_alias():
     report = await _diagnose_protect(_protect_service())
-    assert report["unifi_protect"]["camera"] == "camera_1"
-    assert report["unifi_protect"]["address"] == "10.9.8.7:8899"
+    cams = report["unifi_protect"]["cameras"]
+    assert [c["camera"] for c in cams] == ["camera_1"]
+    assert cams[0]["address"] == "10.9.8.7:8899"
 
 
 @pytest.mark.asyncio
@@ -642,3 +644,71 @@ async def test_remembered_streams_appear_in_the_download():
     assert report["cameras"]["camera_1"]["recent_stream_requests"] == [
         {"stream": "cuboai_combined_camera_1", "at": "2026-09-22T10:00:00+00:00"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_two_protect_cameras_are_reported_and_judged_separately():
+    """v2.6.41: each exposed camera has its own service. A problem on one
+    must be pinned on that one. Kill: the per-camera loop collapsed onto the
+    first camera, or the stale-stream check not scoped to its own camera."""
+    dev2 = "CB02EEFF00112233"
+    cams = [
+        {"device_id": DEV, "uid": UID, "baby_name": BABY, "password": CAM_PW, "account": ACCOUNT},
+        {
+            "device_id": dev2,
+            "uid": "TUTKUID0000ABC1",
+            "baby_name": "Second Kid",
+            "password": CAM_PW,
+            "account": ACCOUNT,
+        },
+    ]
+    down = _protect_service(running=False, start_error="port 8899 unavailable").services[DEV]
+    up = _protect_service(address="10.9.8.7:8900").services[DEV]
+    group = SimpleNamespace(services={DEV: down, dev2: up}, start_error=None)
+    streams = {**H264_LIVE, **_protect_pulling(f"cuboai_combined_{dev2}")}
+    hass = _hass()
+    hass.data[DOMAIN]["entryA"]["onvif"] = group
+    entry = _entry(
+        options={"unifi_protect_enabled": True, "unifi_protect_password": "ProtectPw!9"},
+        cameras=cams,
+    )
+    report = (await _diagnose(hass, entry, streams=streams))[0]
+    section = report["unifi_protect"]
+    assert [c["camera"] for c in section["cameras"]] == ["camera_1", "camera_2"]
+    joined = json.dumps(report)
+    assert BABY not in joined and "Second Kid" not in joined
+    not_running = [v for v in report["verdicts"] if "not running" in v]
+    assert len(not_running) == 1 and "camera_1" in not_running[0], report["verdicts"]
+    stale = [v for v in report["verdicts"] if "adopt it again" in v]
+    assert len(stale) == 1 and "camera_2" in stale[0] and "cuboai_protect_camera_2" in stale[0], report["verdicts"]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_stream_is_blamed_on_its_own_camera_only():
+    """Both cameras up; Protect pulls camera_1 correctly and camera_2 on an old
+    stream. Kill: each camera judged against every stream Protect pulls."""
+    dev2 = "CB02EEFF00112233"
+    cams = [
+        {"device_id": DEV, "uid": UID, "baby_name": BABY, "password": CAM_PW, "account": ACCOUNT},
+        {
+            "device_id": dev2,
+            "uid": "TUTKUID0000ABC1",
+            "baby_name": "Second Kid",
+            "password": CAM_PW,
+            "account": ACCOUNT,
+        },
+    ]
+    one = _protect_service().services[DEV]
+    two = _protect_service(address="10.9.8.7:8900").services[DEV]
+    group = SimpleNamespace(services={DEV: one, dev2: two}, start_error=None)
+    streams = {
+        **H264_LIVE,
+        **_protect_pulling(f"cuboai_protect_{DEV}"),
+        **_protect_pulling(f"cuboai_combined_{dev2}"),
+    }
+    hass = _hass()
+    hass.data[DOMAIN]["entryA"]["onvif"] = group
+    entry = _entry(options={"unifi_protect_enabled": True, "unifi_protect_password": "ProtectPw!9"}, cameras=cams)
+    report = (await _diagnose(hass, entry, streams=streams))[0]
+    stale = [v for v in report["verdicts"] if "adopt it again" in v]
+    assert len(stale) == 1 and "camera_2" in stale[0], report["verdicts"]

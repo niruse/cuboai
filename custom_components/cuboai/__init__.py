@@ -487,10 +487,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # A failure here (port taken, no password) is reported and never blocks the
     # rest of the integration.
     if entry.options.get(OPT_PROTECT_ENABLED):
-        from .onvif_server import OnvifService
+        from .onvif_server import OnvifGroup
 
         manifest_version = await hass.async_add_executor_job(_manifest_version)
-        onvif = OnvifService(hass, entry, firmware=manifest_version)
+        onvif = OnvifGroup(hass, entry, firmware=manifest_version)
         try:
             await onvif.start()
         except Exception:  # noqa: BLE001

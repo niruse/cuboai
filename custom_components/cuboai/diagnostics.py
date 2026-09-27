@@ -383,43 +383,56 @@ def _handshake_verdicts(report: dict, no_reply: int, no_grant: int, ever_streame
 
 
 def _protect_section(store: dict, options: dict, scrubber: Scrubber, streams: dict | None = None) -> dict:
-    """UniFi Protect (ONVIF): is it on, is it reachable, what has Protect asked."""
-    service = store.get("onvif")
+    """UniFi Protect (ONVIF), per exposed camera: is it up, at which address,
+    what has Protect asked, and which stream is Protect really pulling."""
+    group = store.get("onvif")
     if not options.get(OPT_PROTECT_ENABLED):
         return {"enabled": False}
-    if service is None:
-        return {"enabled": True, "running": False, "start_error": "service not created"}
-    section = {"enabled": True, **service.stats()}
-    camera = service.camera_id()
-    section["camera"] = scrubber.alias_of(camera) if camera else None
-    section["expected_stream"] = protect_stream_name(camera, options) if camera else None
+    if group is None:
+        return {"enabled": True, "running": False, "start_error": "service not created", "cameras": []}
     # Which streams Protect's media server is actually pulling. It locks in the
     # address it got at adoption, so a camera adopted before the fixed stream
     # existed (2.6.37/38) keeps pulling the old one until it is re-adopted.
-    section["protect_pulling"] = sorted(
+    pulling = sorted(
         name
         for name, info in (streams or {}).items()
         if any("www.ui.com" in str(c.get("user_agent") or "") for c in (info or {}).get("consumers") or [])
     )
-    return section
+    cameras = []
+    for dev, service in (getattr(group, "services", None) or {}).items():
+        cameras.append(
+            {
+                "camera": scrubber.alias_of(dev),
+                **service.stats(),
+                "expected_stream": protect_stream_name(dev, options),
+                "protect_pulling": [name for name in pulling if name.endswith(dev)],
+            }
+        )
+    return {
+        "enabled": True,
+        "running": any(c.get("running") for c in cameras),
+        "start_error": getattr(group, "start_error", None),
+        "cameras": cameras,
+        "protect_pulling": pulling,
+    }
 
 
-def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
-    protect = report.get("unifi_protect") or {}
-    if not protect.get("enabled"):
-        return []
+def _protect_camera_verdicts(protect_cam: dict, report: dict, log_codecs: set) -> list[str]:
     out: list[str] = []
-    if not protect.get("running"):
-        out.append(f"UniFi Protect support is on but not running: {protect.get('start_error') or 'unknown reason'}.")
-        return out
-    address = protect.get("address")
-    if not protect.get("discovery_bound"):
+    alias = protect_cam.get("camera")
+    if not protect_cam.get("running"):
         out.append(
-            "UniFi Protect cannot find the camera by itself here (auto-discovery could not start: "
-            f"{protect.get('discovery_error') or 'unknown'}). Add it by address instead: in Protect, "
+            f"UniFi Protect support for {alias} is on but not running: "
+            f"{protect_cam.get('start_error') or 'unknown reason'}."
+        )
+        return out
+    address = protect_cam.get("address")
+    if not protect_cam.get("discovery_bound"):
+        out.append(
+            f"UniFi Protect cannot find {alias} by itself here (auto-discovery could not start: "
+            f"{protect_cam.get('discovery_error') or 'unknown'}). Add it by address instead: in Protect, "
             f"UniFi Devices → ? → Try Advanced Adoption → {address}."
         )
-    alias = protect.get("camera")
     cam = (report.get("cameras") or {}).get(alias) or {}
     live = (cam.get("streams") or {}).get("combined", {}).get("video_codec") or []
     hevc = any(c.upper() in ("H265", "HEVC") for c in live) or (
@@ -433,28 +446,40 @@ def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
             "browser without converting it, so a viewer that cannot decode H.265 shows no picture. If that "
             "happens, turn on 'Transcode these cameras to H.264' for it."
         )
-    pulling = protect.get("protect_pulling") or []
-    expected = protect.get("expected_stream")
-    stale = [name for name in pulling if name != expected]
+    expected = protect_cam.get("expected_stream")
+    stale = [name for name in protect_cam.get("protect_pulling") or [] if name != expected]
     if expected and stale:
         out.append(
             f"UniFi Protect is pulling {', '.join(stale)} instead of {expected}. Protect keeps the stream "
-            "address it was given when the camera was adopted, so this camera still uses an old one. Remove "
-            "the camera in Protect and adopt it again, once — after that, changing 'Transcode these cameras "
+            f"address it was given when the camera was adopted, so {alias} still uses an old one. Remove "
+            "it in Protect and adopt it again, once — after that, changing 'Transcode these cameras "
             "to H.264' takes effect on its own."
         )
-    unhandled = protect.get("unhandled_operations") or {}
+    unhandled = protect_cam.get("unhandled_operations") or {}
     if unhandled:
         out.append(
-            "UniFi Protect asked for ONVIF operations this integration does not answer yet: "
+            f"UniFi Protect asked {alias} for ONVIF operations this integration does not answer yet: "
             + ", ".join(sorted(unhandled))
             + ". If Protect will not add or stream the camera, please report these."
         )
-    if protect.get("auth_failures"):
+    if protect_cam.get("auth_failures"):
         out.append(
-            f"{protect['auth_failures']} request(s) to the UniFi Protect service were refused for a missing or "
-            "wrong username/password. Protect must use exactly the credentials set in Configure."
+            f"{protect_cam['auth_failures']} request(s) to the UniFi Protect service of {alias} were refused "
+            "for a missing or wrong username/password. Protect must use exactly the credentials set in Configure."
         )
+    return out
+
+
+def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
+    protect = report.get("unifi_protect") or {}
+    if not protect.get("enabled"):
+        return []
+    cams = protect.get("cameras") or []
+    if not cams:
+        return [f"UniFi Protect support is on but not running: {protect.get('start_error') or 'no camera selected'}."]
+    out: list[str] = []
+    for protect_cam in cams:
+        out += _protect_camera_verdicts(protect_cam, report, log_codecs)
     return out
 
 

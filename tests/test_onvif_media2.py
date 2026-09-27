@@ -18,7 +18,7 @@ import pytest
 from custom_components.cuboai import onvif_server as onvif
 from custom_components.cuboai.const import DOMAIN, OPT_PROTECT_PORT
 
-from .test_onvif_server import DEV, _call, _device, _digest_token, _entry, _hass, _req
+from .test_onvif_server import DEV, _call, _device, _digest_token, _entry, _hass, _req, _svc
 
 NS = {
     "s": onvif.NS_SOAP,
@@ -154,14 +154,14 @@ def test_the_codec_is_read_from_the_video_media_only(info, expected):
 def test_the_h264_option_always_means_h264():
     """With the option on, Protect gets the transcode. Kill: the option ignored
     once the native codec is known."""
-    service = onvif.OnvifService(_hass(), _entry({"h264_cameras": [DEV]}))
+    service = _svc(_hass(), _entry({"h264_cameras": [DEV]}))
     service.native_encoding[DEV] = "H265"
     assert service.spec().encoding == "H264"
 
 
 def test_without_the_option_the_native_codec_is_told_and_unknown_is_h264():
     """Kill: the learned codec not reaching the spec; unknown defaulting to H265."""
-    service = onvif.OnvifService(_hass(), _entry({}))
+    service = _svc(_hass(), _entry({}))
     assert service.spec().encoding == "H264"
     service.native_encoding[DEV] = "H265"
     assert service.spec().encoding == "H265"
@@ -202,7 +202,7 @@ async def test_the_codec_is_learned_from_the_cameras_own_stream_and_kept():
     try:
         hass = _hass()
         hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = port
-        service = onvif.OnvifService(hass, _entry({}))
+        service = _svc(hass, _entry({}))
         await service._refresh_encoding()
         assert service.spec().encoding == "H265"
         assert seen == [f"cuboai_combined_{DEV}"]
@@ -221,7 +221,7 @@ async def test_the_codec_check_is_throttled():
     try:
         hass = _hass()
         hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = port
-        service = onvif.OnvifService(hass, _entry({}))
+        service = _svc(hass, _entry({}))
         await service._refresh_encoding()
         await service._refresh_encoding()
         assert len(seen) == 1
@@ -234,7 +234,7 @@ async def test_a_dead_engine_leaves_the_codec_unchanged():
     """Kill: a connection error escaping into Protect's SOAP answer."""
     hass = _hass()
     hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = 1  # nothing listens
-    service = onvif.OnvifService(hass, _entry({}))
+    service = _svc(hass, _entry({}))
     service.native_encoding[DEV] = "H265"
     await asyncio.wait_for(service._refresh_encoding(), 5)
     assert service.spec().encoding == "H265"
@@ -253,7 +253,7 @@ async def test_protect_is_told_h265_end_to_end():
     free.close()
     hass = _hass()
     hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = api_port
-    service = onvif.OnvifService(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
+    service = _svc(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
     with patch.object(onvif.WsDiscovery, "start", AsyncMock()), patch.object(onvif.WsDiscovery, "stop", AsyncMock()):
         assert await service.start()
         try:

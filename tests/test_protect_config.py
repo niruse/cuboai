@@ -13,7 +13,7 @@ from custom_components.cuboai import config_flow as cf
 from custom_components.cuboai.const import (
     DESIRED_ONVIF_PORT,
     DOMAIN,
-    OPT_PROTECT_CAMERA,
+    OPT_PROTECT_CAMERAS,
     OPT_PROTECT_ENABLED,
     OPT_PROTECT_PASSWORD,
     OPT_PROTECT_PORT,
@@ -22,7 +22,7 @@ from custom_components.cuboai.const import (
 
 DEV_A, DEV_B = "CB02AAAA00000001", "CB02BBBB00000002"
 CAMS = [{"device_id": DEV_A, "baby_name": "A"}, {"device_id": DEV_B, "baby_name": "B"}]
-KEYS = (OPT_PROTECT_ENABLED, OPT_PROTECT_CAMERA, OPT_PROTECT_USERNAME, OPT_PROTECT_PASSWORD, OPT_PROTECT_PORT)
+KEYS = (OPT_PROTECT_ENABLED, OPT_PROTECT_CAMERAS, OPT_PROTECT_USERNAME, OPT_PROTECT_PASSWORD, OPT_PROTECT_PORT)
 
 
 def _hass(other_entries=()):
@@ -62,7 +62,7 @@ async def test_configure_offers_every_protect_field_switched_off():
     assert all(k in keys for k in KEYS), sorted(set(KEYS) - set(keys))
     assert keys[OPT_PROTECT_ENABLED].default() is False
     assert keys[OPT_PROTECT_PORT].default() == DESIRED_ONVIF_PORT == 8899
-    assert keys[OPT_PROTECT_CAMERA].default() == DEV_A
+    assert keys[OPT_PROTECT_CAMERAS].default() == [DEV_A]
 
 
 def test_first_run_offers_the_switch_and_credentials_only():
@@ -86,6 +86,10 @@ def test_the_password_field_can_be_cleared():
 # =============================================================================
 
 
+async def _errors(hass, user_input, entry_id="entryA", previous=None, cameras=CAMS):
+    return (await cf._protect_plan(hass, previous or {}, user_input, cameras, entry_id))[0]
+
+
 def _on(**kw):
     return {OPT_PROTECT_ENABLED: True, OPT_PROTECT_PASSWORD: "pw", OPT_PROTECT_PORT: 8899, "rtsp_port": 8557, **kw}
 
@@ -93,14 +97,14 @@ def _on(**kw):
 @pytest.mark.asyncio
 async def test_switched_off_needs_nothing():
     """Kill: validation running while the feature is off."""
-    assert await cf._protect_errors(_hass(), {OPT_PROTECT_ENABLED: False}, "entryA") == {}
+    assert await _errors(_hass(), {OPT_PROTECT_ENABLED: False}, "entryA") == {}
 
 
 @pytest.mark.asyncio
 async def test_a_password_is_required():
     """Protect will not adopt without one. Kill: the check removed."""
     with patch("custom_components.cuboai.go2rtc._port_bindable", return_value=True):
-        errors = await cf._protect_errors(_hass(), _on(**{OPT_PROTECT_PASSWORD: "  "}), "entryA")
+        errors = await _errors(_hass(), _on(**{OPT_PROTECT_PASSWORD: "  "}), "entryA")
     assert errors == {OPT_PROTECT_PASSWORD: "unifi_password_required"}
 
 
@@ -108,7 +112,7 @@ async def test_a_password_is_required():
 async def test_a_taken_port_is_refused():
     """Kill: the bindability check removed."""
     with patch("custom_components.cuboai.go2rtc._port_bindable", return_value=False):
-        errors = await cf._protect_errors(_hass(), _on(), "entryA")
+        errors = await _errors(_hass(), _on(), "entryA")
     assert errors == {OPT_PROTECT_PORT: "onvif_port_in_use"}
 
 
@@ -117,7 +121,7 @@ async def test_the_rtsp_port_cannot_double_as_the_protect_port():
     """Nothing is bound yet on first run, so only a direct comparison catches
     it. Kill: the rtsp_port comparison removed."""
     with patch("custom_components.cuboai.go2rtc._port_bindable", return_value=True):
-        errors = await cf._protect_errors(_hass(), _on(**{OPT_PROTECT_PORT: 8557}), "entryA")
+        errors = await _errors(_hass(), _on(**{OPT_PROTECT_PORT: 8557}), "entryA")
     assert errors == {OPT_PROTECT_PORT: "onvif_port_in_use"}
 
 
@@ -126,17 +130,18 @@ async def test_our_own_running_port_is_not_treated_as_taken():
     """Re-saving Configure while the server holds 8899 must work. Kill: the
     own-port exemption removed."""
     hass = _hass()
-    hass.data[DOMAIN]["_ports_by_entry"] = {"entryA": {"onvif": 8899}}
+    hass.data[DOMAIN]["_ports_by_entry"] = {"entryA": {"onvif": {DEV_A: 8899}}}
     with patch("custom_components.cuboai.go2rtc._port_bindable", return_value=False):
-        assert await cf._protect_errors(hass, _on(), "entryA") == {}
+        assert await _errors(hass, _on(), "entryA") == {}
 
 
 @pytest.mark.asyncio
-async def test_only_one_account_per_host_may_expose_a_camera():
-    """Protect keys cameras by MAC: two would merge. Kill: the check removed."""
+async def test_only_one_account_per_host_may_expose_cameras():
+    """The base port and the host's real MAC are per host: a second account's
+    primary camera would be merged into the first. Kill: the check removed."""
     other = SimpleNamespace(entry_id="entryB", options={OPT_PROTECT_ENABLED: True})
     with patch("custom_components.cuboai.go2rtc._port_bindable", return_value=True):
-        errors = await cf._protect_errors(_hass([other]), _on(), "entryA")
+        errors = await _errors(_hass([other]), _on(), "entryA")
     assert errors == {"base": "unifi_protect_other_entry"}
 
 
@@ -175,7 +180,13 @@ def test_every_protect_field_and_error_is_labelled_in_both_files():
         assert all(first_run.get(k) for k in (OPT_PROTECT_ENABLED, OPT_PROTECT_USERNAME, OPT_PROTECT_PASSWORD))
         for section in ("config", "options"):
             errors = data[section]["error"]
-            for err in ("unifi_password_required", "onvif_port_in_use", "unifi_protect_other_entry"):
+            for err in (
+                "unifi_password_required",
+                "onvif_port_in_use",
+                "unifi_protect_other_entry",
+                "unifi_protect_no_camera",
+                "onvif_camera_port_in_use",
+            ):
                 assert errors.get(err), f"{name}: {section}.error.{err} missing"
 
 

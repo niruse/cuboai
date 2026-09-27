@@ -49,18 +49,20 @@ import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
+from urllib.parse import quote
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from .const import (
-    DESIRED_ONVIF_PORT,
     DOMAIN,
     OPT_PROTECT_PASSWORD,
-    OPT_PROTECT_PORT,
     OPT_PROTECT_USERNAME,
     PROTECT_USERNAME_DEFAULT,
+    assign_protect_ports,
     effective_ports,
-    protect_camera_id,
+    protect_display_name,
+    protect_mac,
+    protect_primary_id,
     protect_stream_name,
 )
 
@@ -230,6 +232,8 @@ class DeviceSpec:
     password: str
     firmware: str = "unknown"
     mac: str | None = None
+    #: Protect shows "<Manufacturer> <Model>", so the Model carries the name.
+    name: str = "Baby Monitor"
     rtsp_userinfo: str = ""  # "user:pass@" when the RTSP listener requires auth
     h264_profile: str = "Main"  # native Cubo 2 SPS is Main; the transcode is High
     #: What the stream really carries: "H264" or "H265". Media2 advertises it
@@ -291,7 +295,7 @@ class DeviceSpec:
         return [
             "onvif://www.onvif.org/type/video_encoder",
             "onvif://www.onvif.org/Profile/Streaming",
-            "onvif://www.onvif.org/name/CuboAI",
+            f"onvif://www.onvif.org/name/{quote(self.name, safe='')}",
             "onvif://www.onvif.org/hardware/Baby%20Monitor",
             "onvif://www.onvif.org/location/home",
         ]
@@ -387,7 +391,7 @@ def _get_system_date_and_time(spec: DeviceSpec, _req) -> str:
 def _get_device_information(spec: DeviceSpec, _req) -> str:
     return (
         "<tds:GetDeviceInformationResponse><tds:Manufacturer>CuboAI</tds:Manufacturer>"
-        "<tds:Model>Baby Monitor</tds:Model>"
+        f"<tds:Model>{escape(spec.name)}</tds:Model>"
         f"<tds:FirmwareVersion>{escape(spec.firmware)}</tds:FirmwareVersion>"
         f"<tds:SerialNumber>{spec.serial}</tds:SerialNumber><tds:HardwareId>cuboai-onvif</tds:HardwareId>"
         "</tds:GetDeviceInformationResponse>"
@@ -985,15 +989,17 @@ def _mac_for_ip(ip: str) -> str | None:
 
 
 class OnvifService:
-    """The ONVIF device + discovery for one config entry."""
+    """The ONVIF device + discovery for ONE camera, on its own port."""
 
-    def __init__(self, hass, entry, firmware: str = "unknown"):
+    def __init__(self, hass, entry, device_id: str, port: int, primary: bool, firmware: str = "unknown"):
         self.hass = hass
         self.entry = entry
+        self.device_id = device_id
+        self.primary = primary
         self.firmware = firmware
         self.host_ip: str | None = None
-        self.mac: str | None = None
-        self.port = int(entry.options.get(OPT_PROTECT_PORT) or DESIRED_ONVIF_PORT)
+        self.mac: str | None = None  # the host's real MAC; reported only by the primary
+        self.port = int(port)
         self.device = OnvifDevice(self.spec)
         self.discovery = WsDiscovery(self.spec)
         self.running = False
@@ -1004,8 +1010,8 @@ class OnvifService:
         self.native_encoding: dict[str, str] = {}
         self._codec_checked: dict[str, float] = {}
 
-    def camera_id(self) -> str | None:
-        return protect_camera_id(self.entry.options, self.entry.data.get("cameras"))
+    def camera_id(self) -> str:
+        return self.device_id
 
     def spec(self) -> DeviceSpec:
         """Built per request: go2rtc may have been restarted onto other ports."""
@@ -1029,7 +1035,8 @@ class OnvifService:
             username=opts.get(OPT_PROTECT_USERNAME) or PROTECT_USERNAME_DEFAULT,
             password=opts.get(OPT_PROTECT_PASSWORD) or "",
             firmware=self.firmware,
-            mac=self.mac,
+            mac=protect_mac(dev, self.primary, self.mac),
+            name=protect_display_name(self.hass, dev, self.entry.data.get("cameras")),
             rtsp_userinfo=userinfo,
             h264_profile="High" if dev in (opts.get("h264_cameras") or []) else "Main",
             encoding=self.encoding_for(dev),
@@ -1082,9 +1089,6 @@ class OnvifService:
             self.mac = await self.hass.async_add_executor_job(_mac_for_ip, self.host_ip)
 
     async def start(self) -> bool:
-        if not self.camera_id():
-            self.start_error = "no camera configured"
-            return False
         if not (self.entry.options.get(OPT_PROTECT_PASSWORD) or ""):
             self.start_error = "no password set"
             _LOGGER.error("UniFi Protect support is on but has no password; Protect refuses empty passwords")
@@ -1115,7 +1119,8 @@ class OnvifService:
         self._runner = runner
         self.running = True
         domain_data = self.hass.data.setdefault(DOMAIN, {})
-        domain_data.setdefault("_ports_by_entry", {}).setdefault(self.entry.entry_id, {})["onvif"] = self.port
+        published = domain_data.setdefault("_ports_by_entry", {}).setdefault(self.entry.entry_id, {})
+        published.setdefault("onvif", {})[self.device_id] = self.port
         await self.discovery.start()
         _LOGGER.info("UniFi Protect (ONVIF) ready at %s:%s", self.host_ip, self.port)
         return True
@@ -1130,7 +1135,7 @@ class OnvifService:
                 "automatically, because Protect remembers the address it adopted. Free the port, or choose "
                 "another one in Settings → Devices & Services → CuboAI → Configure.",
                 title="CuboAI: UniFi Protect port unavailable",
-                notification_id=f"cuboai_protect_port_{self.entry.entry_id}",
+                notification_id=f"cuboai_protect_port_{self.entry.entry_id}_{self.port}",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -1167,7 +1172,7 @@ class OnvifService:
             await self._runner.cleanup()
             self._runner = None
         ports = (self.hass.data.get(DOMAIN) or {}).get("_ports_by_entry") or {}
-        (ports.get(self.entry.entry_id) or {}).pop("onvif", None)
+        ((ports.get(self.entry.entry_id) or {}).get("onvif") or {}).pop(self.device_id, None)
         self.running = False
 
     def stats(self) -> dict:
@@ -1175,6 +1180,8 @@ class OnvifService:
             "running": self.running,
             "start_error": self.start_error,
             "address": f"{self.host_ip}:{self.port}" if self.host_ip else None,
+            "port": self.port,
+            "primary": self.primary,
             "mac_known": bool(self.mac),
             "advertised_encoding": self.encoding_for(self.camera_id() or ""),
             "discovery_bound": self.discovery.bound,
@@ -1185,3 +1192,44 @@ class OnvifService:
             "auth_failures": self.device.auth_failures,
             "clients": sorted(self.device.clients),
         }
+
+
+class OnvifGroup:
+    """Every camera this entry exposes to UniFi Protect, one OnvifService each.
+
+    Protect tells third-party cameras apart by the MAC they report, so each
+    camera gets its own port and MAC (const.assign_protect_ports / protect_mac)
+    and several can come from one Home Assistant host. A camera that fails to
+    start (port taken) never stops the others.
+    """
+
+    def __init__(self, hass, entry, firmware: str = "unknown"):
+        self.hass = hass
+        self.entry = entry
+        cameras = entry.data.get("cameras")
+        primary = protect_primary_id(entry.options, cameras)
+        self.services: dict[str, OnvifService] = {
+            dev: OnvifService(hass, entry, dev, port, primary=(dev == primary), firmware=firmware)
+            for dev, port in assign_protect_ports(entry.options, cameras).items()
+        }
+        self.start_error: str | None = None if self.services else "no camera selected"
+
+    def for_camera(self, device_id: str) -> OnvifService | None:
+        return self.services.get(device_id)
+
+    async def start(self) -> bool:
+        started = False
+        for service in self.services.values():
+            try:
+                started = await service.start() or started
+            except Exception:  # noqa: BLE001 - one camera never takes the others down
+                service.start_error = "failed to start (see the log)"
+                _LOGGER.exception("UniFi Protect (ONVIF) failed to start for one camera on port %s", service.port)
+        return started
+
+    async def stop(self) -> None:
+        for service in self.services.values():
+            await service.stop()
+
+    def stats(self) -> dict[str, dict]:
+        return {dev: service.stats() for dev, service in self.services.items()}
