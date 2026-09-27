@@ -30,22 +30,22 @@ views:
 
           - type: glance
             entities:
-              - entity: sensor.cuboai_mia_cuboai_temperature_mia
+              - entity: sensor.cuboai_baby_cuboai_temperature_baby
                 name: Temp
-              - entity: sensor.cuboai_mia_cuboai_humidity_mia
+              - entity: sensor.cuboai_baby_cuboai_humidity_baby
                 name: Humidity
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+              - entity: sensor.cuboai_baby_cuboai_noise_level_baby
                 name: Noise
 
           # baby_present reads 0 for an empty room and 1/2 for in/not in crib.
           # It sat at `unknown` until the label map was found to be missing 0.
           - type: glance
             entities:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 name: Present
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
+              - entity: sensor.cuboai_baby_cuboai_motion_baby
                 name: Motion
-              - entity: sensor.cuboai_camera_state_mia
+              - entity: sensor.cuboai_camera_state_baby
                 name: Camera
 
       - type: grid
@@ -55,23 +55,23 @@ views:
             heading_style: title
 
           - type: tile
-            entity: light.cuboai_mia_mia_night_light
+            entity: light.cuboai_baby_baby_night_light
             features:
               - type: light-brightness
 
           - type: entities
             entities:
-              - entity: select.cuboai_mia_mia_night_vision
+              - entity: select.cuboai_baby_baby_night_vision
                 name: Night vision
-              - entity: switch.cuboai_mia_mia_sleep_mode
+              - entity: switch.cuboai_baby_baby_sleep_mode
                 name: Sleep mode
-              - entity: switch.cuboai_mia_mia_status_led
+              - entity: switch.cuboai_baby_baby_status_led
                 name: Status LED
-              - entity: switch.cuboai_mia_mia_flip_screen
+              - entity: switch.cuboai_baby_baby_flip_screen
                 name: Flip screen
 
           - type: media-control
-            entity: media_player.cuboai_mia_mia_lullaby
+            entity: media_player.cuboai_baby_baby_lullaby
 
   # ── Nighttime ───────────────────────────────────────────────────────────
   # 19:00 to 07:00. The app's own version of this page is paywalled, so every
@@ -89,18 +89,18 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.mia_night_in_crib
+            entity: sensor.baby_night_in_crib
             name: In crib
             color: indigo
 
           - type: horizontal-stack
             cards:
               - type: tile
-                entity: sensor.mia_night_out_of_crib
+                entity: sensor.baby_night_out_of_crib
                 name: Not in crib
                 vertical: true
               - type: tile
-                entity: sensor.mia_night_sleeps
+                entity: sensor.baby_night_sleeps
                 name: Sleeps
                 vertical: true
 
@@ -110,13 +110,13 @@ views:
           - type: conditional
             conditions:
               - condition: numeric_state
-                entity: sensor.mia_night_no_reading
+                entity: sensor.baby_night_no_reading
                 above: 0.5
             card:
               type: markdown
               content: >
                 ⚠️ The camera was unreachable for
-                {{ states('sensor.mia_night_no_reading') }} h of this window,
+                {{ states('sensor.baby_night_no_reading') }} h of this window,
                 so the figures above cover only part of the night.
                 This counts only time the sensor was unavailable — an empty
                 room is a reading, not a gap.
@@ -136,7 +136,7 @@ views:
             from: "19:00"
             to: "07:00"
             rows:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: In crib
                 icon: mdi:sleep
                 match: in crib
@@ -146,21 +146,21 @@ views:
               # was empty and the baby was demonstrably not in the crib, so
               # matching only 2 drew an empty row through exactly the hours
               # this is meant to show.
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: Not in crib
                 icon: mdi:baby-carriage
                 match:
                   - not in crib
                   - "0"
                 color: "#e9c46a"
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
+              - entity: sensor.cuboai_baby_cuboai_motion_baby
                 label: Moving
                 icon: mdi:motion-sensor
                 match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+              - entity: sensor.cuboai_baby_cuboai_noise_level_baby
                 label: Noise over 26
                 icon: mdi:volume-high
                 above: 26
@@ -173,7 +173,7 @@ views:
               # it), settling the experiment the old comment here proposed. The
               # visit IS clearly visible as strong motion - so the Moving lane
               # matches the strong states now and covers it.
-              - entity: sensor.cuboai_camera_state_mia
+              - entity: sensor.cuboai_camera_state_baby
                 label: Camera online
                 icon: mdi:cctv
                 match: online
@@ -194,7 +194,7 @@ views:
               # integration keeps its last `alerts_count` alerts (5) from the
               # last `hours_back` hours (12), so this window's first two hours
               # cannot be covered however loud they were.
-              - entity: sensor.cuboai_last_alert_mia
+              - entity: sensor.cuboai_last_alert_baby
                 label: Alerts
                 icon: mdi:bell-ring
                 events: alerts
@@ -214,31 +214,31 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.mia_day_in_crib
+            entity: sensor.baby_day_in_crib
             name: In crib
             color: amber
 
           - type: horizontal-stack
             cards:
               - type: tile
-                entity: sensor.mia_day_out_of_crib
+                entity: sensor.baby_day_out_of_crib
                 name: Not in crib
                 vertical: true
               - type: tile
-                entity: sensor.mia_day_sleeps
+                entity: sensor.baby_day_sleeps
                 name: Sleeps
                 vertical: true
 
           - type: conditional
             conditions:
               - condition: numeric_state
-                entity: sensor.mia_day_no_reading
+                entity: sensor.baby_day_no_reading
                 above: 0.5
             card:
               type: markdown
               content: >
                 ⚠️ The camera was unreachable for
-                {{ states('sensor.mia_day_no_reading') }} h of this window,
+                {{ states('sensor.baby_day_no_reading') }} h of this window,
                 so the figures above cover only part of the day.
                 This counts only time the sensor was unavailable — an empty
                 room is a reading, not a gap.
@@ -258,7 +258,7 @@ views:
             from: "07:00"
             to: "19:00"
             rows:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: In crib
                 icon: mdi:sleep
                 match: in crib
@@ -268,21 +268,21 @@ views:
               # was empty and the baby was demonstrably not in the crib, so
               # matching only 2 drew an empty row through exactly the hours
               # this is meant to show.
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: Not in crib
                 icon: mdi:baby-carriage
                 match:
                   - not in crib
                   - "0"
                 color: "#e9c46a"
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
+              - entity: sensor.cuboai_baby_cuboai_motion_baby
                 label: Moving
                 icon: mdi:motion-sensor
                 match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+              - entity: sensor.cuboai_baby_cuboai_noise_level_baby
                 label: Noise over 26
                 icon: mdi:volume-high
                 above: 26
@@ -295,7 +295,7 @@ views:
               # it), settling the experiment the old comment here proposed. The
               # visit IS clearly visible as strong motion - so the Moving lane
               # matches the strong states now and covers it.
-              - entity: sensor.cuboai_camera_state_mia
+              - entity: sensor.cuboai_camera_state_baby
                 label: Camera online
                 icon: mdi:cctv
                 match: online
@@ -303,7 +303,7 @@ views:
               # Same point-event alert lane as the Nighttime tab, same
               # caveat: only the most recent alerts the integration keeps
               # (alerts_count, within hours_back) can appear.
-              - entity: sensor.cuboai_last_alert_mia
+              - entity: sensor.cuboai_last_alert_baby
                 label: Alerts
                 icon: mdi:bell-ring
                 events: alerts
@@ -323,30 +323,30 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.mia_week_in_crib
+            entity: sensor.baby_week_in_crib
             name: In crib
             color: indigo
 
           - type: horizontal-stack
             cards:
               - type: tile
-                entity: sensor.mia_week_out_of_crib
+                entity: sensor.baby_week_out_of_crib
                 name: Not in crib
                 vertical: true
               - type: tile
-                entity: sensor.mia_week_sleeps
+                entity: sensor.baby_week_sleeps
                 name: Sleeps
                 vertical: true
 
           - type: tile
-            entity: sensor.mia_average_day_in_crib
+            entity: sensor.baby_average_day_in_crib
             name: Average per day
 
           # Divided by seven days, not by the days that happen to hold data,
           # so downtime pulls the average down instead of being averaged away.
           # This is the number that says how much to trust the one above it.
           - type: tile
-            entity: sensor.mia_week_coverage
+            entity: sensor.baby_week_coverage
             name: Camera coverage
             color: green
 
@@ -361,26 +361,26 @@ views:
             title: The last 7 days
             days: 7
             rows:
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: In crib
                 icon: mdi:sleep
                 match: in crib
                 color: "#2a9d8f"
-              - entity: sensor.cuboai_mia_cuboai_baby_present_mia
+              - entity: sensor.cuboai_baby_cuboai_baby_present_baby
                 label: Not in crib
                 icon: mdi:baby-carriage
                 match:
                   - not in crib
                   - "0"
                 color: "#e9c46a"
-              - entity: sensor.cuboai_mia_cuboai_motion_mia
+              - entity: sensor.cuboai_baby_cuboai_motion_baby
                 label: Moving
                 icon: mdi:motion-sensor
                 match: ["moving", "strong (2)", "strong (3)"]
                 color: "#f4a261"
               # 26, not 30: the measured range on this camera is 24-27, so a
               # threshold of 30 was a lane that could never light up.
-              - entity: sensor.cuboai_mia_cuboai_noise_level_mia
+              - entity: sensor.cuboai_baby_cuboai_noise_level_baby
                 label: Noise over 26
                 icon: mdi:volume-high
                 above: 26
@@ -391,7 +391,7 @@ views:
               # it), settling the experiment the old comment here proposed. The
               # visit IS clearly visible as strong motion - so the Moving lane
               # matches the strong states now and covers it.
-              - entity: sensor.cuboai_camera_state_mia
+              - entity: sensor.cuboai_camera_state_baby
                 label: Camera online
                 icon: mdi:cctv
                 match: online
@@ -399,7 +399,7 @@ views:
               # Same point-event alert lane as the Nighttime tab, same
               # caveat: only the most recent alerts the integration keeps
               # (alerts_count, within hours_back) can appear.
-              - entity: sensor.cuboai_last_alert_mia
+              - entity: sensor.cuboai_last_alert_baby
                 label: Alerts
                 icon: mdi:bell-ring
                 events: alerts
@@ -408,9 +408,9 @@ views:
           - type: history-graph
             hours_to_show: 168
             entities:
-              - entity: sensor.cuboai_mia_cuboai_temperature_mia
+              - entity: sensor.cuboai_baby_cuboai_temperature_baby
                 name: Temperature
-              - entity: sensor.cuboai_mia_cuboai_humidity_mia
+              - entity: sensor.cuboai_baby_cuboai_humidity_baby
                 name: Humidity
 
   # ── Alerts ──────────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ views:
             heading_style: title
 
           - type: tile
-            entity: sensor.cuboai_last_alert_mia
+            entity: sensor.cuboai_last_alert_baby
             name: Last alert
 
           # Replaces a hand-written markdown TABLE, which rendered as leaking
@@ -438,7 +438,7 @@ views:
           # that Jinja blocks and markdown lists both depend on.
           - type: markdown
             content: |
-              {% set s = 'sensor.cuboai_mia_cuboai_session_history_mia' %}
+              {% set s = 'sensor.cuboai_baby_cuboai_session_history_baby' %}
               {% set alerts = state_attr(s, 'alerts') or [] %}
               {% if alerts %}
               {% for a in alerts %}
@@ -466,13 +466,13 @@ views:
 
           - type: entities
             entities:
-              - entity: sensor.cuboai_mia_cuboai_cry_detection_status_mia
+              - entity: sensor.cuboai_baby_cuboai_cry_detection_status_baby
                 name: Cry detection
-              - entity: sensor.cuboai_mia_cuboai_cough_detection_status_mia
+              - entity: sensor.cuboai_baby_cuboai_cough_detection_status_baby
                 name: Cough detection
-              - entity: sensor.cuboai_mia_cuboai_cry_sensitivity_mia
+              - entity: sensor.cuboai_baby_cuboai_cry_sensitivity_baby
                 name: Cry sensitivity
-              - entity: sensor.cuboai_mia_cuboai_sleep_safety_status_mia
+              - entity: sensor.cuboai_baby_cuboai_sleep_safety_status_baby
                 name: Covered face
               - entity: sensor.cuboai_subscription
                 name: Subscription

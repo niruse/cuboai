@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.42]
+
+### Fixed
+- **Two Configure fields showed their raw key**: *Maximum number of downloaded photos to keep*
+  (`max_saved_photos`) and the RTSP timestamp choice (`rtsp_timestamp_cameras`, now *Burn the date and
+  time into these cameras' NVR recordings*, with an explanation). A test now requires a label for
+  every setup and Configure field in both translation files (the per-camera IP fields excepted; their
+  keys are per camera).
+- **The first-run UniFi Protect text** read "find your first camera and add them as third-party
+  cameras" (a v2.6.41 wording slip). It now describes the first camera, and the label says so.
+- The `cuboai.play_recording` description claimed "roughly the last 72 hours"; measured retention is
+  about two days, or 18–20 hours with baby-presence detection on.
+
+### Changed
+- **README rewritten**: every setup and Configure option in one place, entity and service tables,
+  one section per feature, and new screenshots of the card, playback, music, editor, timeline, setup,
+  Configure, sensors and notifications. Version history and investigation notes left the README
+  (they are in this changelog); deep NVR troubleshooting moved to `docs/nvr-troubleshooting.md` and
+  engine internals, ports and stall tunables to `docs/advanced.md`.
+- **The screenshots are rendered, not captured**: `tools/docs-images/` runs the real card code and
+  the real config-flow schema against made-up sample data, so no personal data can appear in them
+  and they can be regenerated.
+- The example dashboard and its README use a camera named `baby`.
+
+### Removed
+- Old screenshots that showed a real device id or a real room, and an unreferenced image in the
+  repository root.
+
 ## [2.6.41]
 
 ### Added

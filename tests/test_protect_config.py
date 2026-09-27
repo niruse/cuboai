@@ -223,3 +223,51 @@ def test_the_manifest_declares_every_integration_the_protect_code_uses():
     # Hassfest lets any integration use these without declaring them.
     always_allowed = {"persistent_notification"}
     assert used - always_allowed <= declared, f"undeclared: {sorted(used - always_allowed - declared)}"
+
+
+# =============================================================================
+# Every field is labelled (not just Protect's)
+# =============================================================================
+
+
+async def _form_keys():
+    """The field keys of the first-run options step and of Configure, built
+    through the real flows with two cameras."""
+    hass = _hass()
+    entry = MagicMock(entry_id="entryA", options={}, data={"cameras": CAMS, "all_cameras": CAMS})
+    options_flow = cf.CuboAIOptionsFlowHandler()
+    options_flow.hass, options_flow.config_entry = hass, entry
+    options_flow.async_show_form = lambda **kw: kw
+    setup_flow = cf.CuboAIConfigFlow()
+    setup_flow.hass = hass
+    setup_flow._auth_data = {"username": "u", "cameras": CAMS}
+    setup_flow.async_show_form = lambda **kw: kw
+    with (
+        patch.object(cf, "setup_file_logger", MagicMock()),
+        patch("custom_components.cuboai.utils.find_available_port", return_value=8557),
+    ):
+        configure = await options_flow.async_step_init()
+        setup = await setup_flow.async_step_config()
+    keys = lambda form: [str(k) for k in form["data_schema"].schema]  # noqa: E731
+    return keys(setup), keys(configure)
+
+
+@pytest.mark.asyncio
+async def test_every_setup_and_configure_field_is_labelled_in_both_files():
+    """An unlabelled field renders as its raw key (max_saved_photos and
+    rtsp_timestamp_cameras did in Configure). camera_ip_<id> is exempt: its key
+    is per camera, and HA translations are static. Kill: any label removed."""
+    setup_keys, configure_keys = await _form_keys()
+    assert "max_saved_photos" in configure_keys and "rtsp_timestamp_cameras" in configure_keys
+    root = Path(__file__).resolve().parent.parent / "custom_components" / "cuboai"
+    missing = []
+    for name in ("translations/en.json", "strings.json"):
+        data = json.loads((root / name).read_text(encoding="utf-8"))
+        for section, step, keys in (("config", "config", setup_keys), ("options", "init", configure_keys)):
+            labels = data[section]["step"][step]["data"]
+            missing += [
+                f"{name}:{section}.{k}"
+                for k in keys
+                if not k.startswith("camera_ip_") and not str(labels.get(k, "")).strip()
+            ]
+    assert not missing, missing
