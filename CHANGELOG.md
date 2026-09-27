@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.41]
+
+### Added
+- **Several cameras in UniFi Protect.** Configure now takes a list of cameras to show in Protect
+  instead of one. Earlier versions allowed one camera per Home Assistant host on the belief that
+  Protect tells third-party cameras apart by the host's MAC address. Tested on a live UDM, it goes
+  by the MAC each camera *reports* over ONVIF: a second device on the same address, on another
+  port and reporting its own MAC, was adopted as a second camera and both streamed. Each camera
+  now gets its own port and MAC. The first keeps the host's real MAC and the port set in
+  Configure, so a camera already in Protect is unchanged; each further camera gets the next free
+  port and a fixed, locally administered MAC derived from its id. A camera keeps its port for
+  good once it has one, even when it is unticked and ticked again, because Protect remembers
+  ip:port. A camera whose port is taken is reported and the others keep running.
+- **Each camera appears in Protect under its own name.** Protect names a third-party camera
+  "Manufacturer Model", and the Model was always "Baby Monitor", so every camera was "CuboAI Baby
+  Monitor". The Model is now the device's name as renamed in Home Assistant, else the camera's
+  name in the CuboAI app.
+  Protect reads the name only when it adds a camera (tested live: it kept the old name through
+  several minutes of its once-a-minute re-reads, and took the new one on re-adding). A camera
+  added before this version needs one remove-and-add in Protect, or a rename there.
+- Diagnostics reports each exposed camera separately (address, port, codec, which stream Protect
+  pulls) and names the camera in every Protect verdict. Camera names never appear in it.
+
+### Changed
+- An install from v2.6.37–2.6.40 keeps its one camera in Protect on the same port and MAC; the
+  first save of Configure records it as the first camera.
+
 ## [2.6.40]
 
 ### Added

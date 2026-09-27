@@ -15,7 +15,7 @@ from .const import (
     NOTIFY_ON_RESTART_DEFAULT,
     OPT_NOTIFY_ON_RESTART,
     OPT_PROTECT_ENABLED,
-    protect_camera_id,
+    protect_camera_ids,
     protect_stream_name,
     protect_stream_target,
 )
@@ -328,7 +328,7 @@ class Go2RTCManager:
             # next reconnect on. An RTSP loopback, not an ffmpeg leg: a pure
             # re-read costs no transcode and spawns no extra process (go2rtc
             # rejects a bare stream name as a source).
-            if self._options.get(OPT_PROTECT_ENABLED) and dev_id == protect_camera_id(self._options, self._cameras):
+            if self._options.get(OPT_PROTECT_ENABLED) and dev_id in protect_camera_ids(self._options, self._cameras):
                 rtsp_port = getattr(self, "_rtsp_port", None) or int(self._options.get("rtsp_port", 8555))
                 userinfo = ""
                 if self._options.get("nvr_enabled") and self._options.get("nvr_password"):
