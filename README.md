@@ -621,8 +621,10 @@ camera without one), and save. The camera's *WebRTC Stream* sensor then shows th
   Media2, the only ONVIF media service that can say "H.265", so a Cubo 3 shows up in Protect as
   **H.265** instead of being mislabelled H.264. If the camera had never streamed since Home
   Assistant started, the integration can't know yet and says H.264, as earlier versions did.
-  Protect reads the codec when it adopts the camera, so if the label looks wrong, remove the
-  camera in Protect and adopt it again once it has been streaming.
+  Protect re-reads the codec about once a minute, so the label corrects itself; turning the
+  H.264 option on or off changes it within about 20 seconds (tested both ways on a live UDM).
+  A camera added to Protect **before v2.6.40** stays on the older interface, which can only say
+  H.264, so remove a Cubo 3 in Protect and add it again **once** to get the H.265 label.
 - **Changing the H.264 option works without re-adding the camera.** Protect is pointed at one fixed
   stream (`cuboai_protect_<camera>`), and the option only changes what that stream carries, from the
   next reconnect. A camera added with v2.6.37 or v2.6.38 is still on an older address, so remove it
