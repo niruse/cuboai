@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.40]
+
+### Added
+- **UniFi Protect now shows a Cubo 3 as H.265.** ONVIF's original media service (Media v1) can
+  only describe JPEG, MPEG-4 or H.264, so a camera sending HEVC was reported to Protect as H.264.
+  Protect then labelled it H.264 while passing the real H.265 through to viewers, tested on a
+  live UDM. The integration now also offers ONVIF **Media2**, which can say H.265. Offered both,
+  Protect reads Media2 only, and on a live UDM it labelled an H.265 stream `h265`, took the H.265
+  stream and served snapshots.
+
+  The codec it is told is never guessed. It is H.264 when *Transcode these cameras to H.264* is on
+  for that camera. Otherwise it is what the streaming engine is actually receiving from the
+  camera, re-checked at most every 30 s from the engine's own status (read-only: checking never
+  starts a camera session). Until the camera has streamed once since Home Assistant started, the
+  answer stays H.264, as before. Media v1 keeps answering for clients that only speak v1, and
+  still says H.264 there, the only value v1 allows.
+- Download diagnostics shows the codec Protect is told (`unifi_protect.advertised_encoding`).
+
+### Changed
+- The diagnostics verdict for an H.265 camera in Protect no longer says Protect "cannot play" it.
+  Protect accepts H.265 and passes it through unconverted, so the verdict now says that a viewer
+  that cannot decode H.265 shows no picture, and what to turn on if that happens.
+
 ## [2.6.39]
 
 ### Fixed

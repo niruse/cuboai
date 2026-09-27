@@ -426,9 +426,12 @@ def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
         len(report.get("cameras") or {}) == 1 and "hevc" in log_codecs
     )
     if hevc and not cam.get("h264_transcode"):
+        # Seen live: Protect adopts HEVC, labels it H.265 (read over ONVIF
+        # Media2) and passes it to viewers unconverted.
         out.append(
-            f"{alias} is shown to UniFi Protect but sends HEVC (H.265), which Protect cannot play. "
-            "Turn on 'Transcode these cameras to H.264' for it."
+            f"{alias} is shown to UniFi Protect as H.265 (HEVC). Protect passes H.265 to your phone or "
+            "browser without converting it, so a viewer that cannot decode H.265 shows no picture. If that "
+            "happens, turn on 'Transcode these cameras to H.264' for it."
         )
     pulling = protect.get("protect_pulling") or []
     expected = protect.get("expected_stream")
