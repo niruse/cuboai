@@ -503,9 +503,9 @@ async def test_protect_section_names_the_camera_by_alias():
 
 @pytest.mark.asyncio
 async def test_an_hevc_camera_shown_to_protect_without_transcode_is_called_out():
-    """Protect plays H.264 only. Kill: the Protect HEVC verdict removed."""
+    """Protect passes H.265 through unconverted. Kill: the Protect HEVC verdict removed."""
     report = await _diagnose_protect(_protect_service())
-    assert any("shown to UniFi Protect but sends HEVC" in v for v in report["verdicts"]), report["verdicts"]
+    assert any("shown to UniFi Protect as H.265" in v for v in report["verdicts"]), report["verdicts"]
 
 
 @pytest.mark.asyncio

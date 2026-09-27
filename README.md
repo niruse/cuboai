@@ -616,6 +616,13 @@ camera without one), and save. The camera's *WebRTC Stream* sensor then shows th
   HEVC (H.265). Protect passes H.265 straight through to your viewing device without converting it,
   so only devices that can decode H.265 will show the picture. Checking *Transcode these cameras to
   H.264* for a Cubo 3 makes it play everywhere, at the cost of about one CPU core on a Raspberry Pi 5.
+- **Protect is told the real codec** (since v2.6.40): H.264 when the transcode is on, otherwise
+  whatever the camera actually sends, as the streaming engine sees it. It is described over ONVIF
+  Media2, the only ONVIF media service that can say "H.265", so a Cubo 3 shows up in Protect as
+  **H.265** instead of being mislabelled H.264. If the camera had never streamed since Home
+  Assistant started, the integration can't know yet and says H.264, as earlier versions did.
+  Protect reads the codec when it adopts the camera, so if the label looks wrong, remove the
+  camera in Protect and adopt it again once it has been streaming.
 - **Changing the H.264 option works without re-adding the camera.** Protect is pointed at one fixed
   stream (`cuboai_protect_<camera>`), and the option only changes what that stream carries, from the
   next reconnect. A camera added with v2.6.37 or v2.6.38 is still on an older address, so remove it

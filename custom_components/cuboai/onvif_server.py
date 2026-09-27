@@ -45,6 +45,7 @@ import logging
 import re
 import socket
 import struct
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -68,6 +69,11 @@ _LOGGER = logging.getLogger(__name__)
 NS_SOAP = "http://www.w3.org/2003/05/soap-envelope"
 NS_DEVICE = "http://www.onvif.org/ver10/device/wsdl"
 NS_MEDIA = "http://www.onvif.org/ver10/media/wsdl"
+#: ONVIF Media2 - the only Media service that can say "H265". Media v1's
+#: encoding enum is JPEG | MPEG4 | H264, so over v1 an HEVC camera (Cubo 3)
+#: can only be described as H.264, and Protect labels it that way while
+#: passing the real H.265 straight through to viewers (seen live).
+NS_MEDIA2 = "http://www.onvif.org/ver20/media/wsdl"
 NS_EVENTS = "http://www.onvif.org/ver10/events/wsdl"
 NS_SCHEMA = "http://www.onvif.org/ver10/schema"
 NS_NETWORK = "http://www.onvif.org/ver10/network/wsdl"
@@ -100,7 +106,7 @@ _MUTATING_EXACT = frozenset({"SystemReboot", "SetSystemFactoryDefault"})
 
 _ENV_OPEN = (
     '<?xml version="1.0" encoding="UTF-8"?>'
-    f'<s:Envelope xmlns:s="{NS_SOAP}" xmlns:tds="{NS_DEVICE}" xmlns:trt="{NS_MEDIA}" '
+    f'<s:Envelope xmlns:s="{NS_SOAP}" xmlns:tds="{NS_DEVICE}" xmlns:trt="{NS_MEDIA}" xmlns:tr2="{NS_MEDIA2}" '
     f'xmlns:tev="{NS_EVENTS}" xmlns:tt="{NS_SCHEMA}" xmlns:ter="http://www.onvif.org/ver10/error">'
     "<s:Body>"
 )
@@ -226,6 +232,9 @@ class DeviceSpec:
     mac: str | None = None
     rtsp_userinfo: str = ""  # "user:pass@" when the RTSP listener requires auth
     h264_profile: str = "Main"  # native Cubo 2 SPS is Main; the transcode is High
+    #: What the stream really carries: "H264" or "H265". Media2 advertises it
+    #: honestly; Media v1 cannot express H265 and always says H264.
+    encoding: str = "H264"
     width: int = 1920
     height: int = 1080
     fps: int = 10
@@ -248,6 +257,15 @@ class DeviceSpec:
     @property
     def media_xaddr(self) -> str:
         return f"http://{self.host_ip}:{self.onvif_port}/onvif/media_service"
+
+    @property
+    def media2_xaddr(self) -> str:
+        return f"http://{self.host_ip}:{self.onvif_port}/onvif/media2_service"
+
+    @property
+    def codec_profile(self) -> str:
+        """The encoder profile for the advertised codec (HEVC from a Cubo 3 is Main)."""
+        return self.h264_profile if self.encoding == "H264" else "Main"
 
     @property
     def stream_uri(self) -> str:
@@ -332,6 +350,9 @@ class OnvifDevice:
         elif req.namespace == NS_MEDIA:
             table = _MEDIA_OPS
             prefix = "trt"
+        elif req.namespace == NS_MEDIA2:
+            table = _MEDIA2_OPS
+            prefix = "tr2"
         else:
             return None
         if op in table:
@@ -405,6 +426,7 @@ def _get_services(spec: DeviceSpec, _req) -> str:
         "<tds:GetServicesResponse>"
         + service(NS_DEVICE, spec.device_xaddr)
         + service(NS_MEDIA, spec.media_xaddr)
+        + service(NS_MEDIA2, spec.media2_xaddr)
         + "</tds:GetServicesResponse>"
     )
 
@@ -648,6 +670,99 @@ _MEDIA_OPS = {
 }
 
 
+# - media2 service (ver20) -
+
+
+def _v2_encoder(spec: DeviceSpec, token: str, tag: str) -> str:
+    """A VideoEncoder2Configuration. Encoding is a free string here, so H265 can be said."""
+    return (
+        f'<{tag} token="vec_{token}" GovLength="{spec.gov_length}" Profile="{spec.codec_profile}">'
+        f"<tt:Name>vec_{token}</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>{spec.encoding}</tt:Encoding>"
+        f"<tt:Resolution><tt:Width>{spec.width}</tt:Width><tt:Height>{spec.height}</tt:Height></tt:Resolution>"
+        f'<tt:RateControl ConstantBitRate="false"><tt:FrameRateLimit>{spec.fps}</tt:FrameRateLimit>'
+        f"<tt:BitrateLimit>{spec.bitrate_kbps}</tt:BitrateLimit></tt:RateControl>"
+        f"<tt:Quality>5</tt:Quality></{tag}>"
+    )
+
+
+def _v2_source(spec: DeviceSpec, tag: str) -> str:
+    return f'<{tag} token="vsc">{_video_source_configuration(spec)}</{tag}>'
+
+
+def _v2_profile(spec: DeviceSpec, token: str) -> str:
+    return (
+        f'<tr2:Profiles token="{token}" fixed="true"><tr2:Name>{token}</tr2:Name><tr2:Configurations>'
+        + _v2_source(spec, "tr2:VideoSource")
+        + _v2_encoder(spec, token, "tr2:VideoEncoder")
+        + "</tr2:Configurations></tr2:Profiles>"
+    )
+
+
+def _v2_get_profiles(spec: DeviceSpec, req) -> str:
+    wanted = _requested_token(req, "Token")
+    tokens = (wanted,) if wanted in PROFILE_TOKENS else PROFILE_TOKENS
+    return "<tr2:GetProfilesResponse>" + "".join(_v2_profile(spec, t) for t in tokens) + "</tr2:GetProfilesResponse>"
+
+
+def _v2_encoder_configurations(spec: DeviceSpec, req) -> str:
+    wanted = (_requested_token(req, "ConfigurationToken") or "").removeprefix("vec_")
+    tokens = (wanted,) if wanted in PROFILE_TOKENS else PROFILE_TOKENS
+    items = "".join(_v2_encoder(spec, t, "tr2:Configurations") for t in tokens)
+    return f"<tr2:GetVideoEncoderConfigurationsResponse>{items}</tr2:GetVideoEncoderConfigurationsResponse>"
+
+
+def _v2_encoder_options(spec: DeviceSpec, _req) -> str:
+    return (
+        "<tr2:GetVideoEncoderConfigurationOptionsResponse>"
+        f'<tr2:Options GovLengthRange="1 250" FrameRatesSupported="{spec.fps}" ProfilesSupported="{spec.codec_profile}">'
+        f"<tt:Encoding>{spec.encoding}</tt:Encoding><tt:QualityRange><tt:Min>1</tt:Min><tt:Max>10</tt:Max></tt:QualityRange>"
+        f"<tt:ResolutionsAvailable><tt:Width>{spec.width}</tt:Width><tt:Height>{spec.height}</tt:Height></tt:ResolutionsAvailable>"
+        f"<tt:BitrateRange><tt:Min>256</tt:Min><tt:Max>{spec.bitrate_kbps * 4}</tt:Max></tt:BitrateRange>"
+        "</tr2:Options></tr2:GetVideoEncoderConfigurationOptionsResponse>"
+    )
+
+
+def _v2_uri(op: str, uri: str) -> str:
+    return f"<tr2:{op}Response><tr2:Uri>{escape(uri)}</tr2:Uri></tr2:{op}Response>"
+
+
+def _v2_service_capabilities(spec: DeviceSpec, _req) -> str:
+    return (
+        '<tr2:GetServiceCapabilitiesResponse><tr2:Capabilities SnapshotUri="true" Rotation="false" '
+        'VideoSourceMode="false" OSD="false" Mask="false" SourceMask="false">'
+        '<tr2:ProfileCapabilities MaximumNumberOfProfiles="2" ConfigurationsSupported="VideoSource VideoEncoder"/>'
+        '<tr2:StreamingCapabilities RTSPStreaming="true" RTPMulticast="false" RTP_RTSP_TCP="true" '
+        'NonAggregateControl="false" AutoStartMulticast="false"/></tr2:Capabilities></tr2:GetServiceCapabilitiesResponse>'
+    )
+
+
+def _v2_empty(op: str):
+    return lambda spec, req: f"<tr2:{op}Response/>"
+
+
+_MEDIA2_OPS = {
+    "GetServiceCapabilities": _v2_service_capabilities,
+    "GetProfiles": _v2_get_profiles,
+    "GetVideoSourceConfigurations": lambda s, r: (
+        "<tr2:GetVideoSourceConfigurationsResponse>"
+        + _v2_source(s, "tr2:Configurations")
+        + "</tr2:GetVideoSourceConfigurationsResponse>"
+    ),
+    "GetVideoEncoderConfigurations": _v2_encoder_configurations,
+    "GetVideoEncoderConfigurationOptions": _v2_encoder_options,
+    "GetStreamUri": lambda s, r: _v2_uri("GetStreamUri", s.stream_uri),
+    "GetSnapshotUri": lambda s, r: _v2_uri("GetSnapshotUri", s.snapshot_uri),
+    # This feature is video-only for now.
+    "GetAudioSourceConfigurations": _v2_empty("GetAudioSourceConfigurations"),
+    "GetAudioEncoderConfigurations": _v2_empty("GetAudioEncoderConfigurations"),
+    "GetAudioOutputConfigurations": _v2_empty("GetAudioOutputConfigurations"),
+    "GetAudioDecoderConfigurations": _v2_empty("GetAudioDecoderConfigurations"),
+    "GetMetadataConfigurations": _v2_empty("GetMetadataConfigurations"),
+    "GetAnalyticsConfigurations": _v2_empty("GetAnalyticsConfigurations"),
+    "GetOSDs": _v2_empty("GetOSDs"),
+}
+
+
 # ── WS-Discovery ─────────────────────────────────────────────────────────────
 
 #: The types that mean "an ONVIF camera", as (namespace, local name). Matching is
@@ -824,6 +939,26 @@ class WsDiscovery:
 # ── service lifecycle ────────────────────────────────────────────────────────
 
 
+#: How often the service re-reads which codec the camera really sends.
+CODEC_REFRESH_S = 30
+
+
+def video_encoding_of(stream_info: dict | None) -> str | None:
+    """The video codec of one go2rtc /api/streams entry, "H264" or "H265", or
+    None when no producer is serving video yet (idle, or still dialing)."""
+    for producer in (stream_info or {}).get("producers") or []:
+        for media in (producer or {}).get("medias") or []:
+            kind, _, rest = str(media).partition(",")
+            if kind.strip() != "video":
+                continue
+            codecs = {c.strip().upper() for c in rest.split(",")}
+            if codecs & {"H265", "HEVC"}:
+                return "H265"
+            if "H264" in codecs:
+                return "H264"
+    return None
+
+
 def _udp_source_ip() -> str | None:
     """The IPv4 this host uses for its default route. No packet is sent."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -864,6 +999,10 @@ class OnvifService:
         self.running = False
         self.start_error: str | None = None
         self._runner = None
+        # What the camera's own stream carries, learned from go2rtc while it
+        # runs and kept once known (a camera's codec does not change).
+        self.native_encoding: dict[str, str] = {}
+        self._codec_checked: dict[str, float] = {}
 
     def camera_id(self) -> str | None:
         return protect_camera_id(self.entry.options, self.entry.data.get("cameras"))
@@ -893,7 +1032,42 @@ class OnvifService:
             mac=self.mac,
             rtsp_userinfo=userinfo,
             h264_profile="High" if dev in (opts.get("h264_cameras") or []) else "Main",
+            encoding=self.encoding_for(dev),
         )
+
+    def encoding_for(self, dev: str) -> str:
+        """The codec Protect is told about, which must be what it will receive.
+
+        With the H.264 option on, the stream is the transcode: H.264, certain.
+        Otherwise it is the camera's own video, as go2rtc last saw it. Until
+        that is known the answer is H.264, which is what every version before
+        Media2 said.
+        """
+        if dev in (self.entry.options.get("h264_cameras") or []):
+            return "H264"
+        return self.native_encoding.get(dev, "H264")
+
+    async def _refresh_encoding(self) -> None:
+        """Learn the camera's native codec from go2rtc, at most every
+        CODEC_REFRESH_S. Read-only: /api/streams never attaches a consumer."""
+        from aiohttp import ClientError, ClientSession, ClientTimeout
+
+        dev = self.camera_id()
+        now = time.monotonic()
+        if not dev or now - self._codec_checked.get(dev, -CODEC_REFRESH_S) < CODEC_REFRESH_S:
+            return
+        self._codec_checked[dev] = now
+        url = f"http://127.0.0.1:{self.spec().api_port}/api/streams?src=cuboai_combined_{dev}"
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=2)) as session, session.get(url) as resp:
+                if resp.status != 200:
+                    return
+                info = await resp.json(content_type=None)
+        except (ClientError, TimeoutError, ValueError):
+            return
+        encoding = video_encoding_of(info if isinstance(info, dict) else None)
+        if encoding:
+            self.native_encoding[dev] = encoding
 
     async def _resolve_host(self) -> None:
         try:
@@ -965,6 +1139,7 @@ class OnvifService:
         from aiohttp import web
 
         body = await request.read()
+        await self._refresh_encoding()
         status, xml = self.device.handle(body, request.remote)
         return web.Response(status=status, text=xml, content_type="application/soap+xml", charset="utf-8")
 
@@ -1001,6 +1176,7 @@ class OnvifService:
             "start_error": self.start_error,
             "address": f"{self.host_ip}:{self.port}" if self.host_ip else None,
             "mac_known": bool(self.mac),
+            "advertised_encoding": self.encoding_for(self.camera_id() or ""),
             "discovery_bound": self.discovery.bound,
             "discovery_error": self.discovery.bind_error,
             "probes_answered": self.discovery.probes_answered,
