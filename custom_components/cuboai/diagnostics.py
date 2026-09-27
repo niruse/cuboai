@@ -26,7 +26,7 @@ import json
 import os
 import re
 
-from .const import DOMAIN, effective_ports, live_stream_name
+from .const import DOMAIN, OPT_PROTECT_ENABLED, OPT_PROTECT_PASSWORD, effective_ports, live_stream_name
 
 REDACTED = "**REDACTED**"
 
@@ -60,6 +60,15 @@ _URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/\s@:]+:[^/\s@]*@", re.IG
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 _SECRET_OPTION_KEYS = {"nvr_password", "nvr_username", "password", "account", "token", "name"}
+
+
+def _is_secret_key(key: str) -> bool:
+    """Whether a dict key holds a secret. Any key that MENTIONS a password or a
+    token counts, not only the ones listed: `unifi_protect_password` arrived
+    after the list was written and would otherwise have been published in the
+    options section of every report that had Protect enabled."""
+    k = key.lower()
+    return k in _SECRET_OPTION_KEYS or "password" in k or "token" in k
 
 
 # ── redaction ────────────────────────────────────────────────────────────────
@@ -126,7 +135,7 @@ class Scrubber:
             out = {}
             for key, item in value.items():
                 new_key = self.text(str(key))
-                if str(key).lower() in _SECRET_OPTION_KEYS and item:
+                if _is_secret_key(str(key)) and item:
                     out[new_key] = REDACTED
                 else:
                     out[new_key] = self.obj(item)
@@ -366,6 +375,60 @@ def _handshake_verdicts(report: dict, no_reply: int, no_grant: int, ever_streame
     return out
 
 
+def _protect_section(store: dict, options: dict, scrubber: Scrubber) -> dict:
+    """UniFi Protect (ONVIF): is it on, is it reachable, what has Protect asked."""
+    service = store.get("onvif")
+    if not options.get(OPT_PROTECT_ENABLED):
+        return {"enabled": False}
+    if service is None:
+        return {"enabled": True, "running": False, "start_error": "service not created"}
+    section = {"enabled": True, **service.stats()}
+    camera = service.camera_id()
+    section["camera"] = scrubber.alias_of(camera) if camera else None
+    return section
+
+
+def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
+    protect = report.get("unifi_protect") or {}
+    if not protect.get("enabled"):
+        return []
+    out: list[str] = []
+    if not protect.get("running"):
+        out.append(f"UniFi Protect support is on but not running: {protect.get('start_error') or 'unknown reason'}.")
+        return out
+    address = protect.get("address")
+    if not protect.get("discovery_bound"):
+        out.append(
+            "UniFi Protect cannot find the camera by itself here (auto-discovery could not start: "
+            f"{protect.get('discovery_error') or 'unknown'}). Add it by address instead: in Protect, "
+            f"UniFi Devices → ? → Try Advanced Adoption → {address}."
+        )
+    alias = protect.get("camera")
+    cam = (report.get("cameras") or {}).get(alias) or {}
+    live = (cam.get("streams") or {}).get("combined", {}).get("video_codec") or []
+    hevc = any(c.upper() in ("H265", "HEVC") for c in live) or (
+        len(report.get("cameras") or {}) == 1 and "hevc" in log_codecs
+    )
+    if hevc and not cam.get("h264_transcode"):
+        out.append(
+            f"{alias} is shown to UniFi Protect but sends HEVC (H.265), which Protect cannot play. "
+            "Turn on 'Transcode these cameras to H.264' for it."
+        )
+    unhandled = protect.get("unhandled_operations") or {}
+    if unhandled:
+        out.append(
+            "UniFi Protect asked for ONVIF operations this integration does not answer yet: "
+            + ", ".join(sorted(unhandled))
+            + ". If Protect will not add or stream the camera, please report these."
+        )
+    if protect.get("auth_failures"):
+        out.append(
+            f"{protect['auth_failures']} request(s) to the UniFi Protect service were refused for a missing or "
+            "wrong username/password. Protect must use exactly the credentials set in Configure."
+        )
+    return out
+
+
 def verdicts(report: dict) -> list[str]:
     """Plain-language conclusions. Each rule states one thing that is true of
     this box and matters for HomeKit / HA's stream player."""
@@ -383,6 +446,7 @@ def verdicts(report: dict) -> list[str]:
     no_reply = handshake.get("no_discovery_reply", 0)
     no_grant = handshake.get("answered_but_no_grant", 0)
     out += _handshake_verdicts(report, no_reply, no_grant, bool(log_codecs))
+    out += _protect_verdicts(report, log_codecs)
     for alias, cam in report["cameras"].items():
         live = cam["streams"]["combined"].get("video_codec") or []
         hevc = any(c.upper() in ("H265", "HEVC") for c in live) or (
@@ -446,7 +510,10 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
     # be scrubbed wherever it might surface. Configured cameras first, so the
     # cameras actually reported are camera_1, camera_2, …
     login_values = [v for v in data.values() if isinstance(v, str)]
-    scrubber = Scrubber(account_cameras, secrets=login_values + [options.get("nvr_password") or ""])
+    scrubber = Scrubber(
+        account_cameras,
+        secrets=login_values + [options.get("nvr_password") or "", options.get(OPT_PROTECT_PASSWORD) or ""],
+    )
     store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
     manager = store.get("go2rtc")
     running = bool(manager is not None and getattr(manager, "is_running", False))
@@ -503,6 +570,7 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
         "cameras": report_cams,
         "options": options,
         "go2rtc_log": log_facts(lines, scrubber),
+        "unifi_protect": _protect_section(store, options, scrubber),
     }
     report["verdicts"] = verdicts(report)
     # One pass over everything, last, so no section escapes it: options,

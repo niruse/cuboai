@@ -454,6 +454,92 @@ async def test_a_multi_camera_install_does_not_blame_a_particular_camera():
 
 
 # =============================================================================
+# UniFi Protect
+# =============================================================================
+
+
+def _protect_service(**stats):
+    base = {
+        "running": True,
+        "start_error": None,
+        "address": "10.9.8.7:8899",
+        "mac_known": True,
+        "discovery_bound": True,
+        "discovery_error": None,
+        "probes_answered": 0,
+        "requests": {},
+        "unhandled_operations": {},
+        "auth_failures": 0,
+        "clients": [],
+    }
+    base.update(stats)
+    return SimpleNamespace(stats=lambda: dict(base), camera_id=lambda: DEV)
+
+
+async def _diagnose_protect(service, options=None, streams=H265_LIVE, log=LOG):
+    hass = _hass()
+    hass.data[DOMAIN]["entryA"]["onvif"] = service
+    entry = _entry(options={"unifi_protect_enabled": True, "unifi_protect_password": "ProtectPw!9", **(options or {})})
+    return (await _diagnose(hass, entry, streams=streams, log=log))[0]
+
+
+@pytest.mark.asyncio
+async def test_the_protect_password_never_reaches_the_download():
+    """End to end, the leak found before shipping. Kill: the protect password
+    neither blanked by key nor redacted by value."""
+    # In a log line too: only redaction BY VALUE catches it there, while the
+    # options entry is blanked BY KEY — each layer needs its own witness.
+    log = LOG + ["12:00:08.000 DBG [onvif] client sent ProtectPw!9 in a header"]
+    report = await _diagnose_protect(_protect_service(), log=log)
+    assert "ProtectPw!9" not in json.dumps(report)
+
+
+@pytest.mark.asyncio
+async def test_protect_section_names_the_camera_by_alias():
+    report = await _diagnose_protect(_protect_service())
+    assert report["unifi_protect"]["camera"] == "camera_1"
+    assert report["unifi_protect"]["address"] == "10.9.8.7:8899"
+
+
+@pytest.mark.asyncio
+async def test_an_hevc_camera_shown_to_protect_without_transcode_is_called_out():
+    """Protect plays H.264 only. Kill: the Protect HEVC verdict removed."""
+    report = await _diagnose_protect(_protect_service())
+    assert any("shown to UniFi Protect but sends HEVC" in v for v in report["verdicts"]), report["verdicts"]
+
+
+@pytest.mark.asyncio
+async def test_protect_not_running_is_called_out():
+    """Kill: the not-running verdict removed."""
+    report = await _diagnose_protect(_protect_service(running=False, start_error="port 8899 unavailable"))
+    assert any("not running: port 8899 unavailable" in v for v in report["verdicts"]), report["verdicts"]
+
+
+@pytest.mark.asyncio
+async def test_no_discovery_points_at_advanced_adoption():
+    """Kill: the discovery verdict removed or the address dropped from it."""
+    report = await _diagnose_protect(_protect_service(discovery_bound=False, discovery_error="in use"))
+    hit = next(v for v in report["verdicts"] if "Advanced Adoption" in v)
+    assert "10.9.8.7:8899" in hit
+
+
+@pytest.mark.asyncio
+async def test_unhandled_operations_and_auth_failures_are_reported():
+    """The adoption loop's two signals. Kill: either verdict removed."""
+    service = _protect_service(unhandled_operations={"GetEventProperties": 2}, auth_failures=3)
+    joined = " ".join((await _diagnose_protect(service))["verdicts"])
+    assert "GetEventProperties" in joined
+    assert "3 request(s)" in joined
+
+
+@pytest.mark.asyncio
+async def test_protect_switched_off_adds_nothing():
+    report = (await _diagnose(_hass(), _entry(), streams=H264_LIVE, log=[LOG[2]]))[0]
+    assert report["unifi_protect"] == {"enabled": False}
+    assert not any("Protect" in v for v in report["verdicts"])
+
+
+# =============================================================================
 # Robustness
 # =============================================================================
 
