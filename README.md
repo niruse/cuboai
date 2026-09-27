@@ -587,6 +587,47 @@ longer than that. Tunables on the producer environment if you ever need them:
 arriving but no picture out), `CUBOAI_DESYNC_S` (8, picture out but none
 decodable), `CUBOAI_FIRST_AU_S` (15), `CUBOAI_RECONNECT_MAX` (3).
 
+## 📹 UniFi Protect (show the camera in a UniFi console)
+
+Since v2.6.37 one CuboAI camera can be added to **UniFi Protect** as a third-party camera, so it
+appears in the Protect app alongside UniFi cameras. Protect talks to the integration over **ONVIF**
+and pulls the video from the integration's own streaming engine, the same way an NVR does. The
+camera keeps a single connection whichever of HA, the card, an NVR and Protect are watching.
+
+**Turn it on:** Settings → Devices & Services → CuboAI → **Configure** → check **"Make a camera
+available to UniFi Protect (ONVIF)"**, pick the camera, set a **password** (Protect will not add a
+camera without one), and save. The camera's *WebRTC Stream* sensor then shows the address as
+`unifi_protect_address` (for example `192.168.1.20:8899`) and `unifi_protect_status: ready`.
+
+**Add it in Protect**, either way:
+
+- **Discovery:** Protect → Settings → System → **Discover Third-Party Cameras** → on. The camera
+  appears under *UniFi Devices*; click **Adopt** and enter the username and password from
+  Configure. This works when Home Assistant is on the **same network/VLAN** that Protect looks for
+  cameras on. Discovery is multicast, and multicast doesn't cross VLANs.
+- **By address (works across VLANs):** Protect → *UniFi Devices* → the **?** help icon → **Try
+  Advanced Adoption** → enter the `unifi_protect_address`, the username and the password.
+
+**Good to know**
+
+- **One camera per Home Assistant host.** Protect tells third-party cameras apart by the MAC address
+  of the host it talks to. With several CuboAI cameras, pick which one Protect shows.
+- **H.264 only.** A Cubo 2 / Cubo Plus (CB02) streams H.264 natively. A **Cubo 3** streams HEVC,
+  which Protect can't play, so also check *Transcode these cameras to H.264* for it. Download
+  diagnostics will point this out.
+- **Video only, for now.** Protect cannot play the camera's AAC audio.
+- **Recording needs a disk in the console.** Protect records only to a drive in its bays. Without
+  one, the camera still adopts and live-views, but Protect won't record it.
+- **The port is pinned (8899 by default)**, and never moved automatically, because Protect remembers
+  the address it adopted. If the port is taken, a notification says so.
+- Settings Protect pushes to the camera (time, encoding, reboot) are accepted and deliberately
+  ignored. Nothing Protect sends can reconfigure the integration or the camera.
+- Protect connects twice (a high- and a low-quality profile). Both are served from the same camera
+  session, so the camera does no extra work. Only the network traffic between HA and the console
+  doubles, roughly 2–3 Mbit/s in total.
+
+---
+
 ## 📈 Sleep windows and the timeline chart
 
 CuboAI keeps Total Sleep, Wake-ups, Longest Sleep and the sleep-routine chart
@@ -892,6 +933,7 @@ The integration runs its own internal go2rtc server for local streaming. It uses
 | `8555` | RTSP listener (camera stream) | Hops to the next free port (usually `8557`) |
 | `1985` | go2rtc API (snapshots, card, WebRTC) | Hops to the next free port (usually `1986`) |
 | `8556` | WebRTC listener | Hops to the next free port |
+| `8899` | UniFi Protect (ONVIF) — only when turned on in Configure | **Never moves** (Protect remembers the address it adopted); if taken, a notification says so — choose another port in Configure |
 
 You never need to configure anything for this. The camera entity and sensors publish the effective port they resolved, and the custom card does not deal in ports at all — it finds its camera entity by the `device_id` attribute and lets that entity supply the stream source, so whatever port go2rtc actually bound is the port that gets used. A log line like `go2rtc API port 1985 is already in use by another process — using port 1986 instead` is informational, not an error.
 

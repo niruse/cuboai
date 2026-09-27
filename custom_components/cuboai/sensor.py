@@ -4,7 +4,14 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, effective_ports, live_stream_name, nvr_stream_name
+from .const import (
+    DOMAIN,
+    OPT_PROTECT_USERNAME,
+    PROTECT_USERNAME_DEFAULT,
+    effective_ports,
+    live_stream_name,
+    nvr_stream_name,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -555,6 +562,15 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
             attrs["nvr_rtsp_url"] = base
             attrs["nvr_rtsp_url_video_only"] = base + "?video"
             attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"
+
+        # UniFi Protect: the address to type into Protect's Advanced Adoption,
+        # on the camera that is actually exposed (one per HA host).
+        onvif = (self.hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}).get("onvif")
+        if onvif is not None and onvif.camera_id() == self._device_id:
+            stats = onvif.stats()
+            attrs["unifi_protect_address"] = stats["address"] if stats["running"] else None
+            attrs["unifi_protect_username"] = opts.get(OPT_PROTECT_USERNAME) or PROTECT_USERNAME_DEFAULT
+            attrs["unifi_protect_status"] = "ready" if stats["running"] else (stats["start_error"] or "not running")
         return attrs
 
     @property

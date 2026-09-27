@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import logging.handlers
+import os
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -16,7 +17,7 @@ from .api.cuboai_functions import (
     save_refresh_token,
     set_token_paths,
 )
-from .const import DOMAIN
+from .const import DOMAIN, OPT_PROTECT_ENABLED
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
 from .utils import set_debug_logs_enabled, set_log_path
@@ -25,6 +26,17 @@ _LOGGER = logging.getLogger(__name__)
 
 _FILE_HANDLER = None
 _FILE_LISTENER = None
+
+
+def _manifest_version() -> str:
+    """This integration's version, from manifest.json. Blocking."""
+    import json
+
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "manifest.json"), encoding="utf-8") as fh:
+            return str(json.load(fh).get("version") or "unknown")
+    except (OSError, ValueError):
+        return "unknown"
 
 
 def _setup_component_logger(hass: HomeAssistant, enable: bool):
@@ -471,6 +483,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id]["go2rtc"] = go2rtc_manager
 
+    # UniFi Protect (ONVIF): after go2rtc, whose RTSP port Protect is pointed at.
+    # A failure here (port taken, no password) is reported and never blocks the
+    # rest of the integration.
+    if entry.options.get(OPT_PROTECT_ENABLED):
+        from .onvif_server import OnvifService
+
+        manifest_version = await hass.async_add_executor_job(_manifest_version)
+        onvif = OnvifService(hass, entry, firmware=manifest_version)
+        try:
+            await onvif.start()
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("UniFi Protect (ONVIF) support failed to start")
+        hass.data[DOMAIN][entry.entry_id]["onvif"] = onvif
+
     # Register update listener to reload when options change
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
@@ -507,6 +533,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator = data.get("coordinator")
         if coordinator:
             await coordinator.async_close()
+
+        onvif = data.get("onvif")
+        if onvif:
+            await onvif.stop()
 
         go2rtc = data.get("go2rtc")
         if go2rtc:

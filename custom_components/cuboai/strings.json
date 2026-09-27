@@ -33,11 +33,16 @@
           "update_interval": "Update interval (seconds)",
           "enable_debug_logs": "Enable debug logs",
           "history_sensors": "Baby-present & DVR history sensors",
-          "rtsp_port": "RTSP port for the local camera stream"
+          "rtsp_port": "RTSP port for the local camera stream",
+          "unifi_protect_enabled": "Make a camera available to UniFi Protect (ONVIF)",
+          "unifi_protect_username": "UniFi Protect username",
+          "unifi_protect_password": "UniFi Protect password"
         },
         "data_description": {
           "rtsp_port": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
-          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url})."
+          "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
+          "unifi_protect_enabled": "Lets UniFi Protect find this camera and add it as a third-party camera. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add it by address (shown as unifi_protect_address on the camera's WebRTC Stream sensor). One camera per Home Assistant host — Protect tells cameras apart by the host's network address. Protect plays H.264 only: a Cubo 3 needs 'Transcode these cameras to H.264' checked for it.",
+          "unifi_protect_password": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password."
         }
       }
     },
@@ -49,7 +54,10 @@
       "mfa_failed": "MFA verification failed. Please try again.",
       "sms_quota_exceeded": "CuboAI's SMS service is temporarily unavailable. Please try again later or use an authenticator app if available.",
       "too_many_requests": "Too many attempts. Please wait a few minutes and try again.",
-      "no_cameras": "No cameras found for this account."
+      "no_cameras": "No cameras found for this account.",
+      "unifi_password_required": "UniFi Protect needs a password — it will not add a camera without one.",
+      "onvif_port_in_use": "This port is already in use — choose a different one for UniFi Protect.",
+      "unifi_protect_other_entry": "UniFi Protect is already turned on for another CuboAI account on this Home Assistant. Protect can see only one camera per Home Assistant host."
     },
     "abort": {
       "already_configured": "This CuboAI account is already configured."
@@ -57,7 +65,10 @@
   },
   "options": {
     "error": {
-      "rtsp_port_in_use": "This port is already in use by another service — choose a different one."
+      "rtsp_port_in_use": "This port is already in use by another service — choose a different one.",
+      "unifi_password_required": "UniFi Protect needs a password — it will not add a camera without one.",
+      "onvif_port_in_use": "This port is already in use — choose a different one for UniFi Protect.",
+      "unifi_protect_other_entry": "UniFi Protect is already turned on for another CuboAI account on this Home Assistant. Protect can see only one camera per Home Assistant host."
     },
     "step": {
       "init": {
@@ -76,13 +87,21 @@
           "history_sensors": "Baby-present & DVR history sensors",
           "h264_cameras": "Transcode these cameras to H.264 (needed for HomeKit / HLS with H.265 cameras like Cubo 3)",
           "rtsp_port": "RTSP port for the local camera stream",
-          "notify_on_engine_restart": "Notify me when the streaming engine restarts"
+          "notify_on_engine_restart": "Notify me when the streaming engine restarts",
+          "unifi_protect_enabled": "Make a camera available to UniFi Protect (ONVIF)",
+          "unifi_protect_camera": "Camera to show in UniFi Protect",
+          "unifi_protect_username": "UniFi Protect username",
+          "unifi_protect_password": "UniFi Protect password",
+          "unifi_protect_port": "UniFi Protect (ONVIF) port"
         },
         "data_description": {
           "rtsp_port": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
           "h264_cameras": "Check a camera only if it is H.265/HEVC (e.g. Cubo 3 / SW05) and fails in HomeKit or the HA stream view with a 'demuxing timed out' error. Leave native-H.264 cameras (Cubo 2 / CB02) unchecked — transcoding uses extra CPU.",
           "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
-          "notify_on_engine_restart": "The streaming engine is restarted automatically if it stops unexpectedly. Leave this on to be told when that happens — a crash used to be completely silent, and an engine that keeps dying is worth knowing about. Turn it off if you would rather not see the notification."
+          "notify_on_engine_restart": "The streaming engine is restarted automatically if it stops unexpectedly. Leave this on to be told when that happens — a crash used to be completely silent, and an engine that keeps dying is worth knowing about. Turn it off if you would rather not see the notification.",
+          "unifi_protect_enabled": "Lets UniFi Protect find this camera and add it as a third-party camera. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add it by address (shown as unifi_protect_address on the camera's WebRTC Stream sensor). One camera per Home Assistant host — Protect tells cameras apart by the host's network address. Protect plays H.264 only: a Cubo 3 needs 'Transcode these cameras to H.264' checked for it.",
+          "unifi_protect_password": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password.",
+          "unifi_protect_port": "Protect remembers this port when it adds the camera, so it is never changed automatically."
         }
       }
     }

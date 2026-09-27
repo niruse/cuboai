@@ -112,7 +112,7 @@ def find_available_port(start_port=8555, max_port=8600):
     # 8554 rtsp, 8555 webrtc — 8555 conflicts even when momentarily free, see
     # issue #80), and CuboAI's own API/WebRTC listeners (1985/8556). The scan
     # therefore suggests 8557 as the first candidate on a clean system.
-    IGNORE_PORTS = {8123, 4357, 8554, 8555, 1984, 1985, 8443, 5683, 5353, 8556}
+    IGNORE_PORTS = {8123, 4357, 8554, 8555, 1984, 1985, 8443, 5683, 5353, 8556, 8899}
     for port in range(start_port, max_port):
         if port in IGNORE_PORTS:
             continue

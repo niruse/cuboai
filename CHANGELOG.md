@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.37]
+
+### Added
+- **UniFi Protect: show a CuboAI camera in a UniFi console.** A new option (first-run setup and
+  Configure) presents one camera to **UniFi Protect** as a third-party ONVIF camera. Protect can
+  find it through its *Discover Third-Party Cameras* setting, or add it by address with *Advanced
+  Adoption*, which works across VLANs. Protect then pulls the video from the integration's
+  streaming engine, like an NVR does.
+
+  The integration now runs a small ONVIF device of its own, rather than relying on the ONVIF server
+  built into the streaming engine. That built-in server was not fit for Protect:
+  - it offered every internal stream as a "camera" (including the speaker-only and playback
+    streams);
+  - it advertised the same fixed resolution for all of them;
+  - it had no password;
+  - it rejected the settings Protect 7.2 pushes to cameras, which Protect reports as "invalid
+    credentials".
+
+  The new server offers exactly one camera with a high- and a low-quality profile, checks the
+  username and password (WS-Security), and hands Protect a video-only stream, since Protect cannot
+  play AAC. Settings Protect pushes (time, encoding, reboot) are accepted and ignored, so nothing
+  Protect sends can change the integration or the camera. Anything Protect asks for that isn't
+  answered yet is logged and shown in Download diagnostics.
+
+  Discovery shares UDP port 3702 with Windows network discovery (the Samba add-on's `wsdd`). It
+  answers only ONVIF camera probes, matched by namespace, because Windows asks for `wsdp:Device`
+  and ONVIF for `tds:Device`: the same name in different namespaces. Windows network browsing is
+  unaffected.
+
+  Limits:
+  - **One camera per Home Assistant host.** Protect identifies third-party cameras by the host's
+    MAC address.
+  - **H.264 only.** A Cubo 3 needs its H.264 transcode on, and diagnostics says so.
+  - **Video only.**
+  - **Recording needs a drive in the console.**
+  - **The ONVIF port (8899) is pinned, never moved automatically.** Protect remembers the address
+    it adopted.
+
+  Verified end to end on a UDM Pro Max running Protect 7.2.105: adopted by address across VLANs on
+  the first attempt, streaming, snapshots working, and reconnecting on its own after a Home
+  Assistant restart. Protect used 8 ONVIF operations, all answered, with zero authentication
+  failures. An existing NVR kept recording the same camera throughout.
+
+### Fixed
+- Download diagnostics now treats any setting whose name contains "password" or "token" as a
+  secret. The list was explicit before, so the new UniFi Protect password would have been published
+  in the options section of the report. This was caught before release.
+
 ## [2.6.36]
 
 ### Fixed
