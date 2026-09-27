@@ -46,7 +46,7 @@ def _is_yt_content_error(message: str) -> bool:
 def _get_timer_minutes(hass, unique_id: str) -> int:
     """Read a CuboAI number-entity timer value (minutes) by its unique_id.
 
-    Entity ids are derived from the entity NAME (e.g. "number.mia_lullaby_timer"),
+    Entity ids are derived from the entity NAME (e.g. "number.baby_lullaby_timer"),
     not the unique_id, so resolve through the entity registry — a hardcoded
     "number.cuboai_..." guess silently never matches.
     """
