@@ -26,7 +26,14 @@ import json
 import os
 import re
 
-from .const import DOMAIN, OPT_PROTECT_ENABLED, OPT_PROTECT_PASSWORD, effective_ports, live_stream_name
+from .const import (
+    DOMAIN,
+    OPT_PROTECT_ENABLED,
+    OPT_PROTECT_PASSWORD,
+    effective_ports,
+    live_stream_name,
+    protect_stream_name,
+)
 
 REDACTED = "**REDACTED**"
 
@@ -375,7 +382,7 @@ def _handshake_verdicts(report: dict, no_reply: int, no_grant: int, ever_streame
     return out
 
 
-def _protect_section(store: dict, options: dict, scrubber: Scrubber) -> dict:
+def _protect_section(store: dict, options: dict, scrubber: Scrubber, streams: dict | None = None) -> dict:
     """UniFi Protect (ONVIF): is it on, is it reachable, what has Protect asked."""
     service = store.get("onvif")
     if not options.get(OPT_PROTECT_ENABLED):
@@ -385,6 +392,15 @@ def _protect_section(store: dict, options: dict, scrubber: Scrubber) -> dict:
     section = {"enabled": True, **service.stats()}
     camera = service.camera_id()
     section["camera"] = scrubber.alias_of(camera) if camera else None
+    section["expected_stream"] = protect_stream_name(camera, options) if camera else None
+    # Which streams Protect's media server is actually pulling. It locks in the
+    # address it got at adoption, so a camera adopted before the fixed stream
+    # existed (2.6.37/38) keeps pulling the old one until it is re-adopted.
+    section["protect_pulling"] = sorted(
+        name
+        for name, info in (streams or {}).items()
+        if any("www.ui.com" in str(c.get("user_agent") or "") for c in (info or {}).get("consumers") or [])
+    )
     return section
 
 
@@ -413,6 +429,16 @@ def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
         out.append(
             f"{alias} is shown to UniFi Protect but sends HEVC (H.265), which Protect cannot play. "
             "Turn on 'Transcode these cameras to H.264' for it."
+        )
+    pulling = protect.get("protect_pulling") or []
+    expected = protect.get("expected_stream")
+    stale = [name for name in pulling if name != expected]
+    if expected and stale:
+        out.append(
+            f"UniFi Protect is pulling {', '.join(stale)} instead of {expected}. Protect keeps the stream "
+            "address it was given when the camera was adopted, so this camera still uses an old one. Remove "
+            "the camera in Protect and adopt it again, once — after that, changing 'Transcode these cameras "
+            "to H.264' takes effect on its own."
         )
     unhandled = protect.get("unhandled_operations") or {}
     if unhandled:
@@ -570,7 +596,7 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
         "cameras": report_cams,
         "options": options,
         "go2rtc_log": log_facts(lines, scrubber),
-        "unifi_protect": _protect_section(store, options, scrubber),
+        "unifi_protect": _protect_section(store, options, scrubber, streams),
     }
     report["verdicts"] = verdicts(report)
     # One pass over everything, last, so no section escapes it: options,

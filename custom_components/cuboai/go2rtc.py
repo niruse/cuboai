@@ -9,7 +9,16 @@ import time
 import yaml
 from homeassistant.core import HomeAssistant
 
-from .const import DESIRED_API_PORT, DOMAIN, NOTIFY_ON_RESTART_DEFAULT, OPT_NOTIFY_ON_RESTART
+from .const import (
+    DESIRED_API_PORT,
+    DOMAIN,
+    NOTIFY_ON_RESTART_DEFAULT,
+    OPT_NOTIFY_ON_RESTART,
+    OPT_PROTECT_ENABLED,
+    protect_camera_id,
+    protect_stream_name,
+    protect_stream_target,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -307,6 +316,31 @@ class Go2RTCManager:
                 )
                 self._streams[f"cuboai_stamped_{dev_id}"] = [
                     f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw=-vf {drawtext}",
+                ]
+
+            # UniFi Protect: ONE fixed stream name for the camera Protect gets,
+            # re-reading whichever real stream the H.264 option selects. Protect's
+            # media server locks in the stream address at adoption — a reconnect,
+            # Protect's own re-adopt, even a go2rtc restart did not make it pick
+            # up a changed address (seen live), so ticking "Transcode to H.264"
+            # after adopting silently kept a Cubo 3 on HEVC. With a fixed name
+            # the address never changes; only what is behind it does, from the
+            # next reconnect on. An RTSP loopback, not an ffmpeg leg: a pure
+            # re-read costs no transcode and spawns no extra process (go2rtc
+            # rejects a bare stream name as a source).
+            if self._options.get(OPT_PROTECT_ENABLED) and dev_id == protect_camera_id(self._options, self._cameras):
+                rtsp_port = getattr(self, "_rtsp_port", None) or int(self._options.get("rtsp_port", 8555))
+                userinfo = ""
+                if self._options.get("nvr_enabled") and self._options.get("nvr_password"):
+                    from urllib.parse import quote
+
+                    userinfo = (
+                        f"{quote(self._options.get('nvr_username') or 'cuboai', safe='')}:"
+                        f"{quote(self._options['nvr_password'], safe='')}@"
+                    )
+                target = protect_stream_target(dev_id, self._options)
+                self._streams[protect_stream_name(dev_id, self._options)] = [
+                    f"rtsp://{userinfo}127.0.0.1:{rtsp_port}/{target}#timeout=20",
                 ]
 
             # Recorded footage from the camera's own DVR. Declared here rather
