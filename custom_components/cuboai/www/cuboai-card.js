@@ -95,6 +95,139 @@ function cuboaiWebrtcConfig(found, micEnabled, isMuted) {
   };
 }
 
+// MSE playback away from home. On Wi-Fi a phone plays WebRTC (Opus audio).
+// On mobile data through the Cloudflare tunnel WebRTC can't connect, so
+// video-rtc falls back to MSE (H.264 + the camera's AAC), and two things in
+// its MSE `updateend` handler (WebRTC Camera 3.6.1) broke the sound there:
+//  1. It sets `playbackRate = seconds buffered ahead` (floor 0.1) on every
+//     fragment, so over bursty delivery the speed swings 0.1x-3x many times
+//     a second. The stream carried a song continuously while the iPhone
+//     played one-second fragments of it.
+//  2. It trims the SourceBuffer to its last 5 s, and MSE removes video up to
+//     the NEXT keyframe — this camera sends one every 4 s — so a trim can
+//     delete the very frames being played whenever the playhead keeps any
+//     cushion. The picture then freezes and the sound with it (why a plain
+//     speed clamp, which kept a cushion, froze every few seconds).
+// So the card (a) never lets a trim come closer than two keyframe intervals
+// behind the playhead and (b) owns the speed: normal while 2-4.2 s are
+// buffered, a little slower below that, a little faster above, switching
+// rarely (hysteresis). The ~3 s cushion absorbs the bursts; video-rtc still
+// jumps ahead past 5 s, so the delay stays bounded. All hooks are per
+// element — the WebRTC Camera files are never edited.
+const CUBOAI_TRIM_KEEP_S = 8;          // never trim closer than this behind the playhead
+const CUBOAI_RATE_SLOW = 0.8;
+const CUBOAI_RATE_FAST = 1.25;
+const CUBOAI_AHEAD_LOW = 2.0;          // less buffered than this: slow down...
+const CUBOAI_AHEAD_LOW_EXIT = 2.6;     // ...until this much is buffered
+const CUBOAI_AHEAD_HIGH = 4.2;         // more buffered than this: speed up...
+const CUBOAI_AHEAD_HIGH_EXIT = 3.6;    // ...until back under this
+const CUBOAI_RANGE_GAP_S = 0.3;        // buffered ranges this close play as one
+const CUBOAI_MSE_TICK_MS = 250;
+const CUBOAI_MSE_PARK_MS = 60000;      // stop the timer of a detached, paused player
+
+// Seconds of media ahead of the playhead; null when nothing is buffered
+// (WebRTC, or before the first fragment). A playhead outside every range has
+// nothing ahead of it.
+function cuboaiBufferedAhead(video) {
+  const r = video && video.buffered;
+  if (!r || !r.length) return null;
+  const t = Number(video.currentTime);
+  if (!Number.isFinite(t)) return null;
+  let end = null;
+  for (let i = 0; i < r.length; i++) {
+    const s = r.start(i), e = r.end(i);
+    if (end === null) {
+      if (t >= s - CUBOAI_RANGE_GAP_S && t < e) end = e;
+    } else if (s - end <= CUBOAI_RANGE_GAP_S) {
+      end = Math.max(end, e);
+    } else {
+      break;
+    }
+  }
+  return end === null ? 0 : Math.max(0, end - t);
+}
+
+// The next speed from the current one and the seconds buffered ahead. Only
+// 1, SLOW or FAST ever come out, and each is held until its exit threshold.
+function cuboaiNextRate(rate, ahead) {
+  if (ahead === null || ahead === undefined) return 1;
+  const b = Number(ahead);
+  if (!Number.isFinite(b)) return 1;
+  if (rate === CUBOAI_RATE_SLOW) return b > CUBOAI_AHEAD_LOW_EXIT ? 1 : CUBOAI_RATE_SLOW;
+  if (rate === CUBOAI_RATE_FAST) return b < CUBOAI_AHEAD_HIGH_EXIT ? 1 : CUBOAI_RATE_FAST;
+  if (b < CUBOAI_AHEAD_LOW) return CUBOAI_RATE_SLOW;
+  if (b > CUBOAI_AHEAD_HIGH) return CUBOAI_RATE_FAST;
+  return 1;
+}
+
+// Give one SourceBuffer a remove() that stops short of the playhead: the end
+// is pulled back to CUBOAI_TRIM_KEEP_S behind it, and a trim that would free
+// less than a second is skipped. Instance-level, so no other player changes.
+function cuboaiGuardSourceBuffer(video, sb) {
+  if (!sb || sb.__cuboTrimGuard) return;
+  const remove = sb.remove;
+  if (typeof remove !== 'function') return;
+  Object.defineProperty(sb, 'remove', {
+    configurable: true,
+    writable: true,
+    value(start, end) {
+      const e = Math.min(Number(end), Number(video.currentTime) - CUBOAI_TRIM_KEEP_S);
+      if (!(e - Number(start) >= 1)) return undefined;
+      return remove.call(this, start, e);
+    },
+  });
+  sb.__cuboTrimGuard = true;
+}
+
+// ManagedMediaSource (iPhone, Safari 17+) is reachable as video.srcObject;
+// every reconnect makes a new one, so this runs on every tick. (Chrome's
+// classic MediaSource hides behind a blob URL; Chrome also keeps playing
+// through a trimmed range, so it doesn't need the guard.)
+function cuboaiGuardMseTrim(video) {
+  const list = video && video.srcObject && video.srcObject.sourceBuffers;
+  if (!list) return;
+  for (let i = 0; i < list.length; i++) cuboaiGuardSourceBuffer(video, list[i]);
+}
+
+// Take over this <video>'s playback speed and guard its MSE trims. video-rtc
+// keeps writing playbackRate; an own accessor on the element shadows
+// HTMLMediaElement's and ignores those writes, while a timer sets the speed
+// from the real buffer.
+function cuboaiSteerMsePlayback(video) {
+  if (!video || video.__cuboMse) return;
+  const proto = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
+  if (!proto || !proto.set || !proto.get) return;
+  const st = { rate: 1, timer: 0, idleMs: 0 };
+  video.__cuboMse = st;
+  const apply = (rate) => { st.rate = rate; proto.set.call(video, rate); };
+  const tick = () => {
+    // With `background: true` a detached player keeps playing (the sound
+    // must go on), so only a detached AND paused one parks its timer.
+    if (!video.isConnected && video.paused) {
+      st.idleMs += CUBOAI_MSE_TICK_MS;
+      if (st.idleMs >= CUBOAI_MSE_PARK_MS) { clearInterval(st.timer); st.timer = 0; }
+      return;
+    }
+    st.idleMs = 0;
+    cuboaiGuardMseTrim(video);
+    // WebRTC (a live MediaStream) has no buffer to steer: always normal speed.
+    const live = typeof MediaStream !== 'undefined' && video.srcObject instanceof MediaStream;
+    const next = live ? 1 : cuboaiNextRate(st.rate, cuboaiBufferedAhead(video));
+    if (next !== st.rate || proto.get.call(video) !== next) apply(next);
+  };
+  st.start = () => { if (!st.timer) st.timer = setInterval(tick, CUBOAI_MSE_TICK_MS); };
+  Object.defineProperty(video, 'playbackRate', {
+    configurable: true,
+    enumerable: true,
+    get() { return proto.get.call(this); },
+    // The value (video-rtc's "seconds buffered") is ignored; a write only
+    // shows the player is live again, so a parked timer restarts.
+    set() { if (this.isConnected || !this.paused) st.start(); },
+  });
+  apply(1);   // whatever speed was set before we hooked in: start from normal
+  st.start();
+}
+
 class CuboAICameraCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config;
@@ -635,7 +768,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.42';
+        const CARD_VERSION = 'v2.6.43';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -2340,6 +2473,12 @@ class CuboAICameraCard extends HTMLElement {
               // Ensure the media matches our memory when it first loads
               if (video && !video.dataset.cuboInit) {
                 video.dataset.cuboInit = "true";
+
+                // Keep sound and picture going on MSE, the path a phone takes
+                // away from home (mobile data through the tunnel): the card
+                // owns the playback speed and stops video-rtc's 5 s trim from
+                // deleting the frames being played. See cuboaiSteerMsePlayback.
+                cuboaiSteerMsePlayback(video);
 
                 // Show the full camera frame instead of cropping/zooming in.
                 // The inner <video> otherwise crops the (near-square) CuboAI
