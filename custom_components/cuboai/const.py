@@ -1,3 +1,5 @@
+import hashlib
+
 DOMAIN = "cuboai"
 DEFAULT_UPDATE_INTERVAL = 60
 
@@ -22,13 +24,20 @@ OPT_NOTIFY_ON_RESTART = "notify_on_engine_restart"
 NOTIFY_ON_RESTART_DEFAULT = True
 
 # ── UniFi Protect (ONVIF) ────────────────────────────────────────────────────
-#: Expose ONE camera to UniFi Protect as an ONVIF device (onvif_server.py).
-#: Off by default: it opens a port and answers discovery on the LAN.
+#: Expose cameras to UniFi Protect as ONVIF devices (onvif_server.py).
+#: Off by default: it opens ports and answers discovery on the LAN.
 OPT_PROTECT_ENABLED = "unifi_protect_enabled"
-#: Which camera. Protect identifies a third-party camera by the MAC address of
-#: the host it talks to, so one Home Assistant host can present exactly one
-#: camera to Protect — offering several would make Protect merge them.
+#: Which cameras (a list of device ids). Protect tells third-party cameras apart
+#: by the MAC they REPORT over ONVIF, not the one on the wire (tested live: a
+#: second device on the same IP with its own reported MAC was adopted as a
+#: second camera), so each camera gets its own port and its own MAC.
+OPT_PROTECT_CAMERAS = "unifi_protect_cameras"
+#: v2.6.37–2.6.40: the single camera exposed. Still read, so a camera adopted
+#: then keeps its port and MAC; no longer written.
 OPT_PROTECT_CAMERA = "unifi_protect_camera"
+#: {device_id: port}, written by the options flow. A camera keeps its port for
+#: good once it has one — Protect stores ip:port at adoption.
+OPT_PROTECT_PORTS = "unifi_protect_ports"
 OPT_PROTECT_USERNAME = "unifi_protect_username"
 OPT_PROTECT_PASSWORD = "unifi_protect_password"
 OPT_PROTECT_PORT = "unifi_protect_port"
@@ -137,8 +146,104 @@ def protect_camera_id(options, cameras) -> str | None:
     return ids[0] if ids else None
 
 
-def effective_onvif_port(hass, entry_id) -> int | None:
-    """The port this entry's ONVIF server actually listens on, or None when it
-    is not running. Published by onvif_server.OnvifService.start()."""
+def protect_camera_ids(options, cameras) -> list[str]:
+    """The device ids exposed to UniFi Protect, in configured-camera order.
+
+    The multi-select when it has been saved (cameras no longer configured are
+    dropped); before that, the single camera of v2.6.37–2.6.40 — the chosen one,
+    else the first — so an upgrade changes nothing in Protect.
+    """
+    ids = [c.get("device_id") for c in (cameras or []) if c.get("device_id")]
+    chosen = (options or {}).get(OPT_PROTECT_CAMERAS)
+    if isinstance(chosen, list):
+        return [i for i in ids if i in chosen]
+    single = protect_camera_id(options, cameras)
+    return [single] if single else []
+
+
+def protect_primary_id(options, cameras) -> str | None:
+    """The camera on the base port that reports the host's real MAC.
+
+    Recorded in OPT_PROTECT_CAMERA (the v2.6.37–2.6.40 single-camera key, which
+    meant exactly this), so it never moves: if it is no longer exposed there is
+    no primary and the base port stays reserved for it. Never recorded (an
+    install that kept the default) means the first configured camera — the one
+    those versions exposed.
+    """
+    exposed = protect_camera_ids(options, cameras)
+    recorded = (options or {}).get(OPT_PROTECT_CAMERA)
+    if recorded is not None:
+        return recorded if recorded in exposed else None
+    first = protect_camera_id(options, cameras)
+    return first if first in exposed else None
+
+
+def assign_protect_ports(options, cameras, avoid=()) -> dict[str, int]:
+    """{device_id: port} for every exposed camera. Stable by construction:
+    a saved assignment is never changed, the primary camera takes the base
+    port, and a new camera takes the lowest free port above the base that no
+    camera — exposed now or earlier — has, skipping `avoid`."""
+    options = options or {}
+    base = int(options.get(OPT_PROTECT_PORT) or DESIRED_ONVIF_PORT)
+    saved = {k: int(v) for k, v in (options.get(OPT_PROTECT_PORTS) or {}).items()}
+    exposed = protect_camera_ids(options, cameras)
+    primary = protect_primary_id(options, cameras)
+    ports: dict[str, int] = {}
+    if primary:
+        ports[primary] = base  # the base port field is the primary's port
+    taken = {base, *(int(a) for a in avoid)} | {p for d, p in saved.items() if d != primary}
+    for dev in exposed:
+        if dev in ports:
+            continue
+        if dev in saved and saved[dev] != base:
+            ports[dev] = saved[dev]
+            continue
+        port = base + 1
+        while port in taken or port in ports.values():
+            port += 1
+        ports[dev] = port
+        taken.add(port)
+    return ports
+
+
+def protect_mac(device_id: str, primary: bool, host_mac: str | None) -> str | None:
+    """The MAC a camera reports to Protect, which is how Protect tells cameras
+    apart. The primary keeps the host's real one (what a pre-2.6.41 camera was
+    adopted with); every other camera gets a stable, locally administered,
+    unicast address derived from its id, never the camera's own."""
+    if primary:
+        return host_mac
+    digest = hashlib.sha1(f"cuboai:mac:{device_id}".encode()).digest()
+    return ":".join(f"{b:02x}" for b in (0x02, *digest[:5]))
+
+
+def protect_display_name(hass, device_id: str, cameras) -> str:
+    """What Protect shows after "CuboAI ": the device's name as renamed in Home
+    Assistant, else the camera's name from the CuboAI account."""
+    name = None
+    try:
+        from homeassistant.helpers import device_registry as dr
+
+        device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, device_id)})
+        by_user = getattr(device, "name_by_user", None)
+        if isinstance(by_user, str) and by_user.strip():
+            name = by_user.strip()
+    except Exception:  # noqa: BLE001 - a registry hiccup must never break ONVIF
+        name = None
+    if name is None:
+        for cam in cameras or []:
+            if cam.get("device_id") == device_id and isinstance(cam.get("baby_name"), str):
+                name = cam["baby_name"].strip()
+                break
+    name = name or "Baby Monitor"
+    # Protect prefixes the manufacturer itself: "CuboAI Nursery", not "CuboAI CuboAI Nursery".
+    if name.lower().startswith("cuboai ") and len(name) > 7:
+        name = name[7:].strip()
+    return name[:48]
+
+
+def effective_onvif_ports(hass, entry_id) -> dict[str, int]:
+    """{device_id: port} this entry's ONVIF services actually listen on (empty
+    when none runs). Published by onvif_server.OnvifService.start()."""
     domain_data = (getattr(hass, "data", None) or {}).get(DOMAIN) or {}
-    return ((domain_data.get("_ports_by_entry") or {}).get(entry_id) or {}).get("onvif")
+    return dict(((domain_data.get("_ports_by_entry") or {}).get(entry_id) or {}).get("onvif") or {})

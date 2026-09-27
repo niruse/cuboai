@@ -364,6 +364,12 @@ def _entry(options=None, cameras=None):
     )
 
 
+def _svc(hass, entry):
+    """The service of the first exposed camera, built the way the integration
+    builds it (through OnvifGroup)."""
+    return next(iter(onvif.OnvifGroup(hass, entry).services.values()))
+
+
 def _hass():
     hass = MagicMock()
     hass.data = {DOMAIN: {"_ports_by_entry": {"entryA": {"rtsp": 8557, "api": 1985}}}}
@@ -388,8 +394,8 @@ def test_protect_gets_one_fixed_stream_name_whatever_the_h264_option():
     its own re-adopt and a go2rtc restart all kept it on the old stream). So
     the name handed out never changes; the H.264 option only changes what is
     behind it. Kill: the name following the option again."""
-    off = onvif.OnvifService(_hass(), _entry({})).spec()
-    on = onvif.OnvifService(_hass(), _entry({"h264_cameras": [DEV]})).spec()
+    off = _svc(_hass(), _entry({})).spec()
+    on = _svc(_hass(), _entry({"h264_cameras": [DEV]})).spec()
     assert off.stream == on.stream == protect_stream_name(DEV, {}) == f"cuboai_protect_{DEV}"
     assert protect_stream_target(DEV, {}) == f"cuboai_combined_{DEV}"
     assert protect_stream_target(DEV, {"h264_cameras": [DEV]}) == f"cuboai_h264_{DEV}"
@@ -399,9 +405,9 @@ def test_the_spec_follows_the_h264_option_and_nvr_auth():
     """The profile follows the option; NVR auth reaches the stream URI.
     Kill: profile ignoring the option; NVR creds dropped."""
     opts = {"h264_cameras": [DEV], "nvr_enabled": True, "nvr_username": "nvr", "nvr_password": "p w"}
-    spec = onvif.OnvifService(_hass(), _entry(opts)).spec()
+    spec = _svc(_hass(), _entry(opts)).spec()
     assert spec.h264_profile == "High"
-    assert onvif.OnvifService(_hass(), _entry({})).spec().h264_profile == "Main"
+    assert _svc(_hass(), _entry({})).spec().h264_profile == "Main"
     assert spec.rtsp_userinfo == "nvr:p%20w@"
     assert spec.rtsp_port == 8557 and spec.username == "cuboai"
 
@@ -409,7 +415,7 @@ def test_the_spec_follows_the_h264_option_and_nvr_auth():
 @pytest.mark.asyncio
 async def test_no_password_means_the_service_never_starts():
     """Kill: the start-time password guard removed."""
-    service = onvif.OnvifService(_hass(), _entry({OPT_PROTECT_PASSWORD: ""}))
+    service = _svc(_hass(), _entry({OPT_PROTECT_PASSWORD: ""}))
     assert await service.start() is False
     assert service.running is False and "password" in service.start_error
 
@@ -424,11 +430,11 @@ async def test_a_taken_port_is_reported_and_never_hopped():
     taken = blocker.getsockname()[1]
     try:
         hass = _hass()
-        service = onvif.OnvifService(hass, _entry({OPT_PROTECT_PORT: taken}))
+        service = _svc(hass, _entry({OPT_PROTECT_PORT: taken}))
         with patch.object(service, "_notify_port_conflict") as notified:
             assert await service.start() is False
         assert service.port == taken, "the port was changed"
-        assert "onvif" not in hass.data[DOMAIN]["_ports_by_entry"]["entryA"]
+        assert not hass.data[DOMAIN]["_ports_by_entry"]["entryA"].get("onvif")
         notified.assert_called_once()
     finally:
         blocker.close()
@@ -444,11 +450,11 @@ async def test_the_service_serves_soap_over_http_and_publishes_its_port():
     port = probe.getsockname()[1]
     probe.close()
     hass = _hass()
-    service = onvif.OnvifService(hass, _entry({OPT_PROTECT_PORT: port, OPT_PROTECT_USERNAME: USER}))
+    service = _svc(hass, _entry({OPT_PROTECT_PORT: port, OPT_PROTECT_USERNAME: USER}))
     with patch.object(onvif.WsDiscovery, "start", AsyncMock()), patch.object(onvif.WsDiscovery, "stop", AsyncMock()):
         assert await service.start() is True
         try:
-            assert hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["onvif"] == port
+            assert hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["onvif"] == {DEV: port}
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"http://127.0.0.1:{port}/onvif/device_service",
@@ -459,7 +465,7 @@ async def test_the_service_serves_soap_over_http_and_publishes_its_port():
                     ET.fromstring(await resp.read())
         finally:
             await service.stop()
-    assert "onvif" not in hass.data[DOMAIN]["_ports_by_entry"]["entryA"]
+    assert not hass.data[DOMAIN]["_ports_by_entry"]["entryA"].get("onvif")
 
 
 @pytest.mark.asyncio
@@ -493,7 +499,7 @@ async def test_the_snapshot_follows_go2rtc_when_its_port_moves():
     free.close()
     hass = _hass()
     hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = 1  # stale: nothing listens there
-    service = onvif.OnvifService(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
+    service = _svc(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
     with patch.object(onvif.WsDiscovery, "start", AsyncMock()), patch.object(onvif.WsDiscovery, "stop", AsyncMock()):
         assert await service.start()
         try:
@@ -536,7 +542,7 @@ async def test_an_engine_error_is_not_passed_off_as_a_picture():
     free.close()
     hass = _hass()
     hass.data[DOMAIN]["_ports_by_entry"]["entryA"]["api"] = engine_port
-    service = onvif.OnvifService(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
+    service = _svc(hass, _entry({OPT_PROTECT_PORT: onvif_port}))
     with patch.object(onvif.WsDiscovery, "start", AsyncMock()), patch.object(onvif.WsDiscovery, "stop", AsyncMock()):
         assert await service.start()
         try:

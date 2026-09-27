@@ -564,9 +564,10 @@ class CuboWebRTCStreamSensor(CoordinatorEntity, SensorEntity):
             attrs["nvr_auth"] = "basic" if has_pw else "none (open stream)"
 
         # UniFi Protect: the address to type into Protect's Advanced Adoption,
-        # on the camera that is actually exposed (one per HA host).
-        onvif = (self.hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}).get("onvif")
-        if onvif is not None and onvif.camera_id() == self._device_id:
+        # on each camera that is exposed (each has its own port).
+        group = (self.hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}).get("onvif")
+        onvif = group.for_camera(self._device_id) if group is not None else None
+        if onvif is not None:
             stats = onvif.stats()
             attrs["unifi_protect_address"] = stats["address"] if stats["running"] else None
             attrs["unifi_protect_username"] = opts.get(OPT_PROTECT_USERNAME) or PROTECT_USERNAME_DEFAULT

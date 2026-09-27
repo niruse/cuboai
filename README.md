@@ -589,15 +589,17 @@ decodable), `CUBOAI_FIRST_AU_S` (15), `CUBOAI_RECONNECT_MAX` (3).
 
 ## 📹 UniFi Protect (show the camera in a UniFi console)
 
-Since v2.6.37 one CuboAI camera can be added to **UniFi Protect** as a third-party camera, so it
-appears in the Protect app alongside UniFi cameras. Protect talks to the integration over **ONVIF**
+Since v2.6.37 CuboAI cameras can be added to **UniFi Protect** as third-party cameras, so they
+appear in the Protect app alongside UniFi cameras — since v2.6.41 several of them, each under its
+own name. Protect talks to the integration over **ONVIF**
 and pulls the video from the integration's own streaming engine, the same way an NVR does. The
 camera keeps a single connection whichever of HA, the card, an NVR and Protect are watching.
 
-**Turn it on:** Settings → Devices & Services → CuboAI → **Configure** → check **"Make a camera
-available to UniFi Protect (ONVIF)"**, pick the camera, set a **password** (Protect will not add a
-camera without one), and save. The camera's *WebRTC Stream* sensor then shows the address as
-`unifi_protect_address` (for example `192.168.1.20:8899`) and `unifi_protect_status: ready`.
+**Turn it on:** Settings → Devices & Services → CuboAI → **Configure** → check **"Make cameras
+available to UniFi Protect (ONVIF)"**, tick the cameras to show, set a **password** (Protect will not
+add a camera without one), and save. Each camera's *WebRTC Stream* sensor then shows its own address
+as `unifi_protect_address` (for example `192.168.1.20:8899`, the next camera `192.168.1.20:8900`) and
+`unifi_protect_status: ready`. Add each camera in Protect with its own address.
 
 **Add it in Protect**, either way:
 
@@ -610,8 +612,16 @@ camera without one), and save. The camera's *WebRTC Stream* sensor then shows th
 
 **Good to know**
 
-- **One camera per Home Assistant host.** Protect tells third-party cameras apart by the MAC address
-  of the host it talks to. With several CuboAI cameras, pick which one Protect shows.
+- **Several cameras from one Home Assistant** (since v2.6.41). Protect tells third-party cameras
+  apart by the MAC address each one *reports*, so every camera gets its own port and its own MAC:
+  the first camera the host's real one (so a camera added with an earlier version is unchanged),
+  each further camera a fixed made-up one. Tested on a live UDM: two cameras from one HA, both
+  streaming.
+- **Each camera shows up under its own name**: "CuboAI" plus the name you gave the device in Home
+  Assistant, or else its name in the CuboAI app (earlier versions called every camera "CuboAI Baby
+  Monitor"). Protect reads the name only when it adds a camera (tested: unlike the codec, it is not
+  refreshed later), so for a camera added before v2.6.41 either remove it in Protect and add it
+  again once, or rename it inside Protect.
 - **H.264 recommended.** A Cubo 2 / Cubo Plus (CB02) streams H.264 natively. A **Cubo 3** streams
   HEVC (H.265). Protect passes H.265 straight through to your viewing device without converting it,
   so only devices that can decode H.265 will show the picture. Checking *Transcode these cameras to
@@ -632,8 +642,11 @@ camera without one), and save. The camera's *WebRTC Stream* sensor then shows th
 - **Video only, for now.** Protect cannot play the camera's AAC audio.
 - **Recording needs a disk in the console.** Protect records only to a drive in its bays. Without
   one, the camera still adopts and live-views, but Protect won't record it.
-- **The port is pinned (8899 by default)**, and never moved automatically, because Protect remembers
-  the address it adopted. If the port is taken, a notification says so.
+- **Ports are pinned**: the first camera uses the port set in Configure (8899 by default), each
+  further camera the next free one, and a camera keeps its port for good, even if you untick it
+  and tick it again later, because Protect remembers the address it adopted. If a port is taken, a
+  notification says so and the other cameras keep working.
+- **One CuboAI account per Home Assistant** can use this (it can show several cameras).
 - Settings Protect pushes to the camera (time, encoding, reboot) are accepted and deliberately
   ignored. Nothing Protect sends can reconfigure the integration or the camera.
 - Protect connects twice (a high- and a low-quality profile). Both are served from the same camera
@@ -947,7 +960,7 @@ The integration runs its own internal go2rtc server for local streaming. It uses
 | `8555` | RTSP listener (camera stream) | Hops to the next free port (usually `8557`) |
 | `1985` | go2rtc API (snapshots, card, WebRTC) | Hops to the next free port (usually `1986`) |
 | `8556` | WebRTC listener | Hops to the next free port |
-| `8899` | UniFi Protect (ONVIF) — only when turned on in Configure | **Never moves** (Protect remembers the address it adopted); if taken, a notification says so — choose another port in Configure |
+| `8899`, `8900`, … | UniFi Protect (ONVIF), one port per camera shown in Protect — only when turned on in Configure | **Never moves** (Protect remembers the address it adopted); if taken, a notification says so — choose another port in Configure |
 
 You never need to configure anything for this. The camera entity and sensors publish the effective port they resolved, and the custom card does not deal in ports at all — it finds its camera entity by the `device_id` attribute and lets that entity supply the stream source, so whatever port go2rtc actually bound is the port that gets used. A log line like `go2rtc API port 1985 is already in use by another process — using port 1986 instead` is informational, not an error.
 
