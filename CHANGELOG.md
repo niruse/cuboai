@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.38]
+
+### Fixed
+- The manifest now declares the `network` integration, which the UniFi Protect support (2.6.37)
+  uses to find Home Assistant's LAN address. Without the declaration Home Assistant does not
+  guarantee `network` is set up first. It worked on the test system through load order, and
+  Home Assistant's own validator (Hassfest) rejected it. A test now checks that every integration
+  this code calls is declared.
+
 ## [2.6.37]
 
 ### Added

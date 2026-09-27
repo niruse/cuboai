@@ -193,3 +193,22 @@ def test_the_protect_password_is_a_secret_key_by_name():
     assert _is_secret_key("unifi_protect_password")
     assert _is_secret_key("some_future_token")
     assert not _is_secret_key("unifi_protect_port")
+
+
+def test_the_manifest_declares_every_integration_the_protect_code_uses():
+    """Hassfest rejected v2.6.37: onvif_server.py calls the `network`
+    integration (async_get_source_ip) without the manifest declaring it, so HA
+    does not guarantee it is set up first. Kill: 'network' removed from
+    dependencies."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent / "custom_components" / "cuboai"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    declared = set(manifest.get("dependencies", [])) | set(manifest.get("after_dependencies", []))
+    source = (root / "onvif_server.py").read_text(encoding="utf-8")
+    used = set(re.findall(r"homeassistant\.components\.(\w+)", source)) | set(
+        re.findall(r"from homeassistant\.components import (\w+)", source)
+    )
+    # Hassfest lets any integration use these without declaring them.
+    always_allowed = {"persistent_notification"}
+    assert used - always_allowed <= declared, f"undeclared: {sorted(used - always_allowed - declared)}"
