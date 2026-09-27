@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.39]
+
+### Fixed
+- **UniFi Protect ignored a change to the H.264 option.** Protect's media server keeps the stream
+  address it is given when a camera is adopted. A reconnect, Protect's own "re-adopt" and a restart
+  of the streaming engine all left it pulling the old stream, tested on a live UDM. So a Cubo 3
+  owner who ticked *Transcode these cameras to H.264* after adding the camera, as diagnostics
+  advises, kept sending Protect H.265.
+
+  Protect is now pointed at one fixed stream, `cuboai_protect_<camera>`, which re-reads either the
+  camera's native stream or its H.264 transcode, whichever the option selects. The address Protect
+  keeps never changes, so the option takes effect at the next reconnect in both directions without
+  re-adding the camera. The fixed stream is a plain re-read inside the streaming engine: no
+  transcode and no extra process. It only exists while UniFi Protect support is on.
+
+  A camera added with v2.6.37 or v2.6.38 is still on its old address and needs to be removed and
+  added again once. Download diagnostics now spots this and says so.
+
 ## [2.6.38]
 
 ### Fixed

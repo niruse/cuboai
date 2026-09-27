@@ -102,13 +102,23 @@ def nvr_stream_name(device_id: str, options) -> str:
 
 
 def protect_stream_name(device_id: str, options) -> str:
-    """The go2rtc stream UniFi Protect is pointed at for this camera.
+    """The FIXED go2rtc stream name UniFi Protect is pointed at for this camera.
 
-    Protect decodes H.264 only, so it follows the same rule as every other
-    H.264-only consumer: the `cuboai_h264_` transcode when that camera's H.264
-    option is on, otherwise the combined stream (native H.264 on a Cubo 2 /
-    CB02). An HEVC camera (Cubo 3) needs the option on; the integration never
-    turns it on by itself — diagnostics says so instead.
+    A stable alias (go2rtc.py re-reads protect_stream_target() into it), not
+    the real stream: Protect's media server locks in the address it is given
+    at adoption, so if this name followed the H.264 option, ticking it after
+    adopting would leave Protect on the old stream until the camera was
+    removed and adopted again. The name never changes; what is behind it does.
+    """
+    return f"cuboai_protect_{device_id}"
+
+
+def protect_stream_target(device_id: str, options) -> str:
+    """What the Protect alias carries: the same rule as every other H.264-only
+    consumer — the `cuboai_h264_` transcode when that camera's H.264 option is
+    on, else the combined stream (native H.264 on a Cubo 2 / CB02). An HEVC
+    camera (Cubo 3) without the option sends HEVC, which Protect passes to
+    viewers untranscoded; the integration never turns the option on itself.
     """
     return live_stream_name(device_id, options)
 
