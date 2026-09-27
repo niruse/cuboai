@@ -7,7 +7,8 @@
     "config_flow": true,
     "dependencies": [
         "http",
-        "frontend"
+        "frontend",
+        "network"
     ],
     "documentation": "https://github.com/niruse/cuboai",
     "iot_class": "local_polling",
@@ -22,5 +23,5 @@
         "pycognito>=2024.5.1",
         "yt-dlp>=2024.12.13"
     ],
-    "version": "2.6.37"
+    "version": "2.6.38"
 }
