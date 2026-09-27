@@ -46,12 +46,10 @@ class HaIcon extends HTMLElement {
 }
 customElements.define("ha-icon", HaIcon);
 
-class HaIconButton extends HTMLElement {
-  connectedCallback() {
-    this.style.display = "inline-flex";
-    this.style.cursor = "pointer";
-  }
-}
+// Must not touch the element's own inline style: the real ha-icon-button does
+// not, and a stand-in that set `display` once hid a card bug (a mic button
+// created display:none and never shown).
+class HaIconButton extends HTMLElement {}
 customElements.define("ha-icon-button", HaIconButton);
 
 // ha-card draws its `header` as the card title, above the content.
