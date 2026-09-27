@@ -34,14 +34,15 @@
           "enable_debug_logs": "Enable debug logs",
           "history_sensors": "Baby-present & DVR history sensors",
           "rtsp_port": "RTSP port for the local camera stream",
-          "unifi_protect_enabled": "Make a camera available to UniFi Protect (ONVIF)",
+          "unifi_protect_enabled": "Make your first camera available to UniFi Protect (ONVIF)",
           "unifi_protect_username": "UniFi Protect username",
-          "unifi_protect_password": "UniFi Protect password"
+          "unifi_protect_password": "UniFi Protect password",
+          "max_saved_photos": "Maximum number of downloaded photos to keep"
         },
         "data_description": {
           "rtsp_port": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
           "enable_debug_logs": "Turn on when reporting an issue. Writes full diagnostics for the whole integration: `cuboai_debug.log` (config folder, all integration messages), `custom_components/cuboai/bin/go2rtc.log` (streaming engine), `cuboai_last_alert_debug.log` (alerts), plus debug messages in the Home Assistant log. Log files rotate at 2 MB. Redact camera credentials before sharing — see the [debugging guide]({docs_url}).",
-          "unifi_protect_enabled": "Lets UniFi Protect find your first camera and add them as third-party cameras. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add each camera by address (shown as unifi_protect_address on its WebRTC Stream sensor). Each camera gets its own port. A Cubo 3 sends H.265, which Protect passes to viewers unconverted: check 'Transcode these cameras to H.264' for it if a phone or browser shows no picture. Add more cameras later in Configure.",
+          "unifi_protect_enabled": "Lets UniFi Protect find your first camera and add it as a third-party camera. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add it by address (shown as unifi_protect_address on its WebRTC Stream sensor). A Cubo 3 sends H.265, which Protect passes to viewers unconverted: turn on 'Transcode these cameras to H.264' for it in Configure if a phone or browser shows no picture. More cameras can be added later in Configure.",
           "unifi_protect_password": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password."
         }
       }
@@ -96,7 +97,9 @@
           "unifi_protect_username": "UniFi Protect username",
           "unifi_protect_password": "UniFi Protect password",
           "unifi_protect_port": "UniFi Protect (ONVIF) port of the first camera",
-          "unifi_protect_cameras": "Cameras to show in UniFi Protect"
+          "unifi_protect_cameras": "Cameras to show in UniFi Protect",
+          "max_saved_photos": "Maximum number of downloaded photos to keep",
+          "rtsp_timestamp_cameras": "Burn the date and time into these cameras' NVR recordings"
         },
         "data_description": {
           "rtsp_port": "Port for the integration's own streaming engine. It self-heals — if the port you pick is already taken, it moves to the next free one automatically. Home Assistant's built-in go2rtc normally already uses 8555, so a default of 8557 here is expected and not an error.",
@@ -106,7 +109,8 @@
           "unifi_protect_enabled": "Lets UniFi Protect find the chosen cameras and add them as third-party cameras. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add each camera by address (shown as unifi_protect_address on its WebRTC Stream sensor). Each camera gets its own port. A Cubo 3 sends H.265, which Protect passes to viewers unconverted: check 'Transcode these cameras to H.264' for it if a phone or browser shows no picture.",
           "unifi_protect_password": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password.",
           "unifi_protect_port": "Protect remembers each camera's port when it adds it, so ports are never changed automatically. The first camera uses this port; each further camera the next free one.",
-          "unifi_protect_cameras": "Each camera appears in Protect under its name in Home Assistant. Once a camera has a port it keeps it, even if you untick it and tick it again later."
+          "unifi_protect_cameras": "Each camera appears in Protect under its name in Home Assistant. Once a camera has a port it keeps it, even if you untick it and tick it again later.",
+          "rtsp_timestamp_cameras": "Only the stream an NVR records (the nvr_rtsp_url on the camera's WebRTC Stream sensor) gets the time burned into the picture. Live view and HomeKit are unchanged. Costs a transcode on this machine per checked camera."
         }
       }
     }
