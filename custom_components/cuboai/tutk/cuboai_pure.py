@@ -1374,21 +1374,29 @@ def _aac_units(path, rate=16000, gain=1.0, format=None, options=None):
     ADTS header), which is the camera's downlink format and what the talk uplink mirrors.
     `gain` is a linear amplitude multiplier (1.0 = unchanged, <1 quieter, >1 louder), applied via
     libav's `volume` filter — the only reliable talk-volume lever (the camera's speaker_level is
-    firmware-managed)."""
+    firmware-managed).
+
+    STEREO end to end: `add_stream('aac')` has always defaulted to a stereo encoder (ADTS channel
+    config 2 — the format the camera is proven to accept), so the resampler, the volume graph and
+    the silence padding are stereo too and the layout is pinned instead of left to PyAV's default."""
     import av
     import io as _io
     buf = _io.BytesIO()
     out = av.open(buf, mode='w', format='adts')          # the ADTS muxer writes the AAC-LC headers
     ostream = out.add_stream('aac', rate=rate)
     try:
+        ostream.layout = 'stereo'
+    except Exception:
+        pass
+    try:
         ostream.bit_rate = 32000
     except Exception:
         pass
-    resampler = av.AudioResampler(format='fltp', layout='mono', rate=rate)  # AAC encoder input fmt
+    resampler = av.AudioResampler(format='fltp', layout='stereo', rate=rate)  # AAC encoder input fmt
     graph = None
     if gain != 1.0:                                       # apply volume via libav's filter (no numpy)
         graph = av.filter.Graph()
-        _src = graph.add_abuffer(format='fltp', sample_rate=rate, layout='mono')
+        _src = graph.add_abuffer(format='fltp', sample_rate=rate, layout='stereo')
         _vol = graph.add('volume', volume=str(gain))
         _snk = graph.add('abuffersink')
         _src.link_to(_vol); _vol.link_to(_snk); graph.configure()
@@ -1432,9 +1440,14 @@ def _aac_units(path, rate=16000, gain=1.0, format=None, options=None):
                             break
                         gf.pts = None
                         _encode_frame(gf)
-                        
+
+        # ~3.5 s of trailing silence. A new AudioFrame is UNINITIALISED memory, not silence: the
+        # floats can be NaN/Inf, which the AAC encoder rejects ("Input contains (near) NaN/+-Inf",
+        # avcodec_send_frame() -> EINVAL) — or, when finite, would play as noise. Zero every plane.
         for _ in range(55):
-            silent = av.AudioFrame(format='fltp', layout='mono', samples=1024)
+            silent = av.AudioFrame(format='fltp', layout='stereo', samples=1024)
+            for plane in silent.planes:
+                plane.update(bytes(plane.buffer_size))
             silent.sample_rate = rate
             if graph is None:
                 fifo.write(silent)
