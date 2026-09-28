@@ -304,16 +304,22 @@ class PureSession:
 
     def send_audio_file(self, path: str, channel: int = 1, loop: bool = False,
                         max_secs=None, rate: int = 16000, warmup: float = 2.5, on_status=None,
-                        gain: float = 1.0, format=None, options=None):
+                        gain: float = 1.0, format=None, options=None, live_source=None,
+                        grant_timeout=None, liveness_timeout=None, tail_frames: int = 0):
         """
         Opens an av-server on a reversed-role talk channel; the camera logs in and pulls AAC-LC audio.
         See cuboai_pure.TUTKDirectSession.send_audio_file for the full flow. `loop`/`max_secs` give a
         continuous talk stream; `gain` is a linear volume multiplier (<1 quieter); `on_status` is an
-        optional progress callback. Returns frames delivered.
+        optional progress callback; `live_source` streams a microphone, with `grant_timeout` /
+        `liveness_timeout` (raise cuboai_pure.TalkTimeout) and `tail_frames` (all off by default).
+        Returns frames sent.
         """
         return self._inner.send_audio_file(path, channel=channel, loop=loop, max_secs=max_secs,
                                            rate=rate, warmup=warmup, on_status=on_status, gain=gain,
-                                           format=format, options=options)
+                                           format=format, options=options, live_source=live_source,
+                                           grant_timeout=grant_timeout,
+                                           liveness_timeout=liveness_timeout,
+                                           tail_frames=tail_frames)
 
     def stop_audio(self):
         """Ask an in-flight (e.g. looping) send_audio_file to stop at the next tick."""
