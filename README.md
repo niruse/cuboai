@@ -32,6 +32,8 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
 - **Live video, locally** — straight from the camera on your network, with a cloud-free fallback
   that also plays over Home Assistant Cloud. [The camera card](#the-camera-card)
 - **Picture-in-picture** in the bundled card.
+- **Talk to the room** — the card's microphone button speaks through the camera's speaker, at home
+  and away. [Two-way audio](#two-way-audio)
 - **Recorded playback** — scrub back through the camera's own recordings, in the same card or from
   an automation. [Recorded playback](#recorded-playback)
 - **Sensors** — alerts with photos, temperature, humidity, sleep-mat BPM, thermometer, detection
@@ -225,10 +227,15 @@ device_id: CB02XXXXXXXXXXXX   # optional with one camera
   <img src="docs/images/card-editor.png" width="48%" alt="The card's visual editor">
 </p>
 
-**On the video:** the sleep-mat BPM, temperature and
-humidity, an optional timestamp, and the speaker mute. Picture-in-picture works natively on Android
-and Apple devices; on desktop Chrome the floating window keeps the badges. Sound plays over WebRTC
-with an MSE/HLS fallback, including away from home over Home Assistant Cloud.
+**On the video:** the sleep-mat BPM, temperature and humidity, an optional timestamp, the speaker
+mute, and the microphone ([two-way audio](#two-way-audio)). Picture-in-picture works natively on
+Android and Apple devices; on desktop Chrome the floating window keeps the badges. Sound plays over
+WebRTC with an MSE/HLS fallback, including away from home over Home Assistant Cloud. When the
+player has to change stream (your phone moves between Wi-Fi and mobile data; switching to a
+recording is the exception), the last picture stays on screen with *Reconnecting…* until the new
+stream's picture is showing, instead of a few seconds of black, and a player left stuck by the
+network change is dialled again by itself. (On an iPhone, moving from Wi-Fi to mobile data can
+still show a short black moment; mobile data to Wi-Fi is seamless.)
 
 **Visual editor:** camera picker, initial audio state, default song and playlist filters, which
 badges and sections to show, and two settings that apply to the whole integration — the H.264
@@ -239,7 +246,7 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 | Option | Default | What it does |
 |---|---|---|
 | `device_id` | first camera | Pins the card to one camera. Needed with several cameras. |
-| `default_mute_state` | `remember` | `remember`, `muted` or `unmuted` when the card opens |
+| `default_mute_state` | `remember` | Sound when the card opens: `remember` (the last choice, shared across your devices), `muted` or `unmuted`. A browser that blocks sound until you tap starts muted, and the first tap brings it up |
 | `default_song_filter` / `default_playlist_filter` | `all` | `all` users' songs/playlists, or only your own (`me`) |
 | `show_env_overlay` | `true` | Temperature / humidity badge (hides itself without data) |
 | `show_mat_overlay` | `true` | Sleep-mat BPM badge (hides itself without a mat) |
@@ -248,6 +255,8 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 | `show_timeline` | `true` | The recorded-playback bar (YAML only) |
 | `timeline_hours` | `18` | Span of the bar (YAML only) |
 | `timeline_play_seconds` | `900` | Footage played per request (YAML only) |
+| `talk_mutes_speaker` | `false` | Mute the room's sound on this device while you talk; it comes back when you stop |
+| `talk_dry_run` | `false` | Microphone test mode: everything except the camera, nothing plays (YAML only) |
 
 ### Lullabies and music
 
@@ -259,6 +268,38 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 - The library, playlists and shuffle/repeat settings are stored in Home Assistant, so every phone
   and tablet sees the same ones.
 - With the song cache on, a song downloaded once replays instantly.
+
+### Two-way audio
+
+Tap the microphone button (top left of the video) to talk through the camera's speaker, and tap it
+again to stop. It turns amber while the camera opens its speaker (a few seconds) and red once the
+camera is listening.
+
+- The sound goes over Home Assistant's own connection, the one the dashboard already uses, so it
+  works at home and away with no VPN, port or WebRTC setup.
+- **Home Assistant must be opened over https.** Browsers give a web page the microphone only on a
+  secure address; on a plain `http://` address the button explains this. In the Home Assistant app
+  that includes the home (internal) URL. On an iPhone, allow the microphone under
+  Settings › Home Assistant › Microphone.
+- By default talking never changes the speaker: the room's sound on your phone stays as you and
+  the card's audio setting have it (the phone's echo cancellation keeps its speaker out of the
+  microphone).
+- **Option: mute the room while talking** (`talk_mutes_speaker: true`, or *Mute the room's sound on
+  this device while talking* in the visual editor). The sound on this phone goes off when the talk
+  starts and comes back when you stop, so you don't hear yourself return from the room. If you tap
+  the speaker during the talk, your choice stands. The mute is never saved and doesn't reach other
+  devices. If a talk ends by itself (time limit, connection lost) and the phone won't turn the sound
+  back on without a tap, the notice says *Tap 🔈 to hear the room*.
+- A talk stops by itself after 2 minutes, when the app goes to the background or when the
+  connection drops.
+- One talker per camera: the button refuses while the camera's Speaker entity is playing a song or
+  TTS, and songs and TTS are refused while someone is talking.
+- Any user allowed to control the camera's Speaker entity can talk.
+- To try it without a sound in the room, add `talk_dry_run: true` to the card's YAML. Everything
+  runs except the camera, and the notice on the video says *TEST MODE*.
+
+How it works, why it goes over Home Assistant's connection rather than WebRTC, and how to test it:
+[docs/two-way-audio.md](docs/two-way-audio.md).
 
 ---
 

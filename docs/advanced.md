@@ -40,7 +40,8 @@ Other safeguards:
 | `cuboai_dvr_<id>` | Recorded playback; idle until `cuboai.play_recording` asks for a moment. |
 | `cuboai_speaker_<id>` | The speaker / text-to-speech backchannel, not a video source. |
 
-All of them share one camera session.
+All of them share one camera session. The card's microphone does not use go2rtc: it goes over Home
+Assistant's websocket to a talk process of its own — see [two-way-audio.md](two-way-audio.md).
 
 ## Stream stall detection
 
