@@ -50,6 +50,12 @@ function cuboaiFindCameraState(hass, deviceId) {
   return shaped.length === 1 ? shaped[0] : null;
 }
 
+// The device_id of a camera cuboaiFindCameraState returned, else null.
+function cuboaiCameraDeviceId(found) {
+  const attrs = (found && found.state && found.state.attributes) || {};
+  return attrs.device_id || null;
+}
+
 // The playback entity that belongs to the same camera as the live one.
 //
 // Matched on attributes, never on the entity id: `dvr` marks it and
@@ -73,17 +79,567 @@ function cuboaiFindRecordingState(hass, deviceId) {
   return shaped.length === 1 ? shaped[0] : null;
 }
 
+// What the card's audio setting asks for: sound (true) or silence (false).
+// 'unmuted' / 'muted' are fixed; 'remember' takes the shared (cross-device)
+// choice first, then this browser's saved one, then silence.
+function cuboaiWantUnmuted(mode, sharedMuted, savedMuted) {
+  if (mode === 'unmuted') return true;
+  if (mode === 'muted') return false;
+  if (sharedMuted !== undefined) return !sharedMuted;
+  return savedMuted ? savedMuted !== 'true' : false;
+}
+
+// The mute state the player starts in, given what the audio setting wants.
+// Browsers block UNMUTED autoplay, and a video that can't autoplay leaves
+// webrtc-camera with no rendered controls (the speaker button vanished on
+// "Always Unmute") — so the card starts muted and brings the sound up on the
+// first interaction (the video init). Apple WebKit is the exception: there
+// the native speaker owns mute and the card never unmutes by script, so a
+// muted start stayed muted whatever the setting said (since v2.4.0). On Apple
+// the setting is therefore the STARTING state, as in v2.3.x; if the phone
+// refuses sound without a tap, video-rtc falls back to muted by itself.
+function cuboaiStartMuted(wantUnmuted, vendor) {
+  return String(vendor || '').includes('Apple') ? !wantUnmuted : true;
+}
+
+// Picture bridge. When the player swaps its source -- Wi-Fi to mobile data
+// (WebRTC dies, MSE starts), a reconnect -- the <video> is black until the new
+// stream's first picture: up to the camera's 4 s keyframe interval plus the
+// reconnect, which video-rtc may delay by up to 15 s. The card shows the last
+// good picture on a canvas over the video instead, with "Reconnecting…" once
+// the gap outlasts a blink, until the new source's picture is really on
+// screen.
+// - Copied about once a second while the video really plays, not at the swap:
+//   by then an iPhone may have nothing left to copy. Three triggers, because an
+//   iPhone playing WebRTC may not fire timeupdate: presented frames
+//   (requestVideoFrameCallback), timeupdate, and a 1 s timer that only copies
+//   while currentTime moves. A copy that came out empty (transparent or pure
+//   black) never replaces a good one.
+// - The ending of a WebRTC stream starts the bridge at once.
+// - Held up to CUBOAI_BRIDGE_WAIT_MS while the player has no new source yet,
+//   then CUBOAI_BRIDGE_MAX_MS once it has; a copy older than
+//   CUBOAI_BRIDGE_STALE_MS is never shown, and a copy let go is not shown again
+//   -- a frozen picture cannot pass for live. With no picture, the label alone
+//   says what the black is.
+// - On an iPhone a new WebRTC stream reports its first frame before it is on
+//   screen, so the hide waits for the picture to settle.
+// - The card's own switches to and from a recording are not bridged (quiet).
+// Hooks only this element's own src/srcObject; the WebRTC Camera files are
+// untouched.
+const CUBOAI_BRIDGE_MAX_MS = 8000;         // after the new source is attached
+const CUBOAI_BRIDGE_WAIT_MS = 25000;       // until the player attaches one
+const CUBOAI_BRIDGE_STALE_MS = 60000;      // an older copy is not shown
+const CUBOAI_BRIDGE_LABEL_MS = 600;        // a swap faster than this shows no label
+const CUBOAI_BRIDGE_SNAP_MS = 1000;        // how often the last good picture is copied
+const CUBOAI_BRIDGE_PARK_MS = 60000;       // a detached player's timer stops after this
+const CUBOAI_BRIDGE_SETTLE_RTC_MS = 800;   // WebRTC: decoded is not yet on screen (iOS)
+const CUBOAI_BRIDGE_SETTLE_MSE_MS = 200;
+const CUBOAI_BRIDGE_COPY_W = 960;          // the copy is at most this wide
+// The last good picture of each camera, kept for the page rather than inside
+// one card: after a network change Home Assistant rebuilds a YAML dashboard's
+// cards (seen at a Wi-Fi -> 5G switch: a new card, a new empty <video>, black
+// while its stream starts). A new card for the same camera starts from the old
+// card's picture. Keyed by device id: { canvas, at }.
+const cuboaiLastPictures = new Map();
+
+function cuboaiBridgeGap(video, deviceId) {
+  if (!video || video.__cuboBridge) return;
+  const host = video.parentNode;
+  const doc = video.ownerDocument;
+  if (!host || !doc || typeof host.insertBefore !== 'function') return;
+  const canvas = doc.createElement('canvas');
+  canvas.style.cssText = 'position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; display: none;';
+  const work = doc.createElement('canvas');   // copies land here first, and are checked
+  const label = doc.createElement('div');
+  label.textContent = 'Reconnecting…';
+  label.style.cssText = 'position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1; padding: 3px 10px; border-radius: 10px; background: rgba(0,0,0,0.55); color: #fff; font: 12px/1.4 sans-serif; pointer-events: none; display: none;';
+  host.insertBefore(canvas, video.nextSibling);
+  // The canvas pans and zooms with the video (it sits in the digital-zoom
+  // layer); the label sits above that layer so zoom never moves it off screen.
+  const outer = host.parentNode;
+  if (outer && typeof outer.appendChild === 'function') outer.appendChild(label);
+  else host.insertBefore(label, canvas.nextSibling);
+  const st = {
+    canvas, label, gap: false, showing: false, cap: 0, labelTimer: 0, armed: false, settle: 0,
+    snapAt: -Infinity, hasPicture: false, played: false, lastCt: null, poll: 0, idleMs: 0,
+    loopPending: false, loopGen: 0, quietUntil: 0, firstAt: 0, newFrames: 0, hideGen: 0, gapAt: 0, blackSeen: false,
+    snaps: 0, empty: 0, tu: 0, frames: 0, polls: 0, drawErr: null, onDiag: null,
+  };
+  video.__cuboBridge = st;
+  const now = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+  const diag = (ev, extra) => {
+    if (typeof st.onDiag !== 'function') return;
+    try { st.onDiag(Object.assign({ ev }, extra || {})); } catch (e) { /* never break playback */ }
+  };
+  const isStream = (o) => !!o && typeof o.getVideoTracks === 'function';
+
+  const hide = (why) => {
+    clearTimeout(st.cap);
+    clearTimeout(st.labelTimer);
+    clearTimeout(st.settle);
+    st.cap = 0;
+    st.labelTimer = 0;
+    st.settle = 0;
+    st.armed = false;
+    if (!st.gap) return;
+    diag('hide', { why: why || 'frame', held: st.showing, rs: video.readyState, paused: !!video.paused,
+      nf: st.newFrames, ms: Math.round(now() - st.gapAt) });
+    // A picture let go by the cap is not shown again: only a fresh copy is.
+    if (why === 'cap') st.hasPicture = false;
+    st.gap = false;
+    st.showing = false;
+    canvas.style.display = 'none';
+    label.style.display = 'none';
+  };
+  st.hide = hide;
+  const capIt = (ms) => {
+    clearTimeout(st.cap);
+    st.cap = setTimeout(() => hide('cap'), ms || CUBOAI_BRIDGE_MAX_MS);
+  };
+  // A WebRTC stream whose video track has ended or stopped delivering shows
+  // black on an iPhone: never copy it.
+  const streamLive = () => {
+    const so = video.srcObject;
+    if (!isStream(so)) return true;
+    const tracks = so.getVideoTracks();
+    return tracks.length > 0 && tracks.every((t) => t.readyState === 'live' && !t.muted);
+  };
+  // True unless a small patch of the copy is all transparent or all pure black
+  // (what a player with nothing to show hands back). A night-vision picture
+  // always has noise. A copy that cannot be read is trusted.
+  const looksLikeAPicture = (ctx, w, h) => {
+    try {
+      const n = Math.min(8, w, h);
+      const d = ctx.getImageData((w - n) >> 1, (h - n) >> 1, n, n).data;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] !== 0 && (d[i] || d[i + 1] || d[i + 2])) return true;
+      return false;
+    } catch (e) {
+      return true;
+    }
+  };
+  // Copy the picture on screen: into `work`, checked, then onto the canvas.
+  const snap = () => {
+    if (st.gap || !(video.readyState >= 2) || !video.videoWidth || !video.videoHeight || !streamLive()) return false;
+    if (doc.hidden) return false;
+    const w = Math.min(CUBOAI_BRIDGE_COPY_W, video.videoWidth);
+    const h = Math.round((video.videoHeight * w) / video.videoWidth);
+    try {
+      if (work.width !== w) work.width = w;
+      if (work.height !== h) work.height = h;
+      const wctx = work.getContext('2d');
+      wctx.drawImage(video, 0, 0, w, h);
+      if (!looksLikeAPicture(wctx, w, h)) {
+        st.empty += 1;
+        return false;
+      }
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      canvas.getContext('2d').drawImage(work, 0, 0);
+    } catch (e) {
+      st.drawErr = String((e && e.name) || e);
+      return false;
+    }
+    st.snapAt = now();
+    st.hasPicture = true;
+    st.played = true;
+    st.snaps += 1;
+    if (deviceId) cuboaiLastPictures.set(deviceId, { canvas, at: st.snapAt });
+    return true;
+  };
+  const maybeSnap = () => { if (now() - st.snapAt >= CUBOAI_BRIDGE_SNAP_MS) snap(); };
+  // Trigger 1: each presented frame. A pending callback may be dropped with
+  // its source, so a swap re-arms it.
+  // A generation per registration: a swap starts a fresh loop, and a callback
+  // of an older one that did survive the swap ends itself (never two loops).
+  const armLoop = (fresh) => {
+    if (typeof video.requestVideoFrameCallback !== 'function') return;
+    if (fresh) st.loopGen += 1;
+    else if (st.loopPending) return;
+    const gen = st.loopGen;
+    const frameLoop = () => {
+      if (gen !== st.loopGen) return;
+      st.loopPending = false;
+      st.frames += 1;
+      maybeSnap();
+      startPoll();
+      armLoop();
+    };
+    try { video.requestVideoFrameCallback(frameLoop); st.loopPending = true; } catch (e) { /* not for this source */ }
+  };
+  // Trigger 3: a timer, copying only when currentTime moves (really playing).
+  // Parked while the player is off the page; any sign of playback restarts it.
+  const startPoll = () => {
+    if (st.poll) return;
+    st.idleMs = 0;
+    st.poll = setInterval(() => {
+      if (!video.isConnected) {
+        st.idleMs += CUBOAI_BRIDGE_SNAP_MS;
+        if (st.idleMs >= CUBOAI_BRIDGE_PARK_MS) { clearInterval(st.poll); st.poll = 0; }
+        return;
+      }
+      st.idleMs = 0;
+      const ct = video.currentTime;
+      if (ct === st.lastCt) return;
+      st.lastCt = ct;
+      st.polls += 1;
+      if (video.readyState >= 2) st.played = true;
+      maybeSnap();
+    }, CUBOAI_BRIDGE_SNAP_MS);
+  };
+  armLoop();
+  // Trigger 2: timeupdate while the video plays.
+  video.addEventListener('timeupdate', () => { st.tu += 1; maybeSnap(); startPoll(); });
+  video.addEventListener('play', () => startPoll());
+  startPoll();
+  // Start bridging a gap: the last picture if there is a fresh one, and the
+  // label if the gap outlasts a blink. Only once something has played -- the
+  // first load of the card is not a reconnect -- and never for the card's own
+  // switch to or from a recording.
+  const startGap = () => {
+    if (st.gap) return true;
+    if (now() < st.quietUntil) return false;
+    if (!st.hasPicture) snap();
+    if (!st.played) return false;
+    st.gap = true;
+    st.gapAt = now();
+    st.blackSeen = false;
+    st.firstAt = 0;
+    if (st.hasPicture && now() - st.snapAt <= CUBOAI_BRIDGE_STALE_MS) {
+      st.showing = true;
+      canvas.style.display = 'block';
+    }
+    // Only while no new picture has arrived: a new one that is just settling
+    // (WebRTC at home, within a second) is no reconnect to announce.
+    st.labelTimer = setTimeout(() => { if (st.gap && !st.firstAt) label.style.display = 'block'; }, CUBOAI_BRIDGE_LABEL_MS);
+    return true;
+  };
+  // The card's own switch to or from a recording: no bridge until the next
+  // picture (or 15 s).
+  st.quiet = () => {
+    st.quietUntil = now() + 15000;
+    hide('quiet');
+  };
+  const brightness = () => {
+    if (!st.hasPicture) return null;
+    try {
+      const n = Math.min(8, canvas.width, canvas.height);
+      const d = canvas.getContext('2d').getImageData((canvas.width - n) >> 1, (canvas.height - n) >> 1, n, n).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+      return Math.round(sum / (3 * (d.length / 4)));
+    } catch (e) {
+      return 'err';
+    }
+  };
+  const state = (extra) => Object.assign({
+    rs: video.readyState, vw: video.videoWidth, paused: !!video.paused, live: streamLive(), has: st.hasPicture,
+    played: st.played, age: st.hasPicture ? Math.round(now() - st.snapAt) : null, snaps: st.snaps, empty: st.empty,
+    tu: st.tu, frames: st.frames, polls: st.polls, rvfc: typeof video.requestVideoFrameCallback === 'function',
+    err: st.drawErr, lum: typeof st.onDiag === 'function' ? brightness() : null,
+  }, extra || {});
+  // Hide once the new source's picture is really on screen: playing, a frame
+  // decoded, and settled -- longer for WebRTC, whose first decoded frames an
+  // iPhone reports before its display layer shows them.
+  // The new source's picture, looked at: a tiny draw of the frame it shows.
+  // An iPhone reports an MSE stream "playing" as soon as its sound arrives,
+  // while the picture waits for the camera's next keyframe (black), and a new
+  // WebRTC stream reports frames before they are on screen.
+  const probe = doc.createElement('canvas');
+  const onScreen = () => {
+    try {
+      probe.width = 32;
+      probe.height = 18;
+      const pctx = probe.getContext('2d');
+      pctx.drawImage(video, 0, 0, 32, 18);
+      return looksLikeAPicture(pctx, 32, 18);
+    } catch (e) {
+      return true;
+    }
+  };
+  // The new source has a picture but sits paused: an iPhone does not always
+  // start a stream attached without a tap (recorded: the MSE stream after a
+  // Wi-Fi -> 5G switch had frames, readyState 4, and stayed paused). Press play
+  // for it, at most every 2 s; if the phone refuses sound without a tap, play
+  // muted -- what the player itself does on such a refusal -- so the picture
+  // moves and the speaker button brings the sound back.
+  const kickPlay = () => {
+    if (st.kickAt && now() - st.kickAt < 2000) return;
+    st.kickAt = now();
+    let p;
+    try {
+      p = video.play();
+    } catch (e) {
+      p = Promise.reject(e);
+    }
+    Promise.resolve(p).then(
+      () => diag('kick', { ok: true, muted: !!video.muted }),
+      (e) => {
+        const err = (e && e.name) || String(e);
+        diag('kick', { ok: false, err, muted: !!video.muted });
+        if (err === 'NotAllowedError' && !video.muted) {
+          video.muted = true;
+          try { Promise.resolve(video.play()).catch(() => {}); } catch (e2) { /* nothing more to try */ }
+        }
+      },
+    );
+  };
+  // Hide once the new source's picture is really on screen: playing, settled,
+  // frames presented (where this browser reports them), and a drawn frame that
+  // is a picture, not black.
+  const tryHide = (why) => {
+    if (!st.armed) return true;
+    if (video.paused && video.readyState >= 2 && video.videoWidth) kickPlay();
+    if (video.paused || !(video.readyState >= 2) || !video.videoWidth) return false;
+    if (!st.firstAt) st.firstAt = now();
+    const rtc = isStream(video.srcObject);
+    const settle = rtc ? CUBOAI_BRIDGE_SETTLE_RTC_MS : CUBOAI_BRIDGE_SETTLE_MSE_MS;
+    const needFrames = st.frames > 0 ? (rtc ? 3 : 2) : 0;   // frame callbacks work on this browser
+    if (now() - st.firstAt < settle || st.newFrames < needFrames) return false;
+    if (!onScreen()) {
+      if (!st.blackSeen) {
+        st.blackSeen = true;
+        diag('black', { rs: video.readyState, nf: st.newFrames, ms: Math.round(now() - st.gapAt), rtc });
+      }
+      return false;
+    }
+    hide(why);
+    return true;
+  };
+  // Frames presented by the NEW source. Re-armed at every swap: a callback
+  // pending from before the source changed may be dropped with it.
+  const armFrames = () => {
+    const gen = ++st.hideGen;
+    st.newFrames = 0;
+    const onFrame = () => {
+      if (!st.armed || gen !== st.hideGen) return;
+      st.newFrames += 1;
+      if (!tryHide('frame')) {
+        try { video.requestVideoFrameCallback(onFrame); } catch (e) { /* not for this source */ }
+      }
+    };
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      try { video.requestVideoFrameCallback(onFrame); } catch (e) { /* not for this source */ }
+    }
+  };
+  const armHide = (capMs) => {
+    capIt(capMs);
+    st.armed = true;
+    armFrames();
+    const poll = () => {
+      clearTimeout(st.settle);
+      if (st.armed && !tryHide('playing')) st.settle = setTimeout(poll, 100);
+    };
+    video.addEventListener('loadeddata', poll, { once: true });
+    video.addEventListener('playing', poll, { once: true });
+  };
+  // A WebRTC stream that ends (the player closes it on a network change) goes
+  // black or freezes before the next stream is even requested: bridge from that
+  // moment, for as long as the player may take to attach the next one.
+  const watchStream = (so) => {
+    if (!isStream(so)) return;
+    for (const t of so.getVideoTracks()) {
+      if (typeof t.addEventListener !== 'function') continue;
+      t.addEventListener('ended', () => {
+        if (video.srcObject !== so) return;
+        diag('ended', state());
+        if (startGap()) armHide(CUBOAI_BRIDGE_WAIT_MS);
+      });
+    }
+  };
+  // The card usually hooks in while the player is already playing.
+  watchStream(video.srcObject);
+  // A new card whose player has no picture yet, for a camera another card of
+  // this page showed a moment ago: start from that picture (the handover after
+  // Home Assistant rebuilt the dashboard), until this player's own is shown.
+  const prior = deviceId ? cuboaiLastPictures.get(deviceId) : null;
+  if (prior && prior.canvas !== canvas && !(video.readyState >= 2) && now() - prior.at <= CUBOAI_BRIDGE_STALE_MS) {
+    try {
+      canvas.width = prior.canvas.width;
+      canvas.height = prior.canvas.height;
+      canvas.getContext('2d').drawImage(prior.canvas, 0, 0);
+      st.hasPicture = true;
+      st.played = true;
+      st.snapAt = prior.at;
+      diag('handover', { age: Math.round(now() - prior.at) });
+      if (startGap()) armHide(CUBOAI_BRIDGE_WAIT_MS);
+    } catch (e) {
+      /* no picture to hand over: this card starts like a fresh one */
+    }
+  }
+
+  for (const prop of ['srcObject', 'src']) {
+    let proto = Object.getPrototypeOf(video);
+    let desc = null;
+    while (proto && !desc) {
+      desc = Object.getOwnPropertyDescriptor(proto, prop);
+      proto = Object.getPrototypeOf(proto);
+    }
+    if (!desc || !desc.set || !desc.get) continue;
+    Object.defineProperty(video, prop, {
+      configurable: true,
+      enumerable: true,
+      get() { return desc.get.call(this); },
+      set(v) {
+        // The freshest picture if the one on screen is still good, else the
+        // last copy; then the swap.
+        if (!st.gap && now() - st.snapAt >= 250) snap();
+        const to = v ? ((v.constructor && v.constructor.name) || typeof v) : String(v);
+        diag('swap', state({ prop, to, gap: st.gap }));
+        const held = startGap();
+        desc.set.call(this, v);
+        if (prop === 'srcObject') watchStream(v);
+        armLoop(true);
+        startPoll();
+        if (!held) return;
+        // A new source: hide once its picture is on screen, within the cap.
+        // Cleared (a disconnect): hold for the source that follows.
+        if (v) armHide(CUBOAI_BRIDGE_MAX_MS); else capIt(CUBOAI_BRIDGE_WAIT_MS);
+      },
+    });
+  }
+}
+
+// Revive a player left stuck by a network change. Two ways it gets stuck:
+// 1. webrtc-camera asks Home Assistant to sign a new stream URL while Home
+//    Assistant's own connection is down; the request fails ("error") or never
+//    answers ("Loading.."), and it never tries again (seen on iOS 26: the WebRTC
+//    stream ended, no new source for 25 s);
+// 2. a stream connection being set up over the old network hangs without ever
+//    closing, so the player waits for it for good (seen: a card Home Assistant
+//    re-created 2 s before the switch never showed a picture).
+// Fast path: a player that has played and has had neither a stream nor a
+// connection attempt for CUBOAI_REVIVE_AFTER_MS is dialled again. Watchdog: a
+// player with no moving picture for CUBOAI_STUCK_MS is restarted from scratch
+// (disconnect, then dial once the old connection is gone). Both wait for Home
+// Assistant's connection and leave alone a card that is not on screen, a page
+// in the background, the card's own recording playback and a video that is
+// paused with a picture (the user's pause). Returns what it did (for
+// diagnostics), else null.
+const CUBOAI_REVIVE_AFTER_MS = 3000;
+const CUBOAI_REVIVE_EVERY_MS = 3000;
+const CUBOAI_STUCK_MS = 10000;
+
+function cuboaiPlayerMode(p) {
+  const modeEl = p && typeof p.querySelector === 'function' ? p.querySelector('.mode') : null;
+  const mode = modeEl ? String(modeEl.innerText || '') : '';
+  // A signing that never answered leaves "Loading.." up, and webrtc-camera
+  // refuses every retry while it says so.
+  if (modeEl && mode === 'Loading..') modeEl.innerText = '';
+  return mode || 'blank';
+}
+
+function cuboaiRevivePlayer(card, t) {
+  const p = card && card.content;
+  const video = card && typeof card._cuboMedia === 'function' ? card._cuboMedia().video : null;
+  const doc = video && video.ownerDocument;
+  if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden)) {
+    card._deadSince = null;
+    card._progressAt = null;
+    card._restartAt = null;
+    return null;
+  }
+  // Progress: the picture moving, or paused with a picture (the user's pause).
+  const ct = video ? video.currentTime : null;
+  if (card._progressAt == null || ct !== card._progressCt || (video && video.paused && video.readyState >= 3)) {
+    card._progressAt = t;
+    card._progressCt = ct;
+  }
+  // A restart under way: dial as soon as the old connection is gone.
+  if (card._restartAt != null) {
+    if (!p.ws && !p.pc) {
+      card._restartAt = null;
+      const mode = cuboaiPlayerMode(p);
+      try { p.onconnect(); } catch (e) { return 'threw'; }
+      return 'restarted:' + mode;
+    }
+    if (t - card._restartAt >= CUBOAI_REVIVE_EVERY_MS) card._restartAt = null;
+    return null;
+  }
+  const played = !!(video && video.__cuboBridge && video.__cuboBridge.played);
+  if (played && !p.ws && !p.pc) {
+    if (card._deadSince == null) card._deadSince = t;
+  } else {
+    card._deadSince = null;
+  }
+  const conn = card._hass && card._hass.connection;
+  if (conn && conn.connected === false) return null;
+  if (card._deadSince != null && t - card._deadSince >= CUBOAI_REVIVE_AFTER_MS
+      && (card._reviveAt == null || t - card._reviveAt >= CUBOAI_REVIVE_EVERY_MS)) {
+    card._reviveAt = t;
+    const mode = cuboaiPlayerMode(p);
+    try { p.onconnect(); } catch (e) { return 'threw'; }
+    return mode;
+  }
+  if (t - card._progressAt >= CUBOAI_STUCK_MS && typeof p.ondisconnect === 'function') {
+    card._progressAt = t;
+    card._restartAt = t;
+    const mode = cuboaiPlayerMode(p);
+    try { p.ondisconnect(); } catch (e) { /* the dial below still runs */ }
+    return 'stuck:' + mode;
+  }
+  return null;
+}
+
+// Home Assistant sometimes replaces a dashboard's cards with new ones (seen on
+// the iPhone app about 8 s after a page load). With `background: true` the old
+// card's player keeps its stream up although nobody can see it: a second
+// stream on mobile data, and a second consumer at the camera. A card off the
+// page for CUBOAI_REPLACED_MS while another card shows the same camera stops
+// its player; put back on the page, webrtc-camera dials again by itself. A
+// card merely off screen (another dashboard view) keeps playing, as before.
+const CUBOAI_REPLACED_MS = 10000;
+const cuboaiCardRefs = [];
+
+function cuboaiRegisterCard(card) {
+  if (card.__cuboRegistered || typeof WeakRef !== 'function') return;
+  card.__cuboRegistered = true;
+  cuboaiCardRefs.push(new WeakRef(card));
+}
+
+function cuboaiStopReplaced(card, t) {
+  if (card.isConnected) {
+    card._detachedAt = null;
+    card._stoppedAsReplaced = false;
+    return false;
+  }
+  if (card._detachedAt == null) {
+    card._detachedAt = t;
+    return false;
+  }
+  if (card._stoppedAsReplaced || t - card._detachedAt < CUBOAI_REPLACED_MS) return false;
+  const id = card._liveDeviceId;
+  const p = card.content;
+  if (!id || !p || typeof p.ondisconnect !== 'function') return false;
+  for (let i = cuboaiCardRefs.length - 1; i >= 0; i -= 1) {
+    const other = cuboaiCardRefs[i].deref();
+    if (!other) {
+      cuboaiCardRefs.splice(i, 1);
+      continue;
+    }
+    if (other !== card && other.isConnected && other._liveDeviceId === id) {
+      card._stoppedAsReplaced = true;
+      try { p.ondisconnect(); } catch (e) { /* already stopped */ }
+      return true;
+    }
+  }
+  return false;
+}
+
 // Single source of truth for the webrtc-camera child config. This object was
 // duplicated at three call sites, so flags added to one copy silently missed
 // the others. There is deliberately NO `url:` fallback — resolving through the
 // entity makes camera.stream_source() supply the healed RTSP port, the NVR
 // credentials, and the producer pre-warm, none of which a hand-built URL has.
-function cuboaiWebrtcConfig(found, micEnabled, isMuted) {
+// The microphone is NOT part of it: two-way audio has its own path over Home
+// Assistant's websocket (_cuboStartMic), so a mic tap never reconnects the
+// picture. Adding the mic to the video connection reconnected it on every tap
+// (black picture, and on iOS the session came back without the mic).
+function cuboaiWebrtcConfig(found, isMuted) {
   const attrs = (found && found.state && found.state.attributes) || {};
   return {
     type: 'custom:webrtc-camera',
     entity: found.entityId,
-    mode: micEnabled ? 'webrtc' : 'webrtc,mse',
+    mode: 'webrtc,mse',
     ui: true,
     muted: isMuted,
     poster: attrs.entity_picture || undefined,
@@ -91,9 +647,222 @@ function cuboaiWebrtcConfig(found, micEnabled, isMuted) {
     // minimized or the tab is hidden. Without this, video-rtc disconnects ~5s
     // after the page hides and the sound stops.
     background: true,
-    media: micEnabled ? 'video,audio,microphone' : 'video,audio',
+    media: 'video,audio',
   };
 }
+
+// ── cuboai mic helpers ──
+// Two-way audio over Home Assistant's own websocket. The card captures the
+// microphone, resamples it to 16 kHz 16-bit mono and sends it as binary
+// messages -- [handler id byte] + PCM -- to the `cuboai/talk` command, which
+// feeds a camera talk session running in a child process on the HA box.
+// Pure helpers only (no DOM), so tests/test_mic_capture.py runs them in Node.
+const CUBOAI_MIC_RATE = 16000;            // what the card sends: s16le mono
+const CUBOAI_MIC_CHUNK = 640;             // samples per message: 40 ms, 1281 bytes, 25 a second
+const CUBOAI_MIC_MAX_BUFFERED = 32768;    // bytes already queued in the socket (~1 s): drop, don't lag
+const CUBOAI_MIC_LOWPASS_ABOVE = 17600;   // context rates above this get the anti-alias filter
+const CUBOAI_MIC_SUBSCRIBE_MS = 10000;    // Home Assistant must accept the talk within this
+const CUBOAI_MIC_NO_LIVE_MS = 40000;      // ...and the camera start pulling audio within this (server: 35 s)
+const CUBOAI_MIC_BACKUP_MS = 125000;      // hard stop even if the server's 120 s cap never arrives
+const CUBOAI_MIC_ENDED_WAIT_MS = 4000;    // after the end message, wait this long for `ended`
+
+// Test mode (a dry run: everything but the camera, nothing plays). Fails safe:
+// ANY value given for a switch turns it on, except the literal `false`. YAML
+// hands `talk_dry_run: "true"`, `yes`, `on` or `1` over as strings or numbers,
+// and each of those quietly becoming a real, audible talk in the nursery is the
+// one mistake this must never allow. Only a missing switch or `false` is off.
+function cuboaiMicDryRunAsked(value) {
+  return value !== undefined && value !== false;
+}
+
+// Browsers expose the microphone only in a secure context (https, or
+// localhost). On a plain http:// LAN address `navigator.mediaDevices` does not
+// exist at all, whatever the transport.
+function cuboaiMicCanCapture(win) {
+  const md = win && win.navigator && win.navigator.mediaDevices;
+  return !!(win && win.isSecureContext && md && typeof md.getUserMedia === 'function');
+}
+
+// Stateful linear interpolation, float [-1, 1] in, Int16 out, continuous
+// across pieces of any size: it keeps the fractional read position and the
+// previous piece's last sample. Anti-aliasing happens before it, in the audio
+// graph (two native low-pass biquads). Out-of-range input is clamped, never
+// wrapped round to the opposite sign.
+function cuboaiMicResampler(inRate, outRate = CUBOAI_MIC_RATE) {
+  const step = inRate / outRate;
+  let pos = 1, last = 0;                  // virtual input: v[0] = last, v[i] = input[i - 1]
+  return (input) => {
+    const n = input ? input.length : 0;
+    if (!n) return new Int16Array(0);
+    const out = new Int16Array(Math.max(0, Math.ceil((n - pos) / step)) + 1);
+    let k = 0;
+    while (pos < n) {
+      const i = pos | 0, f = pos - i;
+      const a = i === 0 ? last : input[i - 1], b = input[i];
+      let s = a + (b - a) * f;
+      s = s < -1 ? -1 : s > 1 ? 1 : s;
+      out[k++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      pos += step;
+    }
+    pos -= n;
+    last = input[n - 1];
+    return out.subarray(0, k);
+  };
+}
+
+// Fixed-size frames out of pieces of any size. The remainder waits for the
+// next piece; nothing is padded and nothing is lost.
+function cuboaiMicChunker(size = CUBOAI_MIC_CHUNK) {
+  let buf = new Int16Array(size), len = 0;
+  return (pcm) => {
+    const out = [];
+    for (let i = 0; pcm && i < pcm.length;) {
+      const n = Math.min(size - len, pcm.length - i);
+      buf.set(pcm.subarray(i, i + n), len);
+      len += n;
+      i += n;
+      if (len === size) { out.push(buf); buf = new Int16Array(size); len = 0; }
+    }
+    return out;
+  };
+}
+
+function cuboaiMicCheckId(id) {
+  if (!Number.isInteger(id) || id < 1 || id > 255) throw new RangeError(`cuboai mic: bad handler id ${id}`);
+}
+
+// One binary websocket message: byte 0 is the binary handler id Home Assistant
+// gave this talk (1..255), the PCM follows. The Int16Array's own bytes are
+// little-endian on every browser platform, which is what s16le means -- HA's
+// Assist sends its microphone the same way.
+function cuboaiMicFrame(id, pcm) {
+  cuboaiMicCheckId(id);
+  const frame = new Uint8Array(1 + pcm.byteLength);
+  frame[0] = id;
+  frame.set(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), 1);
+  return frame;
+}
+
+// End of the talk: the handler id alone, exactly one byte. A 0-byte binary
+// message makes Home Assistant drop the WHOLE websocket connection.
+function cuboaiMicEndFrame(id) {
+  cuboaiMicCheckId(id);
+  return new Uint8Array([id]);
+}
+
+// May a frame go out on this socket now? 'closed' (not open: never queue into
+// a dead socket), 'backlog' (over ~1 s already waiting, e.g. a slow mobile
+// uplink: drop this frame rather than let the voice fall ever further
+// behind), or 'ok'.
+function cuboaiMicSendGate(sock) {
+  if (!sock || sock.readyState !== 1) return 'closed';
+  if (sock.bufferedAmount > CUBOAI_MIC_MAX_BUFFERED) return 'backlog';
+  return 'ok';
+}
+
+// The button's life: idle -tap-> connecting -live-> live; a tap or any stop
+// while connecting or live -> stopping -stopped-> idle. Anything else is
+// ignored: a late `live` after a cancel must not light the button up again,
+// and a tap while stopping must not start a second talk.
+function cuboaiMicNextState(state, ev) {
+  switch (state) {
+    case 'idle': return ev === 'tap' ? 'connecting' : 'idle';
+    case 'connecting':
+      if (ev === 'live') return 'live';
+      return ev === 'tap' || ev === 'stop' ? 'stopping' : 'connecting';
+    case 'live': return ev === 'tap' || ev === 'stop' ? 'stopping' : 'live';
+    case 'stopping': return ev === 'stopped' ? 'idle' : 'stopping';
+    default: return 'idle';
+  }
+}
+
+const CUBOAI_MIC_TEXT = {
+  no_capture: 'This browser does not give web pages a microphone.',
+  no_camera: 'Two-way audio: no CuboAI camera found for this card.',
+  NotAllowedError: 'Microphone access was not allowed (iPhone: Settings › Home Assistant › Microphone).',
+  NotFoundError: 'No microphone found.',
+  NotReadableError: 'Microphone busy (a call or another app is using it).',
+  // Refusals from Home Assistant (the talk never started).
+  not_found: 'Two-way audio: this camera is not set up in Home Assistant.',
+  unauthorized: "Your Home Assistant user may not use this camera's speaker.",
+  speaker_busy: 'The camera speaker is playing. Stop the music first, then talk.',
+  busy: 'Someone is already talking through this camera.',
+  spawn_failed: 'Two-way audio could not start on Home Assistant (see its log).',
+  unknown_command: 'Two-way audio needs the CuboAI integration updated and Home Assistant restarted.',
+  timeout: 'Home Assistant did not answer the talk request in time.',
+  // The camera side.
+  camera_unreachable: "Couldn't reach the camera.",
+  camera_refused: "The camera didn't accept the talk (it may be busy).",
+  camera_lost: 'Lost the connection to the camera.',
+  camera_timeout: "The camera didn't start the talk in time.",
+  internal: 'Two-way audio failed (see the Home Assistant log).',
+  // Why a talk ended.
+  idle: 'Talk stopped: no audio arrived from this device.',
+  max_duration: 'Talk stopped at the time limit.',
+  disconnected: 'Talk stopped: the connection to Home Assistant dropped.',
+  hidden: 'Talk stopped: the app went to the background.',
+  track_ended: 'Talk stopped: another app took the microphone.',
+  audio_interrupted: 'Talk stopped: the phone interrupted the audio (a call or Siri).',
+  dry_run_refused: 'TEST MODE was not confirmed by Home Assistant, so nothing was sent.',
+  shutdown: 'Talk stopped: Home Assistant is restarting.',
+  unloaded: 'Talk stopped: the camera was reloaded in Home Assistant.',
+  child_exit: 'Talk stopped on the Home Assistant side (see its log).',
+  client_end: '',
+  card_removed: '',
+};
+const CUBOAI_MIC_ALIAS = {
+  SecurityError: 'NotAllowedError',
+  OverconstrainedError: 'NotFoundError',
+  AbortError: 'NotReadableError',
+};
+
+// Text for anything that stops or refuses a talk: a code or reason string
+// ('speaker_busy', 'idle', ...), a Home Assistant error {code, message}, or a
+// getUserMedia exception (by its name). `where` is the page's origin, shown
+// when the page is not secure. '' means "say nothing" (the user's own stop).
+function cuboaiMicErrorText(errOrCode, where) {
+  if (errOrCode === 'insecure') {
+    return 'The microphone needs Home Assistant opened over HTTPS. This page is ' + (where || 'http://…') +
+      ', which browsers block. Open Home Assistant through its https:// address (in the HA app, the ' +
+      'home/internal URL too).';
+  }
+  const e = errOrCode || {};
+  // A DOMException also has a numeric legacy `code`; only a string code is
+  // Home Assistant's, otherwise the exception's name decides.
+  const key = typeof e === 'string' ? e : (typeof e.code === 'string' ? e.code : e.name);
+  const k = CUBOAI_MIC_ALIAS[key] || key;
+  if (typeof k === 'string' && Object.prototype.hasOwnProperty.call(CUBOAI_MIC_TEXT, k)) return CUBOAI_MIC_TEXT[k];
+  if (typeof e === 'string') return `Talk ended (${e}).`;
+  return 'Two-way audio failed: ' + (e.message || key || String(errOrCode));
+}
+
+// The capture tap, loaded into the AudioContext from a Blob URL: copies
+// channel 0 into 1024-frame batches and posts each batch to the main thread
+// (transferred, not copied). 'stop' ends processing.
+const CUBOAI_MIC_WORKLET_SRC = `
+class CuboaiMicTap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.n = 1024; this.buf = new Float32Array(this.n); this.len = 0; this.on = true;
+    this.port.onmessage = (e) => { if (e.data === 'stop') this.on = false; };
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (this.on && ch) {
+      for (let i = 0; i < ch.length; i++) {
+        this.buf[this.len++] = ch[i];
+        if (this.len === this.n) {
+          this.port.postMessage(this.buf, [this.buf.buffer]);
+          this.buf = new Float32Array(this.n); this.len = 0;
+        }
+      }
+    }
+    return this.on;
+  }
+}
+registerProcessor('cuboai-mic-tap', CuboaiMicTap);
+`;
+// ── end mic helpers ──
 
 // MSE playback away from home. On Wi-Fi a phone plays WebRTC (Opus audio).
 // On mobile data through the Cloudflare tunnel WebRTC can't connect, so
@@ -257,6 +1026,7 @@ class CuboAICameraCardEditor extends HTMLElement {
     check('#show-mat-toggle', c.show_mat_overlay !== false);
     check('#show-music-toggle', c.show_music !== false);
     check('#show-timestamp-toggle', c.show_timestamp === true);
+    check('#talk-mute-toggle', c.talk_mutes_speaker === true);
   }
 
   set hass(hass) {
@@ -340,6 +1110,17 @@ class CuboAICameraCardEditor extends HTMLElement {
         </div>
 
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
+          <label style="display: block; font-weight: 500; margin-bottom: 8px;">Microphone:</label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="talk-mute-toggle">
+            <span>Mute the room's sound on this device while talking</span>
+          </label>
+          <p style="color: var(--secondary-text-color); font-size: 12px; margin-top: 8px;">
+            Off: talking leaves the speaker as it is. On: the sound comes back when you stop.
+          </p>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
           <label style="display: block; font-weight: 500; margin-bottom: 8px;">Video Compatibility:</label>
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="h264-toggle">
@@ -403,6 +1184,7 @@ class CuboAICameraCardEditor extends HTMLElement {
       ['#show-mat-toggle', 'show_mat_overlay', true],
       ['#show-music-toggle', 'show_music', true],
       ['#show-timestamp-toggle', 'show_timestamp', false],
+      ['#talk-mute-toggle', 'talk_mutes_speaker', false],
     ]) {
       const el = this.querySelector(id);
       if (el) {
@@ -500,6 +1282,8 @@ class CuboAICameraCardEditor extends HTMLElement {
       if (target.checked) delete newConfig.show_music; else newConfig.show_music = false;
     } else if (target.id === "show-timestamp-toggle") {
       if (target.checked) newConfig.show_timestamp = true; else delete newConfig.show_timestamp;
+    } else if (target.id === "talk-mute-toggle") {
+      if (target.checked) newConfig.talk_mutes_speaker = true; else delete newConfig.talk_mutes_speaker;
     }
 
     // Use CustomEvent so `detail` is delivered reliably (a plain Event with a
@@ -528,6 +1312,11 @@ class CuboAICameraCard extends HTMLElement {
     if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
     if (this._tsClock) { clearInterval(this._tsClock); this._tsClock = null; }
+    // Never leave the microphone open on a card nobody is looking at. Checked a
+    // moment later, not now: a dashboard that re-flows its columns (masonry, on
+    // rotating the phone) takes the card out and puts it straight back, which
+    // must not end a talk. A card really gone is still stopped, one task later.
+    if (this._mic) setTimeout(() => { if (!this.isConnected && this._mic) this._cuboStopMic('card_removed'); }, 0);
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
 
@@ -538,6 +1327,494 @@ class CuboAICameraCard extends HTMLElement {
 
   static getStubConfig() {
     return { type: "custom:cuboai-camera-card", device_id: "" };
+  }
+
+  // A short message over the video (why the mic cannot start, that it is
+  // live, why it stopped). ms = 0 keeps it until the next one.
+  _cuboNotice(text, ms = 5000) {
+    const host = (this.micButton && this.micButton.parentNode) || this;
+    if (!this._noticeEl) {
+      this._noticeEl = document.createElement('div');
+      this._noticeEl.style.cssText = 'position: absolute !important; top: 64px !important; left: 16px !important; right: 16px !important; z-index: 2147483647 !important; background: rgba(0,0,0,0.75) !important; color: #fff !important; padding: 8px 12px !important; border-radius: 8px !important; font-size: 13px !important; line-height: 1.4 !important; pointer-events: none !important;';
+    }
+    if (this._noticeEl.parentNode !== host) host.appendChild(this._noticeEl);
+    this._noticeEl.textContent = text;
+    this._noticeEl.style.display = 'block';
+    clearTimeout(this._noticeTimer);
+    this._noticeTimer = ms > 0 ? setTimeout(() => this._cuboNoticeHide(), ms) : null;
+  }
+
+  _cuboNoticeHide() {
+    clearTimeout(this._noticeTimer);
+    this._noticeTimer = null;
+    if (this._noticeEl) this._noticeEl.style.display = 'none';
+  }
+
+  // ── Two-way audio ────────────────────────────────────────────────────
+  // Tap to talk, tap again to stop. The microphone is captured here as 16 kHz
+  // 16-bit mono and streamed over Home Assistant's own websocket to the
+  // `cuboai/talk` command, which runs the camera talk in a child process (see
+  // the helpers at the top). The video player is never reconfigured for it.
+  // The speaker is never touched: talking leaves the room sound exactly as the
+  // user and the card's audio setting have it (the phone's echo cancellation
+  // keeps its own speaker out of the mic).
+
+  _cuboMicSet(ev) {
+    this._micState = cuboaiMicNextState(this._micState || 'idle', ev);
+    this._cuboMicPaint();
+  }
+
+  _cuboMicPaint() {
+    const b = this.micButton;
+    if (!b) return;
+    const st = this._micState || 'idle';
+    const [icon, bg, label] = {
+      idle: ['mdi:microphone-off', 'rgba(0, 0, 0, 0.5)', 'Talk'],
+      connecting: ['mdi:microphone', 'rgba(255, 160, 0, 0.9)', 'Connecting… tap to cancel'],
+      live: ['mdi:microphone', 'rgba(220, 53, 69, 0.9)', 'Live: tap to stop'],
+      stopping: ['mdi:microphone-off', 'rgba(0, 0, 0, 0.35)', 'Stopping…'],
+    }[st];
+    b.innerHTML = `<ha-icon icon="${icon}"></ha-icon>`;
+    b.style.backgroundColor = bg;
+    b.setAttribute('title', label);
+    b.setAttribute('aria-label', label);
+    // Disabled while stopping: that also spaces out the camera handshakes,
+    // which the camera rate-limits.
+    b.disabled = st === 'stopping';
+    b.style.pointerEvents = st === 'stopping' ? 'none' : '';
+    b.style.opacity = st === 'stopping' ? '0.6' : '';
+    // Animated through the element itself: the button lives inside the
+    // player's shadow root, where the page's @keyframes do not reach.
+    if (this._micAnim) { try { this._micAnim.cancel(); } catch (e) { /* gone */ } this._micAnim = null; }
+    if (typeof b.animate === 'function') {
+      if (st === 'connecting') {
+        this._micAnim = b.animate([{ opacity: 1 }, { opacity: 0.45 }, { opacity: 1 }],
+          { duration: 1000, iterations: Infinity });
+      } else if (st === 'live') {
+        this._micAnim = b.animate([
+          { boxShadow: '0 0 0 0 rgba(220, 53, 69, 0.75)' },
+          { boxShadow: '0 0 0 14px rgba(220, 53, 69, 0)' },
+        ], { duration: 1200, iterations: Infinity });
+      }
+    }
+  }
+
+  // The camera the talk is for: the pinned device, else the camera the live
+  // picture was built for (_liveDeviceId). Never re-resolved per tap: an
+  // unpinned card finds its speaker as the FIRST match in hass.states, an order
+  // that changes when an entity is re-added (an entry reload), and the voice
+  // must go to the nursery on screen, not to whichever camera sorts first.
+  _cuboMicDeviceId() {
+    const pinned = (this._config || {}).device_id;
+    if (pinned) return pinned;
+    return this._liveDeviceId || null;
+  }
+
+  // Read fresh on every send and never kept: the frontend replaces the socket
+  // on every reconnect, and a handler id belongs to one connection only.
+  _cuboMicSocket() {
+    const conn = this._hass && this._hass.connection;
+    return conn ? conn.socket : null;
+  }
+
+  _cuboMicLabel(mic, text) {
+    return mic.dryRun ? `TEST MODE — nothing plays at the camera. ${text}` : text;
+  }
+
+  _cuboMicSay(mic, what) {
+    const text = cuboaiMicErrorText(what);
+    if (!text) return;
+    mic.noticed = true;
+    this._cuboNotice(text, 8000);
+  }
+
+  _cuboMedia() {
+    const root = this.content ? (this.content.shadowRoot || this.content) : null;
+    if (!root || typeof root.querySelector !== 'function') return {};
+    return { video: root.querySelector('video'), audio: root.querySelector('audio'), icon: root.querySelector('.volume') };
+  }
+
+  async _cuboStartMic() {
+    if ((this._micState || 'idle') !== 'idle' || this._mic) return;
+    if (!cuboaiMicCanCapture(window)) {
+      const where = (window.location && window.location.origin) || '';
+      this._cuboNotice(cuboaiMicErrorText(window.isSecureContext ? 'no_capture' : 'insecure', where), 12000);
+      return;
+    }
+    const deviceId = this._cuboMicDeviceId();
+    const conn = this._hass && this._hass.connection;
+    if (!deviceId || !conn || typeof conn.subscribeMessage !== 'function') {
+      this._cuboNotice(cuboaiMicErrorText('no_camera'), 6000);
+      return;
+    }
+    const dryRun = cuboaiMicDryRunAsked(window.__cuboaiMicDryRun) ||
+      cuboaiMicDryRunAsked((this._config || {}).talk_dry_run);
+    const mic = {
+      deviceId, dryRun, conn, handlerId: null, timers: [], sent: 0, dropped: 0,
+      closed: false, chunk: cuboaiMicChunker(CUBOAI_MIC_CHUNK),
+    };
+    mic.endedP = new Promise((resolve) => { mic.endedResolve = resolve; });
+    this._mic = mic;
+    this._cuboMicSet('tap');
+    this._cuboNotice(this._cuboMicLabel(mic, 'Connecting to the camera…'), 0);
+    // iOS starts audio only inside the tap itself: create and resume the
+    // context synchronously, BEFORE anything is awaited. No sampleRate option:
+    // Firefox refuses a microphone on a context of another rate, and a
+    // Bluetooth headset on iOS changes the hardware rate.
+    try {
+      mic.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      Promise.resolve(mic.ctx.resume()).catch(() => {});
+    } catch (e) {
+      return this._cuboMicFail(mic, e);
+    }
+    try {
+      mic.stream = await this._cuboMicGetStream();
+      if (mic.closed) return this._cuboMicTeardown(mic);    // cancelled at the permission prompt
+      await this._cuboMicCapture(mic);
+      if (mic.closed) return this._cuboMicTeardown(mic);
+    } catch (e) {
+      return this._cuboMicFail(mic, e);
+    }
+    this._cuboMicArm(mic);
+    if (mic.closed) return;                               // ended by the state the arming found
+    this._cuboTalkMuteOn(mic);
+    // Only now is the talk opened: a refused or missing microphone never
+    // makes the camera's speaker click. `resubscribe: false` -- after a
+    // reconnect the frontend would otherwise quietly re-open a talk that
+    // nobody is holding.
+    const msg = { type: 'cuboai/talk', device_id: deviceId, sample_rate: CUBOAI_MIC_RATE, dry_run: dryRun };
+    mic.timers.push(setTimeout(() => {
+      if (this._micState === 'connecting') this._cuboMicEnd(mic, 'camera_timeout');
+    }, CUBOAI_MIC_NO_LIVE_MS));
+    mic.timers.push(setTimeout(() => this._cuboMicEnd(mic, 'max_duration'), CUBOAI_MIC_BACKUP_MS));
+    let timer = null;
+    try {
+      const pending = conn.subscribeMessage((ev) => this._cuboMicEvent(mic, ev), msg, { resubscribe: false });
+      // Registered first, so it runs before the race below resumes. A talk
+      // that is accepted after a stop or a timeout is released at once.
+      pending.then((unsub) => {
+        mic.unsub = unsub;
+        if (mic.closed) this._cuboMicRelease(mic);
+      }, () => {});
+      await Promise.race([pending, new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject({ code: 'timeout' }), CUBOAI_MIC_SUBSCRIBE_MS);
+      })]);
+    } catch (e) {
+      return this._cuboMicFail(mic, e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async _cuboMicGetStream() {
+    const md = navigator.mediaDevices;
+    try {
+      return await md.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (e) {
+      // Constraints some devices cannot meet: take whatever microphone there is.
+      if (e && (e.name === 'OverconstrainedError' || e.name === 'TypeError')) return md.getUserMedia({ audio: true });
+      throw e;
+    }
+  }
+
+  // source -> 2x low-pass 7.2 kHz (only above 17.6 kHz) -> tap -> Gain(0) ->
+  // destination. The silent gain keeps the graph pulled without playing the
+  // microphone back. The tap is an AudioWorklet from a Blob URL, or a
+  // ScriptProcessor where worklets are missing or refuse to load.
+  async _cuboMicCapture(mic) {
+    const ctx = mic.ctx;
+    const src = ctx.createMediaStreamSource(mic.stream);
+    mic.nodes = [src];
+    let head = src;
+    if (ctx.sampleRate > CUBOAI_MIC_LOWPASS_ABOVE) {
+      for (let i = 0; i < 2; i++) {
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 7200;
+        lp.Q.value = 0.707;
+        head.connect(lp);
+        head = lp;
+        mic.nodes.push(lp);
+      }
+    }
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    sink.connect(ctx.destination);
+    mic.nodes.push(sink);
+    const resample = cuboaiMicResampler(ctx.sampleRate, CUBOAI_MIC_RATE);   // the REAL rate
+    const onPcm = (f32) => this._cuboMicSend(mic, resample(f32));
+    let tap = null;
+    if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+      const url = URL.createObjectURL(new Blob([CUBOAI_MIC_WORKLET_SRC], { type: 'application/javascript' }));
+      try {
+        await ctx.audioWorklet.addModule(url);
+        tap = new AudioWorkletNode(ctx, 'cuboai-mic-tap', {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+          channelCount: 1, channelCountMode: 'explicit',
+        });
+        tap.port.onmessage = (ev) => onPcm(ev.data);
+        mic.path = 'worklet';
+      } catch (e) {
+        tap = null;
+        console.warn('CuboAI mic: AudioWorklet unavailable, using ScriptProcessor', e);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    if (!tap) {
+      tap = ctx.createScriptProcessor(2048, 1, 1);
+      tap.onaudioprocess = (ev) => {
+        onPcm(ev.inputBuffer.getChannelData(0));
+        ev.outputBuffer.getChannelData(0).fill(0);
+      };
+      mic.path = 'script';
+    }
+    mic.tap = tap;
+    mic.nodes.push(tap);
+    if (mic.closed) return;
+    head.connect(tap);
+    tap.connect(sink);
+  }
+
+  // Every way a talk can end without a tap on the button.
+  _cuboMicArm(mic) {
+    const end = (reason) => () => this._cuboMicEnd(mic, reason);
+    const track = mic.stream.getAudioTracks ? mic.stream.getAudioTracks()[0] : null;
+    if (track) track.onended = end('track_ended');     // the OS or another app took the mic
+    mic.onVis = () => { if (document.visibilityState === 'hidden') this._cuboMicEnd(mic, 'hidden'); };
+    document.addEventListener('visibilitychange', mic.onVis);
+    // Handler ids die with the socket; there is no automatic restart after a
+    // reconnect -- a talk nobody asked for again must not resume. Armed until
+    // the talk is fully released: a drop while _cuboStopMic waits for `ended`
+    // ends that wait too (`ended` can no longer arrive), and nothing is
+    // unsubscribed after it (_cuboMicRelease).
+    mic.onDisc = () => {
+      mic.connLost = true;
+      mic.endedResolve();
+      this._cuboMicEnd(mic, 'disconnected');
+    };
+    try { mic.conn.addEventListener('disconnected', mic.onDisc); } catch (e) { /* old frontend */ }
+    const onState = () => {
+      const s = mic.ctx.state;
+      if (s === 'interrupted' || s === 'closed') this._cuboMicEnd(mic, 'audio_interrupted');
+      else if (s === 'suspended') Promise.resolve(mic.ctx.resume()).catch(() => {});
+    };
+    mic.ctx.onstatechange = onState;
+    // What changed while the microphone and the worklet were loading has
+    // already fired (or never will): look now, before the talk is opened. A
+    // phone locked during the permission prompt must not start a talk that
+    // only the server's idle timer would end.
+    if (document.visibilityState === 'hidden') this._cuboMicEnd(mic, 'hidden');
+    else if (track && track.readyState === 'ended') this._cuboMicEnd(mic, 'track_ended');
+    else onState();
+  }
+
+  _cuboMicDisarm(mic) {
+    mic.timers.forEach((t) => clearTimeout(t));
+    mic.timers = [];
+    if (mic.onVis) document.removeEventListener('visibilitychange', mic.onVis);
+    if (mic.onDisc) { try { mic.conn.removeEventListener('disconnected', mic.onDisc); } catch (e) { /* old frontend */ } }
+    mic.onVis = mic.onDisc = null;
+  }
+
+  // Release the microphone completely: tracks stopped and the context CLOSED.
+  // HA's own recorder only suspends and disables the track, which keeps the
+  // iOS play-and-record audio session (and the orange dot) alive. Safe to
+  // call again, e.g. for a stream that arrived after a cancel.
+  // Option `talk_mutes_speaker` (off by default): mute the room's sound on
+  // this device while talking, so the phone's speaker is not heard back
+  // through the camera. Only the video element is touched; the player's own
+  // speaker icon follows it (volumechange), so icon and sound never disagree.
+  // Nothing is saved: not in this browser, not in the shared setting. Setting
+  // `isMuted` makes the card's own unmute paths (the watchdog, a recording
+  // swap, a rebuilt video) stand down for the talk.
+  _cuboTalkMuteOn(mic) {
+    if (!this._config || this._config.talk_mutes_speaker !== true || mic.talkMute) return;
+    const { video, audio } = this._cuboMedia();
+    mic.talkMute = { wasMuted: video ? video.muted : this.isMuted, wasIsMuted: this.isMuted, touched: false };
+    this.isMuted = true;
+    if (video) video.muted = true;
+    if (audio) audio.muted = true;
+  }
+
+  // Back to what the speaker was before the talk -- unless the user tapped the
+  // speaker during it: that choice stands. The unmute runs inside the stop tap
+  // when there is one (iOS unmutes a playing video only in a gesture); when the
+  // talk ended by itself and the browser pauses the video for it, the picture
+  // goes on muted and the next tap brings the sound back.
+  _cuboTalkMuteOff(mic) {
+    const tm = mic && mic.talkMute;
+    if (!tm) return;
+    mic.talkMute = null;
+    const { video, audio } = this._cuboMedia();
+    if (tm.touched) {
+      if (video) this.isMuted = video.muted;
+      return;
+    }
+    this.isMuted = tm.wasIsMuted;
+    if (tm.wasMuted || !video) return;
+    const inTap = !!(navigator.userActivation && navigator.userActivation.isActive);
+    video.muted = false;
+    if (audio) audio.muted = false;
+    if (video.paused) Promise.resolve(video.play()).catch(() => {});
+    if (inTap) return;
+    setTimeout(() => {
+      if (!video.paused || (this._mic && this._mic.talkMute)) return;
+      this._soundNeedsGesture = true;
+      this.isMuted = true;
+      video.muted = true;
+      if (audio) audio.muted = true;
+      Promise.resolve(video.play()).catch(() => {});
+      if (this._armGestureUnmute) this._armGestureUnmute();
+      // Added to a notice that is up (why the talk ended), never in its place.
+      const hint = 'Tap 🔈 to hear the room.';
+      const up = this._noticeEl && this._noticeEl.style.display !== 'none' ? this._noticeEl.textContent : '';
+      this._cuboNotice(up ? `${up} ${hint}` : hint, up ? 8000 : 6000);
+    }, 250);
+  }
+
+  _cuboMicTeardown(mic) {
+    this._cuboTalkMuteOff(mic);
+    const tap = mic.tap;
+    if (tap) {
+      try { if (tap.port) { tap.port.onmessage = null; tap.port.postMessage('stop'); } } catch (e) { /* closed */ }
+      tap.onaudioprocess = null;
+    }
+    (mic.nodes || []).forEach((n) => { try { n.disconnect(); } catch (e) { /* never connected */ } });
+    mic.nodes = [];
+    if (mic.stream) {
+      try { mic.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); }); } catch (e) { /* gone */ }
+    }
+    if (mic.ctx) {
+      mic.ctx.onstatechange = null;
+      try { if (mic.ctx.state !== 'closed') Promise.resolve(mic.ctx.close()).catch(() => {}); } catch (e) { /* gone */ }
+    }
+  }
+
+  _cuboMicSend(mic, pcm) {
+    const st = this._micState;
+    if (mic.closed || this._mic !== mic || mic.handlerId == null || (st !== 'connecting' && st !== 'live')) return;
+    for (const chunk of mic.chunk(pcm)) {
+      const sock = this._cuboMicSocket();
+      if (cuboaiMicSendGate(sock) !== 'ok') { mic.dropped += 1; continue; }
+      try {
+        sock.send(cuboaiMicFrame(mic.handlerId, chunk));
+        mic.sent += 1;
+      } catch (e) {
+        mic.dropped += 1;
+      }
+    }
+  }
+
+  _cuboMicEvent(mic, ev) {
+    if (!ev) return;
+    if (ev.type === 'ended') {
+      // Also while stopping: _cuboStopMic is waiting for exactly this.
+      mic.ended = ev;
+      mic.endedResolve();
+      // Already stopping: whatever was said about it (an `error`) stands.
+      if (mic.closed) return;
+      if (ev.reason !== 'client_end') this._cuboMicSay(mic, ev.reason || 'internal');
+      this._cuboStopMic(ev.reason || 'ended', mic);
+      return;
+    }
+    if (mic.closed || this._mic !== mic) return;
+    if (ev.type === 'started') {
+      if (mic.dryRun && ev.dry_run !== true) {
+        // Asked for a test and got a real talk: send it nothing, end it now.
+        this._cuboMicSay(mic, 'dry_run_refused');
+        this._cuboStopMic('dry_run_refused', mic);
+        return;
+      }
+      const id = Number(ev.handler_id);
+      if (!Number.isInteger(id) || id < 1 || id > 255) {
+        this._cuboMicSay(mic, 'internal');
+        this._cuboStopMic('internal', mic);
+        return;
+      }
+      mic.handlerId = id;
+      // End our side a second before the server's own cap, so no frame is
+      // ever sent to a handler it has already dropped.
+      const cap = Number(ev.max_secs);
+      if (cap > 0) {
+        mic.timers.push(setTimeout(() => this._cuboMicEnd(mic, 'max_duration'), Math.max(1, cap - 1) * 1000));
+      }
+    } else if (ev.type === 'live') {
+      this._cuboMicSet('live');
+      const how = mic.dryRun ? ` (${mic.path}, ${mic.ctx.sampleRate} Hz)` : '';
+      this._cuboNotice(this._cuboMicLabel(mic, `Live — speak now. Tap to stop${how}`), mic.dryRun ? 0 : 5000);
+    } else if (ev.type === 'status') {
+      // Debug only. In test mode it shows the audio really flows.
+      mic.status = ev;
+      if (mic.dryRun && this._micState === 'live') {
+        this._cuboNotice(this._cuboMicLabel(mic, `Live (${mic.path}, ${mic.ctx.sampleRate} Hz): ` +
+          `${mic.sent} sent, ${mic.dropped} dropped here; camera frames ${ev.speech}.`), 0);
+      }
+    } else if (ev.type === 'error') {
+      // The server ends this talk itself; `ended` follows.
+      mic.serverError = ev.code || 'internal';
+      this._cuboMicSay(mic, ev.code ? ev : 'internal');
+      this._cuboStopMic(mic.serverError, mic);
+    }
+  }
+
+  // A stop that did not come from the button: say why, then stop.
+  _cuboMicEnd(mic, reason) {
+    if (mic.closed || this._mic !== mic) return;
+    this._cuboMicSay(mic, reason);
+    this._cuboStopMic(reason, mic);
+  }
+
+  _cuboMicFail(mic, e) {
+    if (!mic.closed) this._cuboMicSay(mic, e);
+    this._cuboMicTeardown(mic);
+    return this._cuboStopMic('error', mic);
+  }
+
+  // The unsubscribe, once -- and never after the connection dropped. Home
+  // Assistant ended the talk when the socket closed, and the frontend has
+  // already forgotten this command: after its reconnect the command ids start
+  // again, so the old id may now be another card's subscription, which this
+  // unsubscribe would cancel.
+  _cuboMicRelease(mic) {
+    if (!mic.unsub || mic.released || mic.connLost) return Promise.resolve();
+    mic.released = true;
+    return Promise.resolve().then(() => mic.unsub()).catch(() => { /* already gone server-side */ });
+  }
+
+  // Idempotent. Capture first and completely, then the talk: a 1-byte end
+  // message, up to 4 s for the server's `ended`, then unsubscribe. After a
+  // dropped connection there is nobody to tell: Home Assistant ends the talk
+  // itself when the socket closes.
+  async _cuboStopMic(reason = 'client_end', mic = this._mic) {
+    if (!mic || mic.closed) return;
+    mic.closed = true;
+    if (this._mic === mic) this._cuboMicSet('stop');
+    if (!mic.noticed) this._cuboNoticeHide();
+    // The stop paths stay armed until the end (every one is a no-op once
+    // `closed`): a dropped connection must still cut the wait below short.
+    this._cuboMicTeardown(mic);
+    let endSent = false;
+    if (reason !== 'disconnected' && mic.handlerId != null && !mic.ended && !mic.serverError) {
+      const sock = this._cuboMicSocket();
+      if (cuboaiMicSendGate(sock) !== 'closed') {
+        try { sock.send(cuboaiMicEndFrame(mic.handlerId)); endSent = true; } catch (e) { /* socket closing */ }
+      }
+    }
+    mic.handlerId = null;
+    if (reason !== 'disconnected' && !mic.ended && (endSent || mic.serverError)) {
+      let wait = null;
+      await Promise.race([mic.endedP, new Promise((resolve) => { wait = setTimeout(resolve, CUBOAI_MIC_ENDED_WAIT_MS); })]);
+      clearTimeout(wait);
+    }
+    await this._cuboMicRelease(mic);
+    this._cuboMicDisarm(mic);
+    if (this._mic === mic) {
+      this._mic = null;
+      this._cuboMicSet('stopped');
+    }
   }
 
   // ── Shared per-camera settings (synced across all devices via the media
@@ -611,34 +1888,14 @@ class CuboAICameraCard extends HTMLElement {
         this.style.position = 'relative';
         if (!deviceId || !this._speakerEntityId) return;
 
-      this.micEnabled = false;
-      
       const savedMuted = localStorage.getItem(`cuboai_muted_${deviceId}`);
       const defaultMuteState = this._config?.default_mute_state || 'remember';
       
       // Decide whether the user ultimately wants SOUND (unmuted) or silence.
-      let wantUnmuted;
-      if (defaultMuteState === 'unmuted') {
-        wantUnmuted = true;
-      } else if (defaultMuteState === 'muted') {
-        wantUnmuted = false;
-      } else {
-        // 'remember': the shared (cross-device) setting wins, then this
-        // browser's localStorage, then default muted.
-        const sharedMuted = this._getSharedSetting(deviceId, 'muted');
-        if (sharedMuted !== undefined) {
-          wantUnmuted = !sharedMuted;
-        } else {
-          wantUnmuted = savedMuted ? savedMuted !== 'true' : false;
-        }
-      }
-      // ALWAYS start muted. Browsers block UNMUTED autoplay, and a video that
-      // can't autoplay leaves webrtc-camera with no rendered controls — that is
-      // why the speaker button used to vanish / go unclickable on "Always
-      // Unmute". Starting muted guarantees the video plays and the speaker
-      // button stays visible and clickable. If the setting wants sound we
-      // unmute on the user's first interaction (handled in the video init).
-      this.isMuted = true;
+      const wantUnmuted = cuboaiWantUnmuted(defaultMuteState, this._getSharedSetting(deviceId, 'muted'), savedMuted);
+      // The state the player starts in (cuboaiStartMuted): muted everywhere
+      // but Apple, where the setting itself is the starting state.
+      this.isMuted = cuboaiStartMuted(wantUnmuted, navigator.vendor);
       this._wantUnmuted = wantUnmuted;
 
       // Resolve the camera by attribute (#89). Bail out visibly rather than
@@ -668,70 +1925,23 @@ class CuboAICameraCard extends HTMLElement {
       // The poster (camera's last snapshot, shown while (re)connecting instead
       // of a black frame) comes from the entity's entity_picture — an
       // access-token URL served by HA, so it works from any device.
-      const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
+      const webrtcConfig = cuboaiWebrtcConfig(found, this.isMuted);
 
-      // Add the microphone overlay button
+      // Two-way audio button: tap to talk, tap again to stop (_cuboStartMic).
       if (!this.micButton) {
         this.micButton = document.createElement('ha-icon-button');
-        this.micButton.style.cssText = 'position: absolute !important; top: 16px !important; left: 16px !important; z-index: 2147483647 !important; border-radius: 50% !important; color: white !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; transition: all 0.2s !important; display: none !important;';
-        
-        const updateIcon = () => {
-          this.micButton.innerHTML = `<ha-icon icon="${this.micEnabled ? 'mdi:microphone' : 'mdi:microphone-off'}"></ha-icon>`;
-          this.micButton.style.backgroundColor = this.micEnabled ? 'rgba(220, 53, 69, 0.8)' : 'rgba(0, 0, 0, 0.5)';
-        };
-        updateIcon();
-
+        // Visible. It was created `display: none !important` and nothing ever
+        // revealed it, so no install had a mic button. box-shadow is not
+        // !important: the live state animates it (_cuboMicPaint).
+        this.micButton.style.cssText = 'position: absolute !important; top: 16px !important; left: 16px !important; z-index: 2147483647 !important; border-radius: 50% !important; color: white !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: all 0.2s !important; display: inline-flex !important; align-items: center; justify-content: center; cursor: pointer;';
+        // Never touches the video player: no reconfigure, no reconnect.
         this.micButton.addEventListener('click', () => {
-          if (!this.micEnabled && !window.isSecureContext) {
-            console.warn("Microphone access requires a secure connection (HTTPS). Please access Home Assistant via HTTPS.");
-          }
-
-          this.micEnabled = !this.micEnabled;
-          updateIcon();
-          
-          if (this.micEnabled) {
-            // Save current mute state and force mute to prevent echo
-            this.savedMuteState = this.isMuted;
-            this.isMuted = true;
-          } else {
-            // Restore previous mute state
-            this.isMuted = this.savedMuteState !== undefined ? this.savedMuteState : this.isMuted;
-          }
-          
-          const root = this.content?.shadowRoot || this.content;
-          if (root) {
-            const video = root.querySelector('video');
-            const audio = root.querySelector('audio');
-            const volumeIcon = root.querySelector('.volume');
-            if (video) video.muted = this.isMuted;
-            if (audio) audio.muted = this.isMuted;
-            if (volumeIcon) volumeIcon.icon = this.isMuted ? 'mdi:volume-mute' : 'mdi:volume-high';
-          }
-          
-          // Re-render the child to apply the new media config.
-          // IMPORTANT: single transport per state. Listing 'mse,webrtc'
-          // together makes video-rtc run BOTH and race — the winner rips the
-          // other's source out of the <video> (SourceBuffer errors, automute,
-          // and audio-less WebRTC takeovers). MSE carries the camera's AAC
-          // audio for listening; WebRTC is only needed for the two-way mic.
-          // Apple WebKit (iOS) keeps the legacy dual mode: iOS has no classic
-          // MSE (ManagedMediaSource only on 17.1+), the native player handles
-          // the dual negotiation fine, and dual mode is the configuration
-          // proven to deliver sound on iPhones.
-          webrtcConfig.mode = (navigator.vendor || '').includes('Apple') ? 'webrtc,mse' : (this.micEnabled ? 'webrtc' : 'mse');
-          webrtcConfig.media = this.micEnabled ? 'video,audio,microphone' : 'video,audio';
-          webrtcConfig.muted = this.isMuted;
-          if (this.content && this.content.setConfig) {
-            // Mid-playback the picture is the recording, not the live camera.
-            // Re-applying the live config here would snap the user back to now
-            // just for tapping mute.
-            if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
-            this.content.setConfig(webrtcConfig);
-            if (this.content.nextStream) {
-              this.content.nextStream(true);
-            }
-          }
+          const st = this._micState || 'idle';
+          if (st === 'idle') this._cuboStartMic();
+          else if (st === 'connecting' || st === 'live') this._cuboStopMic('client_end');
+          // 'stopping': ignored until the talk has really ended.
         });
+        this._cuboMicPaint();
       }
       
       if (!this.bpmOverlay) {
@@ -768,7 +1978,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.43';
+        const CARD_VERSION = 'v2.6.44';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -952,8 +2162,12 @@ class CuboAICameraCard extends HTMLElement {
         const showEntity = (entityId, muted) => {
           if (!this.content || !this.content.setConfig) return false;
           const found = { entityId, state: (this._hass.states || {})[entityId] };
-          const cfg = cuboaiWebrtcConfig(found, false, muted);
+          const cfg = cuboaiWebrtcConfig(found, muted);
           this._dvrEntity = entityId;
+          // The card's own switch to or from a recording: not a reconnect, so
+          // no frozen live picture labelled "Reconnecting…" over it.
+          const bridged = this._cuboMedia().video;
+          if (bridged && bridged.__cuboBridge && bridged.__cuboBridge.quiet) bridged.__cuboBridge.quiet();
           this.content.setConfig(cfg);
           this.content.hass = this._hass;
           // setConfig alone never re-dials: the player's onconnect() refuses
@@ -1102,7 +2316,8 @@ class CuboAICameraCard extends HTMLElement {
             if (ready) {
               clearInterval(this._dvrWait);
               this._dvrWait = null;
-              showEntity(rec.entityId, false);   // recorded audio, not the mic
+              // Recorded audio on -- unless a talk is holding the room's sound off.
+              showEntity(rec.entityId, !!(this._mic && this._mic.talkMute));
               // Success is NOT noted here: the engine reports "started" even
               // for a moment it then finds empty. The playback clock notes
               // 'ok' only once >5s of footage has really played.
@@ -1371,6 +2586,9 @@ class CuboAICameraCard extends HTMLElement {
       customElements.whenDefined('webrtc-camera').then(() => {
         if (!this.content) {
           this.content = document.createElement('webrtc-camera');
+          // The camera this picture shows: an unpinned card's mic talks to it
+          // and to nothing else (_cuboMicDeviceId).
+          this._liveDeviceId = cuboaiCameraDeviceId(found);
           if (this.content.setConfig) {
             // Rebuilt picture (dashboard navigation, a re-render that dropped
             // the child) while a recording is playing: restore what the scrub
@@ -2386,6 +3604,8 @@ class CuboAICameraCard extends HTMLElement {
         // Use an interval to ensure the button stays attached even if the child re-renders
         if (!this.attachInterval) {
           this.attachInterval = setInterval(() => {
+            cuboaiStopReplaced(this, Date.now());
+            cuboaiRevivePlayer(this, Date.now());
             // Penetrate Shadow DOM if it exists
             const root = this.content.shadowRoot || this.content;
             const player = root.querySelector('.player') || root.querySelector('.card') || root;
@@ -2479,6 +3699,10 @@ class CuboAICameraCard extends HTMLElement {
                 // owns the playback speed and stops video-rtc's 5 s trim from
                 // deleting the frames being played. See cuboaiSteerMsePlayback.
                 cuboaiSteerMsePlayback(video);
+                // Keep the last picture over the black gap while the player
+                // changes stream (Wi-Fi <-> mobile data), and hand it over to a
+                // card Home Assistant rebuilt for the same camera.
+                cuboaiBridgeGap(video, this._liveDeviceId);
 
                 // Show the full camera frame instead of cropping/zooming in.
                 // The inner <video> otherwise crops the (near-square) CuboAI
@@ -2499,6 +3723,9 @@ class CuboAICameraCard extends HTMLElement {
                   if (this._autoUnmuteArmed) return;
                   this._autoUnmuteArmed = true;
                   const doAutoUnmute = (e) => {
+                    // Not while a talk holds the sound off; stays armed for
+                    // the first tap after it.
+                    if (this._mic && this._mic.talkMute) return;
                     window.removeEventListener('pointerdown', doAutoUnmute, true);
                     this._autoUnmuteArmed = false;
                     if (this._userMutedThisSession) return;
@@ -2533,7 +3760,8 @@ class CuboAICameraCard extends HTMLElement {
                 // interaction yet we simply stay muted and unmute on the first
                 // tap (armGestureUnmute), which is silent and clean.
                 const hasInteracted = !!(navigator.userActivation && navigator.userActivation.hasBeenActive);
-                if (!isAppleAudio && this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture) {
+                if (!isAppleAudio && this._wantUnmuted && !this._userMutedThisSession && !this._soundNeedsGesture
+                    && !(this._mic && this._mic.talkMute)) {
                   if (hasInteracted) {
                     video.muted = false;
                     this.isMuted = false;
@@ -2782,6 +4010,9 @@ class CuboAICameraCard extends HTMLElement {
               if (!volumeIcon.dataset.cuboHooked) {
                 volumeIcon.dataset.cuboHooked = "true";
                 volumeIcon.addEventListener('click', () => {
+                  // A speaker tap during a talk that muted the room is the
+                  // user's own choice: the end of the talk leaves it alone.
+                  if (this._mic && this._mic.talkMute) this._mic.talkMute.touched = true;
                   setTimeout(() => {
                     this.isMuted = video ? video.muted : (audio ? audio.muted : false);
                     // The user's explicit choice wins: once they mute, stop
@@ -2912,7 +4143,13 @@ class CuboAICameraCard extends HTMLElement {
             // Adopt a mute change from another device (only in 'remember' mode).
             if (shared.muted !== undefined && (this._config?.default_mute_state || 'remember') === 'remember') {
               const wantMuted = !!shared.muted;
-              if (wantMuted !== this.isMuted) {
+              const talkMute = this._mic && this._mic.talkMute;
+              if (talkMute) {
+                // Muted for a talk (talk_mutes_speaker): the other device's
+                // choice is what the end of the talk brings back.
+                talkMute.wasMuted = wantMuted;
+                talkMute.wasIsMuted = wantMuted;
+              } else if (wantMuted !== this.isMuted) {
                 this.isMuted = wantMuted;
                 const root = this.content?.shadowRoot || this.content;
                 if (root) {
@@ -2942,6 +4179,7 @@ class CuboAICameraCard extends HTMLElement {
   }
 
   setConfig(config) {
+    cuboaiRegisterCard(this);
     try {
       if (!config) {
         throw new Error("Invalid configuration (config is undefined)");
@@ -2958,7 +4196,7 @@ class CuboAICameraCard extends HTMLElement {
          if (this.content && config.device_id) {
            const found = cuboaiFindCameraState(this._hass, config.device_id);
            if (found) {
-             const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
+             const webrtcConfig = cuboaiWebrtcConfig(found, this.isMuted);
              customElements.whenDefined('webrtc-camera').then(() => {
                // Not while a recording is playing: this fires on any config
                // touch and would drop the user back to live mid-scrub.
@@ -2987,11 +4225,14 @@ class CuboAICameraCard extends HTMLElement {
              // CuboAI camera when there is exactly one.
              const found = cuboaiFindCameraState(this._hass, deviceId);
              if (found) {
-               const webrtcConfig = cuboaiWebrtcConfig(found, this.micEnabled, this.isMuted);
+               const webrtcConfig = cuboaiWebrtcConfig(found, this.isMuted);
                customElements.whenDefined('webrtc-camera').then(() => {
                  // Not while a recording is playing: this fires on any config
                  // touch and would drop the user back to live mid-scrub.
-                 if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
+                 if (!this._dvrPlaying) {
+                   this.content.setConfig(webrtcConfig);
+                   this._liveDeviceId = cuboaiCameraDeviceId(found);   // the mic follows the picture
+                 }
                });
              }
          }

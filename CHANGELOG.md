@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.44]
+
+> Tested on an iPhone in the Home Assistant app with a real camera, and offline: the card's code in
+> Node and in a browser against a stand-in Home Assistant, the Home Assistant side against fakes,
+> and the whole path from the card's audio to the camera talk as a dry run. How the microphone
+> works, for maintainers: [docs/two-way-audio.md](docs/two-way-audio.md).
+
+### Added
+- **Talk to the room from the card.** The microphone button on the video (top left) now works:
+  tap it to talk through the camera's speaker, tap it again to stop. It turns amber while the
+  camera opens its speaker, which takes a few seconds, and red once the camera is listening.
+  - The sound travels over Home Assistant's own connection, the one the dashboard already uses, so
+    it works at home and away (Home Assistant Cloud, or your own https address or tunnel) with no
+    VPN, open port or WebRTC setup. Home Assistant hands it to a separate process on the Home
+    Assistant machine, which runs the camera's talk session.
+  - It needs Home Assistant opened over **https**: browsers only give a web page the microphone on
+    a secure address. On a plain `http://` address the button says so. In the Home Assistant app
+    this includes the home (internal) URL.
+  - A talk lasts at most **2 minutes**. It also stops when the app goes to the background, the
+    connection drops, a call takes the microphone, or no audio arrives for 6 seconds.
+  - **One talker per camera.** While the camera's Speaker entity is playing a song or TTS, the
+    button refuses and asks you to stop the music first; while someone is talking, songs and TTS are
+    refused. Nothing is cut off.
+  - **By default talking never changes the speaker.** The room's sound on your phone stays exactly
+    as you and the card's audio setting have it; the phone's own echo cancellation keeps its speaker
+    out of the microphone.
+  - **Option `talk_mutes_speaker`** (also in the visual editor, off by default): mute the room's
+    sound on this device while talking. It is muted once the microphone is captured and comes back
+    inside your stop tap (an iPhone only turns sound on in a tap); a speaker tap during the talk
+    stands; nothing is saved or synced to other devices. The speaker icon simply follows the
+    sound. (A first, always-on version restored the sound after the talk and could come out the
+    opposite way on an iPhone.)
+  - Anyone allowed to control the camera's Speaker entity can talk; an admin user is not needed.
+  - **Test mode:** `talk_dry_run: true` in the card's YAML runs everything except the camera, so
+    nothing plays in the room. The notice on the video starts with *TEST MODE*.
+  - Restart Home Assistant after updating: the talk command is registered at startup.
+
+- **No black gap when the stream changes.** When your phone moves between Wi-Fi and mobile data
+  (WebRTC stops, the fallback starts), after a reconnect, or when switching to a recording, the
+  video used to go black until the new stream's first full picture (up to the camera's 4-second
+  keyframe interval). The last picture now stays on screen until the new picture is really showing,
+  with *Reconnecting…* if the gap outlasts a blink; it is held for as long as a reconnect can take
+  (up to 25 s), then 8 s once the new stream has arrived, and an old picture is never shown again,
+  so a frozen picture can't pass for live. Switching to a recording is not bridged. When Home
+  Assistant rebuilds a YAML dashboard after a network change (a brand-new card, a new empty video),
+  the new card starts from the old card's last picture of the same camera; and a new stream that an
+  iPhone leaves paused is started (muted if the phone refuses sound without a tap). Known: on an
+  iPhone, moving from Wi-Fi to mobile data can still show a short black moment; mobile data to
+  Wi-Fi is seamless.
+- **The picture no longer stays black after a network change.** When the phone moves from Wi-Fi to
+  mobile data, the WebRTC Camera player asks Home Assistant for a new stream address at the very
+  moment Home Assistant's own connection is down; that request fails and the player never tried
+  again, so the picture stayed black until the app was reopened. The card now dials the player
+  again once Home Assistant is back (only for a player that has played before, and never while it
+  is connected or connecting).
+
+### Fixed
+- **On an iPhone the card's audio setting now applies when the camera opens.** Since 2.4.0 every
+  player started muted and the card brought the sound up on the first tap, but on Apple devices that
+  step is switched off (the player's own speaker button owns mute there), so an iPhone always opened
+  muted: *Always Unmuted*, or a remembered unmute, was ignored. On Apple the setting is the starting
+  state again, as in 2.3.x. If the phone refuses sound without a tap, the player falls back to muted
+  by itself and one tap on its speaker button brings it up. Other devices are unchanged.
+
+### Changed
+- The live video no longer carries the microphone. The old, hidden mic button reconfigured and
+  reconnected the video player on every tap; the talk now has its own path and never touches the
+  picture.
+
 ## [2.6.43]
 
 ### Fixed
