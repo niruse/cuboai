@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.45]
+
+### Fixed
+- **Sending a file or text-to-speech to the camera speaker failed on some installs** with
+  `avcodec_send_frame() returned 22 (Invalid argument)` (seen with PyAV 17.0.1). The about 3.5
+  seconds of silence added to the end of every clip was not silence: a new audio frame is
+  uninitialised memory, and about half the time it held invalid numbers (NaN/Inf), which the AAC
+  encoder refuses. Where it did not fail, that leftover memory played as a short burst of noise at
+  the end of the clip. The padding is now zeroed, so it is real silence and the send always
+  completes. The encoder's channel layout is now set to stereo explicitly (it was already stereo by
+  default); the camera receives the same format as before (AAC-LC, 16 kHz, 32 kbit/s) at the same
+  loudness. Verified against a real camera with a silent file: every frame delivered and decoded.
+
 ## [2.6.44]
 
 > Tested on an iPhone in the Home Assistant app with a real camera, and offline: the card's code in
