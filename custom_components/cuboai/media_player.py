@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 
 from homeassistant.components.media_player import (
@@ -339,6 +338,15 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
 
     async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
         """Send an audio file or TTS to the go2rtc speaker stream."""
+        # A live talk from the card owns the camera's speaker (talk.py). Refuse
+        # rather than cut into someone talking to the baby, or queue a song that
+        # starts the moment they stop. Outside the try below, which swallows.
+        from . import talk
+
+        if talk.mic_active(self.hass, self._device_id):
+            from homeassistant.exceptions import HomeAssistantError
+
+            raise HomeAssistantError("The camera speaker is in use by a live talk")
         try:
             import logging
 
@@ -536,6 +544,8 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
     async def _queue_loop(self):
         import asyncio
 
+        from . import talk
+
         current_task = asyncio.current_task()
         loop = asyncio.get_running_loop()
 
@@ -626,73 +636,61 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                     _LOGGER.exception("Exception in _extract_media_url:")
                     continue
 
-                script_path = os.path.join(os.path.dirname(__file__), "tutk", "cuboai_stream_backchannel.py")
+                # One talker per camera speaker (talk.SpeakerArbiter): a live
+                # talk from the card may have started since this queue did.
+                arbiter = talk.get_arbiter(self.hass)
+                if not arbiter.try_claim(self._device_id, "player"):
+                    _LOGGER.warning("Speaker is in use by a live talk — dropping the rest of the queue")
+                    self._queue.clear()
+                    break
 
-                env = os.environ.copy()
-                camera_ip = self._options.get(f"camera_ip_{self._device_id}", "") or self._cam.get("camera_ip", "")
-
-                env["CUBOAI_UID"] = str(self._cam.get("uid") or "")
-                env["CUBOAI_ACCOUNT"] = str(self._cam.get("account") or "")
-                env["CUBOAI_PASSWORD"] = str(self._cam.get("password") or "")
-                env["CUBOAI_CAMERA_IP"] = str(camera_ip or "")
-
-                if self._options.get("enable_debug_logs", False):
-                    # open() blocks — do it in the executor, and close our copy
-                    # right after spawning (the child duplicates the fd).
-                    # Rotate first: this file collects raw subprocess stderr in
-                    # append mode, so without a cap it grows forever while
-                    # debug logs are enabled (one stream per track, looping).
-                    log_path = self.hass.config.path("cuboai_debug.log")
-
-                    def _open_rotated(path=log_path, max_bytes=5 * 1024 * 1024):
-                        try:
-                            if os.path.exists(path) and os.path.getsize(path) > max_bytes:
-                                os.replace(path, path + ".1")
-                        except OSError:
-                            pass
-                        return open(path, "a")
-
-                    stderr_dest = await self.hass.async_add_executor_job(_open_rotated)
-                else:
-                    stderr_dest = asyncio.subprocess.DEVNULL
-
+                proc = None
                 try:
-                    self._backchannel_proc = await asyncio.create_subprocess_exec(
-                        sys.executable or "python3",
-                        script_path,
-                        extracted_url,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=stderr_dest,
-                        env=env,
-                    )
-                finally:
-                    if hasattr(stderr_dest, "close"):
-                        stderr_dest.close()
+                    # Credentials go in the child's environment only, never argv.
+                    env = talk.build_backchannel_env(self._cam, self._options)
+                    stderr_dest = await talk.open_debug_stderr(self.hass, self._options)
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            sys.executable or "python3",
+                            talk.BACKCHANNEL_SCRIPT,
+                            extracted_url,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=stderr_dest,
+                            env=env,
+                        )
+                    finally:
+                        if hasattr(stderr_dest, "close"):
+                            stderr_dest.close()
+                    self._backchannel_proc = proc
 
-                # Remember this song so Play Time can loop the session, and note
-                # that real playback happened (clears the hot-loop guard).
-                played_ok_since_refill = True
-                if raw_media_id not in session_tracks:
-                    session_tracks.append(raw_media_id)
+                    # Remember this song so Play Time can loop the session, and note
+                    # that real playback happened (clears the hot-loop guard).
+                    played_ok_since_refill = True
+                    if raw_media_id not in session_tracks:
+                        session_tracks.append(raw_media_id)
 
-                # Poll the track in short slices so a Play Time change mid-song
-                # (or reaching the session budget) stops playback within ~5 s
-                # instead of only between tracks.
-                while True:
-                    if _expired():
-                        _LOGGER.info("Speaker play time expired — stopping playback")
-                        self._queue.clear()
-                        if getattr(self, "_backchannel_proc", None):
+                    # Poll the track in short slices so a Play Time change mid-song
+                    # (or reaching the session budget) stops playback within ~5 s
+                    # instead of only between tracks.
+                    while True:
+                        if _expired():
+                            _LOGGER.info("Speaker play time expired — stopping playback")
+                            self._queue.clear()
                             try:
-                                self._backchannel_proc.terminate()
+                                proc.terminate()
                             except Exception:
                                 pass
-                        break
-                    try:
-                        await asyncio.wait_for(self._backchannel_proc.wait(), timeout=5)
-                        break  # track finished on its own
-                    except TimeoutError:
-                        continue  # re-check the budget and keep waiting
+                            break
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5)
+                            break  # track finished on its own
+                        except TimeoutError:
+                            continue  # re-check the budget and keep waiting
+                finally:
+                    # Only once the child has actually exited — a terminated child
+                    # is still sending SPEAKERSTOP — and also when this task is
+                    # cancelled (a replaced song, a stop, a reload).
+                    arbiter.release_after_exit(self._device_id, "player", proc)
 
                 self._backchannel_proc = None
 
