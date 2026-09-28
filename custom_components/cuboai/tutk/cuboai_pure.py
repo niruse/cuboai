@@ -1356,6 +1356,18 @@ def build_resend_b(R, seq, recv_count, ts=None):
 _TALK_GRANT_CAP_DEFAULT = b"\xe0\xfe\xfe\x01"   # 4.3.x capability word; fallback if connect() didn't capture it
 
 
+class TalkTimeout(RuntimeError):
+    """A talk session the camera stopped taking part in (only raised when the caller asked for the
+    timeout). `.reason`: 'grant' — SPEAKERSTART went out but the camera never logged into the talk
+    channel (busy, another talker, refusing); 'camera_lost' — granted, then nothing more arrived.
+    `.sent` is the number of audio frames sent before it gave up."""
+
+    def __init__(self, reason, sent=0):
+        super().__init__(f"talk timeout: {reason}")
+        self.reason = reason
+        self.sent = sent
+
+
 def _aac_units(path, rate=16000, gain=1.0, format=None, options=None):
     """Transcode any audio file -> a list of AAC-LC ADTS frames via PyAV (no ffmpeg binary — same
     dependency as snapshot/record; stays ffmpeg-agnostic). Each frame is self-describing (7-byte
@@ -1452,6 +1464,102 @@ def _aac_units(path, rate=16000, gain=1.0, format=None, options=None):
         units.append(adts[i:i + flen])                   # keep the whole ADTS frame
         i += flen
     return units
+
+
+_ADTS_RATES = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
+
+
+def _adts_header(payload_len, rate=16000, channels=1):
+    """7-byte ADTS header (AAC-LC, no CRC) for one raw AAC frame — the same framing `_aac_units`
+    gets from libav's ADTS muxer, built by hand so a LIVE encoder never waits on muxer buffering."""
+    sr = _ADTS_RATES.index(rate)
+    n = payload_len + 7
+    return bytes([
+        0xFF, 0xF1,                                   # sync, MPEG-4, layer 0, no CRC
+        (1 << 6) | (sr << 2) | (channels >> 2),       # profile LC (object type 2 -> field 1)
+        ((channels & 3) << 6) | (n >> 11),
+        (n >> 3) & 0xFF,
+        ((n & 7) << 5) | 0x1F,                        # buffer fullness 0x7FF (VBR)
+        0xFC,
+    ])
+
+
+class _LiveAacEncoder:
+    """Streaming mono PCM -> AAC-LC ADTS frames, for live talk.
+
+    Two inputs: G.711 A-law (`pcm_alaw`, the default: 8 kHz, go2rtc's backchannel feed) and
+    signed 16-bit little-endian (`pcm_s16le`: the Home Assistant websocket microphone, the card
+    sends 16 kHz). `_aac_units` needs a whole file; a microphone is a never-ending pipe. Fed from
+    one thread only (the stdin reader); `silent_unit` is a separate, precomputed frame the sender
+    may use from its own thread when no speech is queued, so the camera's 64 ms grid never starves.
+
+    STEREO on purpose: the same ADTS format `_aac_units` sends (PyAV's `add_stream('aac')` defaults
+    to a stereo encoder), which is the format the camera is proven to accept for text-to-speech."""
+
+    IN_CODECS = ('pcm_alaw', 'pcm_s16le')
+
+    def __init__(self, rate=16000, in_rate=8000, bit_rate=32000, in_codec='pcm_alaw'):
+        if in_codec not in self.IN_CODECS:
+            raise ValueError(f"live talk input must be one of {self.IN_CODECS}, not {in_codec!r}")
+        import av
+        self._av = av
+        self.rate = rate
+        self.in_codec = in_codec
+        self.in_rate = in_rate
+        # A pipe read is not sample-aligned: an s16 sample split across two reads must be joined
+        # before decoding (libav's PCM decoder silently drops a trailing half sample, and every
+        # sample after it would then be decoded from the wrong byte pair — loud noise).
+        self._align = 2 if in_codec == 'pcm_s16le' else 1
+        self._carry = b''
+        self.bytes_per_sec = in_rate * self._align       # the stdin reader sizes its reads from it
+        self._dec = av.CodecContext.create(in_codec, 'r')
+        self._dec.sample_rate = in_rate
+        self._dec.layout = 'mono'
+        self._resampler = av.AudioResampler(format='fltp', layout='stereo', rate=rate)
+        self._fifo = av.AudioFifo()
+        self._enc = self._new_encoder(bit_rate)
+        self._pts = 0
+        # A frame of silence from its own encoder (after priming), for gaps in the speech.
+        enc = self._new_encoder(bit_rate)
+        units = []
+        for i in range(4):
+            fr = av.AudioFrame(format='fltp', layout='stereo', samples=1024)
+            for plane in fr.planes:
+                plane.update(bytes(plane.buffer_size))
+            fr.sample_rate = rate
+            fr.pts = i * 1024
+            units += [_adts_header(len(bytes(p)), rate, 2) + bytes(p) for p in enc.encode(fr)]
+        self.silent_unit = units[-1]
+
+    def _new_encoder(self, bit_rate):
+        enc = self._av.CodecContext.create('aac', 'w')
+        enc.sample_rate = self.rate
+        enc.layout = 'stereo'
+        enc.format = 'fltp'
+        enc.bit_rate = bit_rate
+        enc.open()
+        return enc
+
+    def feed(self, data):
+        """PCM bytes in (any length), zero or more complete ADTS frames out. An odd trailing byte
+        of s16 input is held back until the next call brings its other half."""
+        if self._carry:
+            data = self._carry + data
+        whole = len(data) - len(data) % self._align
+        self._carry = bytes(data[whole:])
+        if not whole:
+            return []
+        out = []
+        for frame in self._dec.decode(self._av.Packet(bytes(data[:whole]))):
+            frame.pts = None
+            for rf in self._resampler.resample(frame):
+                self._fifo.write(rf)
+        while self._fifo.samples >= 1024:
+            fr = self._fifo.read(1024)
+            fr.pts = self._pts
+            self._pts += 1024
+            out += [_adts_header(len(bytes(p)), self.rate, 2) + bytes(p) for p in self._enc.encode(fr)]
+        return out
 
 
 def _talk_frameinfo(ts_sec, rate=16000):
@@ -3966,7 +4074,8 @@ class TUTKDirectSession:
 
     # ── two-way audio (talk-to-baby) ──────────────────────────────────────────
     def send_audio_file(self, path, channel=1, loop=False, max_secs=None, rate=16000,
-                        warmup=2.5, on_status=None, gain=1.0, format=None, options=None):
+                        warmup=2.5, on_status=None, gain=1.0, format=None, options=None,
+                        live_source=None, grant_timeout=None, liveness_timeout=None, tail_frames=0):
         """Talk: play an audio file out the camera speaker (pure-Python two-way audio, no native lib).
 
         Talk is the av-connect handshake REVERSED on a separate channel: we open an av-SERVER, the
@@ -3980,7 +4089,8 @@ class TUTKDirectSession:
           5. SPEAKERSTOP 0x0351 and tear the talk channel down.
 
         This method is the SOLE socket sender for its duration (it stops any streaming reader first),
-        mirroring the engine's single-sender rule. Returns the number of audio frames delivered.
+        mirroring the engine's single-sender rule. Returns the number of audio frames SENT (the
+        camera's own decoder count is `delivered` in `on_status`).
 
         Args:
           channel   talk channel (default 1; live video is ch0).
@@ -3991,14 +4101,34 @@ class TUTKDirectSession:
           on_status optional callback(dict) for progress (sent, delivered, decoding, resends).
           gain      linear volume multiplier (1.0 = unchanged, <1 quieter, >1 louder) — the reliable
                     talk-volume lever, since the camera's speaker_level is firmware-managed.
+          live_source  LIVE talk (a microphone): an object with `next_unit()` -> the next
+                    ADTS frame or None (nothing queued yet), `done` (the feed ended) and
+                    `silent_unit`. `path` is ignored. ONE talk session for the whole feed: frames
+                    go out on the same 64 ms grid, with a silent frame whenever no speech is
+                    queued so the camera never underruns. (Opening a session per second of
+                    audio cost ~6 s of warmup/handshake each — speech arrived in fragments.)
+                    The first `next_unit()` call comes only after the grant and the camera's
+                    first reply, so the feed can take it as "the camera is listening". A feed
+                    that ends before the camera takes any audio ends the call at once.
+          grant_timeout     raise TalkTimeout('grant') when the camera has not logged into the
+                    talk channel this many seconds after SPEAKERSTART (None = wait forever: a
+                    refused talk otherwise runs until max_secs / stop_audio()).
+          liveness_timeout  raise TalkTimeout('camera_lost') when nothing at all has arrived
+                    from the camera for this many seconds after the grant (None = never).
+          tail_frames       live only: silent frames sent after the feed has ended and drained,
+                    so SPEAKERSTOP does not cut off the end of the last word.
+        The three are OFF by default, so a file / TTS / song plays exactly as before.
         """
-        if path != "pipe:0" and hasattr(path, "read") is False and not path.startswith("http"):
-            path = os.path.expanduser(path)
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Audio file not found: {path}")
-        units = _aac_units(path, rate, gain, format=format, options=options)
-        if not units:
-            raise RuntimeError(f"no AAC-LC frames produced from {path} (empty or unsupported audio?)")
+        if live_source is not None:
+            units = []                                   # frames come from live_source as they arrive
+        else:
+            if path != "pipe:0" and hasattr(path, "read") is False and not path.startswith("http"):
+                path = os.path.expanduser(path)
+                if not os.path.exists(path):
+                    raise FileNotFoundError(f"Audio file not found: {path}")
+            units = _aac_units(path, rate, gain, format=format, options=options)
+            if not units:
+                raise RuntimeError(f"no AAC-LC frames produced from {path} (empty or unsupported audio?)")
 
         if self._sock is None or self.session_hdr is None:
             self.disconnect()
@@ -4019,6 +4149,9 @@ class TUTKDirectSession:
             time.sleep(0.02)
 
         spk_sent = grant_sent = False
+        spk_at = None                        # when SPEAKERSTART went out (grant_timeout counts from it)
+        last_rx = time.time()                # last packet of any kind from the camera (liveness_timeout)
+        tail_left = tail_frames              # live: silent frames still owed after the feed ended
         cam_react = 0
         audio_i = 0                          # index into units[] — WRAPS on loop (the audio content)
         talk_frag = 0                        # MONOTONIC frag-seq / message-index — never wraps with the
@@ -4036,12 +4169,18 @@ class TUTKDirectSession:
         _talk_wrap = os.environ.get("CUBOAI_TALK_WRAP", "1") != "0"   # see the SACK-replay lookup below
         sent_buf = {}                        # talk_frag -> au, for resend on the camera's 0x09 SACK
         t0 = time.time()
-        self._talk_stop = False              # cooperative stop flag (set by stop_audio())
+        # Cooperative stop flag (set by stop_audio()). Re-armed here, so a stop_audio() issued before
+        # this point is lost; the websocket microphone never uses it — it stops through the feed's
+        # `done` (stdin EOF) or SIGTERM, which unwinds through the SPEAKERSTOP below.
+        self._talk_stop = False
         try:
             while not self._talk_stop:
                 now = time.time()
                 if max_secs is not None and now - t0 >= max_secs:
                     break
+                if live_source is not None and live_source.done and next_audio is None:
+                    break                                        # the mic ended before the camera took
+                                                                 # any audio: nothing left to play
                 # Wake precisely when the next audio frame / ACK is due, so pacing stays tight (the loop
                 # also returns early on any camera packet, which we then drain below).
                 waits = [0.1, (last_ack + 0.1) - now]
@@ -4053,21 +4192,43 @@ class TUTKDirectSession:
                     try: self._send_ack()
                     except Exception: pass
                     last_ack = now
+                if (grant_timeout is not None and spk_sent and not grant_sent
+                        and now - spk_at > grant_timeout):
+                    raise TalkTimeout('grant', talk_frag)        # no talk-login: the camera is not taking it
+                if (liveness_timeout is not None and grant_sent and not r
+                        and now - last_rx > liveness_timeout):
+                    raise TalkTimeout('camera_lost', talk_frag)  # granted, then silence (nothing pending either)
                 if not spk_sent and now - t0 > warmup:           # SPEAKERSTART {channel}
                     pl = struct.pack('<I', channel) + bytes([0, 0, 0, 0])
                     s.sendto(build_ioctl_data(R, self._seq, self._relseq, self._frmno, 0x0350, pl), cam)
                     self._seq += 1; self._relseq += 1; self._frmno += 1
                     spk_sent = True
+                    spk_at = now
                 # Pump audio on an ABSOLUTE 64ms grid (advance next_audio by period, never reset to now).
                 if grant_sent and cam_react > 0:
                     if next_audio is None:
                         next_audio = now                         # anchor the grid at the first audio frame
                     while now >= next_audio and not self._talk_stop:
-                        if audio_i >= len(units):
-                            if not loop:
-                                finished = True; break
-                            audio_i = 0                          # loop the file CONTENT (frag keeps climbing)
-                        au = units[audio_i] + _talk_frameinfo(int(now), rate)
+                        if live_source is not None:
+                            # `done` is read BEFORE next_unit(): a feed marks itself done only after
+                            # queueing its last frame, so a None that follows a done read really is
+                            # the end (read after, a frame queued in between would be lost).
+                            ended = live_source.done
+                            unit = live_source.next_unit()
+                            if unit is None:
+                                if ended:
+                                    if tail_left <= 0:
+                                        finished = True; break
+                                    tail_left -= 1               # silence for the camera's buffer to play
+                                                                 # out the last word before SPEAKERSTOP
+                                unit = live_source.silent_unit   # keep the grid fed between words
+                            au = unit + _talk_frameinfo(int(now), rate)
+                        else:
+                            if audio_i >= len(units):
+                                if not loop:
+                                    finished = True; break
+                                audio_i = 0                      # loop the file CONTENT (frag keeps climbing)
+                            au = units[audio_i] + _talk_frameinfo(int(now), rate)
                         s.sendto(build_talk_audio(R, channel, self._seq, talk_relseq, talk_frag, talk_frag, au), cam)
                         sent_buf[talk_frag] = au
                         if len(sent_buf) > 128:
@@ -4086,6 +4247,7 @@ class TUTKDirectSession:
                 while True:
                     try: raw, _ = s.recvfrom(8192)
                     except (BlockingIOError, OSError): break
+                    last_rx = now                                # the camera is still there (any packet)
                     if len(raw) < 30: continue
                     try: dec = inv_transcode(raw)
                     except Exception: continue
