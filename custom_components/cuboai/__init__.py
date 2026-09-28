@@ -173,6 +173,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         except Exception:
             pass
 
+    # The card's microphone: the `cuboai/talk` websocket command. Registered
+    # once per Home Assistant run (it cannot be unregistered, so it looks every
+    # entry up per call). A failure here must never block the integration.
+    try:
+        from . import talk
+
+        talk.async_setup_talk(hass)
+    except Exception:
+        _LOGGER.exception("Failed to register the CuboAI talk command")
+
     from .media_library import async_setup_services
 
     await async_setup_services(hass)
@@ -527,6 +537,15 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a CuboAI config entry."""
+    # A live talk on this entry's cameras ends first, and its child is waited
+    # for: it holds the camera's speaker until it has sent SPEAKERSTOP.
+    try:
+        from . import talk
+
+        await talk.async_stop_for_entry(hass, entry)
+    except Exception:
+        _LOGGER.exception("Failed to stop a live talk while unloading")
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, {})

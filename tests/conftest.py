@@ -114,7 +114,44 @@ _ha_module(
 )
 _ha_module("homeassistant.helpers.entity_registry", async_get=MagicMock())
 _ha_module("homeassistant.helpers.dispatcher", async_dispatcher_send=MagicMock(), async_dispatcher_connect=MagicMock())
-_ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
+
+
+class _Unauthorized(RuntimeError):
+    """homeassistant.exceptions.Unauthorized (a HomeAssistantError, which is
+    RuntimeError here), with the real keyword arguments."""
+
+    def __init__(
+        self, context=None, user_id=None, entity_id=None, config_entry_id=None, perm_category=None, permission=None
+    ):
+        super().__init__("Unauthorized")
+        self.entity_id = entity_id
+        self.permission = permission
+
+
+_ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError, Unauthorized=_Unauthorized)
+
+
+# talk.py (the card's microphone). The command decorators hand the handler back
+# unchanged — like Home Assistant's, bar what they attach — so tests call it
+# directly; the schema stays inspectable on `_ws_schema` as in the real one.
+def _websocket_command(schema):
+    def decorate(func):
+        func._ws_schema = schema
+        func._ws_command = schema.get("type")
+        return func
+
+    return decorate
+
+
+_ha_module(
+    "homeassistant.components.websocket_api",
+    websocket_command=_websocket_command,
+    async_response=lambda func: func,
+    async_register_command=MagicMock(),
+)
+_ha_module("homeassistant.auth")
+_ha_module("homeassistant.auth.permissions")
+_ha_module("homeassistant.auth.permissions.const", POLICY_CONTROL="control")
 _ha_module("homeassistant.util")
 _ha_module("homeassistant.util.dt", utcnow=lambda: datetime.datetime.now(datetime.UTC))
 
