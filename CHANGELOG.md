@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.46]
+
+### Fixed
+- **A rejected CuboAI sign-in no longer needs a reinstall.** When CuboAI refused the saved
+  session (`401 Unauthorized` from its token endpoint), the integration stayed on "Failed setup,
+  will retry", and the only way back was removing it and deleting its token files. Home Assistant
+  now shows **"Sign in to CuboAI again"** on the CuboAI entry instead: sign in with the same account
+  (and the two-factor code, if you use one) and it reconnects, keeping your cameras, entity IDs and
+  settings. Signing in with a different account is refused. Temporary network or server errors
+  still just retry, and never erase the saved session.
+- **Each account keeps its own session.** Tokens were also kept in two files shared by every
+  CuboAI entry and read in preference to the entry's own, so a fresh sign-in could be replaced by an
+  older, revoked pair, and with two accounts one could start up with the other's session. Tokens now
+  live only in their own config entry. The old `cuboai_access_token.json` /
+  `cuboai_refresh_token.json` files are left in place but no longer read or written. In testing,
+  an existing install upgraded without being asked to sign in.
+
+Contributed by @NartsAi (#109). Tested on a live Home Assistant: an expired access token renews into
+the entry on startup without a prompt; a rejected session raises the sign-in prompt, and signing in
+restores the same entry.
+
 ## [2.6.45]
 
 ### Fixed
