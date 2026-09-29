@@ -190,10 +190,23 @@ async def test_startup_does_not_swallow_rejected_refresh(monkeypatch, tmp_path):
         await cuboai.async_setup_entry(hass, _entry())
 
 
+def _listener_hass(entry):
+    hass = _hass()
+    hass.data = {
+        "cuboai": {
+            entry.entry_id: {
+                "options_snapshot": dict(entry.options),
+                "data_snapshot": cuboai._non_auth_data(entry.data),
+            }
+        }
+    }
+    return hass
+
+
 async def test_token_data_update_does_not_reload_but_option_change_does():
-    hass, entry = _hass(), _entry()
-    hass.data = {"cuboai": {entry.entry_id: {"options_snapshot": dict(entry.options)}}}
-    entry.data["access_token"] = "renewed"
+    entry = _entry()
+    hass = _listener_hass(entry)
+    entry.data = {**entry.data, "access_token": "renewed", "refresh_token": "rotated", "user_agent": "new-agent"}
     await cuboai.async_update_options(hass, entry)
     hass.config_entries.async_reload.assert_not_called()
     entry.options["download_images"] = True
@@ -201,19 +214,49 @@ async def test_token_data_update_does_not_reload_but_option_change_does():
     hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
 
+async def test_camera_selection_in_configure_still_reloads():
+    """The camera selection is stored in entry DATA with the options unchanged.
+    Skipping every data-only write (not just the session) would leave a new
+    selection unapplied until the next Home Assistant restart."""
+    entry = _entry()
+    hass = _listener_hass(entry)
+    entry.data = {**entry.data, "selected_camera_ids": [], "cameras": []}
+    await cuboai.async_update_options(hass, entry)
+    hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+
+
+def test_reauth_uses_no_helpers_newer_than_the_declared_minimum():
+    """hacs.json declares HA 2024.1; _get_reauth_entry() and
+    async_update_reload_and_abort(data_updates=...) arrived in 2024.11."""
+    import ast
+    import pathlib
+
+    root = pathlib.Path(config_flow.__file__).parents[2]
+    minimum = tuple(int(p) for p in json.loads((root / "hacs.json").read_text())["homeassistant"].split(".")[:2])
+    tree = ast.parse(pathlib.Path(config_flow.__file__).read_text(encoding="utf-8"))
+    used = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    used |= {n.arg for n in ast.walk(tree) if isinstance(n, ast.keyword) and n.arg}
+    if minimum < (2024, 11):
+        for helper in ("_get_reauth_entry", "data_updates", "async_update_reload_and_abort"):
+            assert helper not in used, f"{helper} needs HA 2024.11, hacs.json declares {minimum}"
+
+
 def _flow(entry):
     flow = config_flow.CuboAIConfigFlow()
     flow.hass = _hass()
-    flow._get_reauth_entry = lambda: entry
+    flow.context = {"source": "reauth", "entry_id": entry.entry_id}
+    flow.hass.config_entries.async_get_entry = lambda entry_id: entry if entry_id == entry.entry_id else None
+    flow.hass.async_create_task = MagicMock(side_effect=lambda coro: coro.close())
     flow.async_show_form = lambda **kw: {"type": "form", **kw}
     flow.async_abort = lambda **kw: {"type": "abort", **kw}
-
-    def finish(target, *, data_updates):
-        flow.hass.config_entries.async_update_entry(target, data={**target.data, **data_updates})
-        return {"type": "abort", "reason": "reauth_successful"}
-
-    flow.async_update_reload_and_abort = MagicMock(side_effect=finish)
     return flow
+
+
+async def test_reauth_form_prefills_the_account():
+    entry = _entry()
+    result = await _flow(entry).async_step_reauth(entry.data)
+    assert result["step_id"] == "reauth_confirm"
+    assert result["data_schema"]({"password": "x"})["username"] == "parent@example.com"
 
 
 @pytest.mark.parametrize("mfa", [False, True])
@@ -252,10 +295,10 @@ async def test_password_and_mfa_reauth_preserve_entry_and_reject_wrong_account(m
     assert entry.data["selected_camera_ids"] == original_data["selected_camera_ids"]
     if same_account:
         assert entry.data["refresh_token"] == "new-refresh"
-        flow.async_update_reload_and_abort.assert_called_once()
+        flow.hass.config_entries.async_reload.assert_called_once_with(entry.entry_id)
     else:
         assert entry.data == original_data
-        flow.async_update_reload_and_abort.assert_not_called()
+        flow.hass.config_entries.async_reload.assert_not_called()
 
 
 async def test_bad_password_keeps_reauth_form_and_existing_credentials(monkeypatch):
@@ -269,7 +312,7 @@ async def test_bad_password_keeps_reauth_form_and_existing_credentials(monkeypat
     assert result["step_id"] == "reauth_confirm"
     assert result["errors"] == {"base": "auth_failed"}
     assert entry.data["refresh_token"] == "entry-refresh"
-    flow.async_update_reload_and_abort.assert_not_called()
+    flow.hass.config_entries.async_reload.assert_not_called()
 
 
 async def test_startup_persists_rotation_even_when_profile_fetch_is_empty(monkeypatch, tmp_path):

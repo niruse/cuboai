@@ -192,7 +192,10 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(self, entry_data):
         """Recover the existing account without recreating cameras or entities."""
-        self._reauth_entry = self._get_reauth_entry()
+        # context["entry_id"], not _get_reauth_entry(): that helper (and
+        # async_update_reload_and_abort's data_updates) only exist from HA
+        # 2024.11, and hacs.json still declares 2024.1.
+        self._reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input=None):
@@ -212,15 +215,32 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="wrong_account")
         if not data.get("access_token") or not data.get("refresh_token"):
             raise ValueError("Incomplete CuboAI login response")
-        return self.async_update_reload_and_abort(
+        self.hass.config_entries.async_update_entry(
             entry,
-            data_updates={
+            data={
+                **entry.data,
                 "uuid": uuid,
                 "username": username,
                 "access_token": data["access_token"],
                 "refresh_token": data["refresh_token"],
                 "user_agent": user_agent,
             },
+        )
+        # Only auth keys changed, which the update listener deliberately ignores,
+        # so the reload is ours: it starts a failed entry or restarts a running
+        # one on the new session.
+        self.hass.async_create_task(self.hass.config_entries.async_reload(entry.entry_id))
+        return self.async_abort(reason="reauth_successful")
+
+    def _auth_schema(self):
+        """The sign-in form; a re-sign-in pre-fills the account it must match."""
+        if self._reauth_entry is None:
+            return AUTH_SCHEMA
+        return vol.Schema(
+            {
+                vol.Required("username", default=self._reauth_entry.data.get("username", "")): str,
+                vol.Required("password"): str,
+            }
         )
 
     async def async_step_user(self, user_input=None):
@@ -291,7 +311,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "no_cameras"
                     return self.async_show_form(
                         step_id="reauth_confirm" if self._reauth_entry is not None else "user",
-                        data_schema=AUTH_SCHEMA,
+                        data_schema=self._auth_schema(),
                         errors=errors,
                     )
 
@@ -333,7 +353,7 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm" if self._reauth_entry is not None else "user",
-            data_schema=AUTH_SCHEMA,
+            data_schema=self._auth_schema(),
             errors=errors,
         )
 
