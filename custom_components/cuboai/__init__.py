@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import logging.handlers
 import os
@@ -7,16 +6,12 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
 
-from .api.async_api import get_camera_profiles, refresh_cubo_token
-from .api.cuboai_functions import (
-    load_access_token,
-    load_refresh_token,
-    save_access_token,
-    save_refresh_token,
-    set_token_paths,
-)
+from .api.async_api import get_camera_profiles
+from .api.cuboai_functions import set_token_paths
+from .auth import async_refresh_entry_tokens
 from .const import DOMAIN, OPT_PROTECT_ENABLED
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
@@ -315,12 +310,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # duplicate-account guard would not see them. Backfill from the account id
     # every entry already stores, rather than adding an async_migrate_entry —
     # that needs a VERSION bump, which stops the user downgrading.
-    #
-    # Must stay ABOVE the add_update_listener() registration below:
-    # async_update_options computes its changed_keys from OPTIONS only, so a
-    # unique_id-only write leaves that set empty and its
-    # `if changed_keys and all(...)` guard falls through to a full
-    # async_reload — a spurious reload on every upgrade start.
+    # Do this before registering the update listener below; data-only updates
+    # also leave the running integration alone in async_update_options.
     if entry.unique_id is None and entry.data.get("uuid"):
         hass.config_entries.async_update_entry(entry, unique_id=str(entry.data["uuid"]))
         _LOGGER.debug("Backfilled config entry unique_id from the stored account id")
@@ -351,12 +342,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     refresh_token = entry.data.get("refresh_token")
     user_agent = entry.data.get("user_agent")
 
-    latest_access = await hass.async_add_executor_job(load_access_token)
-    latest_refresh = await hass.async_add_executor_job(load_refresh_token)
-    if not latest_access:
-        latest_access = access_token
-    if not latest_refresh:
-        latest_refresh = refresh_token
+    # The entry is authoritative, including immediately after a fresh login.
+    # Legacy global JSON files cannot be attributed to an account and may hold
+    # revoked credentials; never let them override a new session.
+    latest_access = access_token
+    latest_refresh = refresh_token
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -365,13 +355,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except aiohttp.ClientResponseError as e:
                 if e.status == 401:
                     _LOGGER.debug("Access token expired on startup, refreshing...")
-                    resp = await refresh_cubo_token(latest_refresh, user_agent, session)
-                    latest_access = resp.get("access_token")
-                    latest_refresh = resp.get("refresh_token", latest_refresh)
-                    await asyncio.gather(
-                        hass.async_add_executor_job(save_access_token, latest_access),
-                        hass.async_add_executor_job(save_refresh_token, latest_refresh),
-                    )
+                    latest_access, latest_refresh = await async_refresh_entry_tokens(hass, entry, user_agent, session)
                     device_map = await get_camera_profiles(latest_access, user_agent, session)
                 else:
                     raise
@@ -428,12 +412,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     new_data["access_token"] = latest_access
                     new_data["refresh_token"] = latest_refresh
                     hass.config_entries.async_update_entry(entry, data=new_data)
-                elif latest_access != access_token or latest_refresh != refresh_token:
-                    # Update token if refreshed even if cameras didn't change
-                    new_data = dict(entry.data)
-                    new_data["access_token"] = latest_access
-                    new_data["refresh_token"] = latest_refresh
-                    hass.config_entries.async_update_entry(entry, data=new_data)
+    except ConfigEntryAuthFailed:
+        raise
     except Exception as e:
         _LOGGER.warning("Failed to dynamically refresh CuboAI camera profiles: %s", e)
 
@@ -525,7 +505,10 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
         new_options = dict(entry.options)
         changed_keys = {k for k in set(snapshot) | set(new_options) if snapshot.get(k) != new_options.get(k)}
         data["options_snapshot"] = new_options
-        if changed_keys and all(k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys):
+        if not changed_keys:
+            # Token persistence changes entry data, not options. Do not reload.
+            return
+        if all(k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys):
             # Auto-discovered camera IP written by the coordinator (it only ever
             # fills in previously-empty IPs): picked up on the next poll, no
             # reason to tear the whole integration down mid-refresh. A user

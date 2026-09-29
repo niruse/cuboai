@@ -188,6 +188,40 @@ async def _protect_plan(hass, previous: dict, user_input: dict, cameras: list[di
 
 class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
+    _reauth_entry = None
+
+    async def async_step_reauth(self, entry_data):
+        """Recover the existing account without recreating cameras or entities."""
+        self._reauth_entry = self._get_reauth_entry()
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Reuse the password/MFA login, with a session-recovery explanation."""
+        return await self.async_step_user(user_input)
+
+    def _finish_reauth(self, uuid, username, data, user_agent):
+        """Replace only authentication data after verifying the account."""
+        entry = self._reauth_entry
+        expected_uuid = entry.data.get("uuid")
+        if expected_uuid:
+            same_account = str(uuid) == str(expected_uuid)
+        else:
+            expected_username = str(entry.data.get("username", "")).strip().lower()
+            same_account = bool(expected_username) and username.strip().lower() == expected_username
+        if not same_account:
+            return self.async_abort(reason="wrong_account")
+        if not data.get("access_token") or not data.get("refresh_token"):
+            raise ValueError("Incomplete CuboAI login response")
+        return self.async_update_reload_and_abort(
+            entry,
+            data_updates={
+                "uuid": uuid,
+                "username": username,
+                "access_token": data["access_token"],
+                "refresh_token": data["refresh_token"],
+                "user_agent": user_agent,
+            },
+        )
 
     async def async_step_user(self, user_input=None):
         setup_file_logger(self.hass)
@@ -246,8 +280,8 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 access_token = data["access_token"]
                 refresh_token = data["refresh_token"]
 
-                _LOGGER.debug("Access token (first 20 chars): %s...", access_token[:20])
-                _LOGGER.debug("Refresh token (first 20 chars): %s...", refresh_token[:20])
+                if self._reauth_entry is not None:
+                    return self._finish_reauth(uuid, user_input["username"], data, user_agent)
 
                 # Fetch all cameras
                 device_map = await self.hass.async_add_executor_job(api.get_camera_profiles, access_token, user_agent)
@@ -255,7 +289,11 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not device_map:
                     _LOGGER.error("No cameras found for account")
                     errors["base"] = "no_cameras"
-                    return self.async_show_form(step_id="user", data_schema=AUTH_SCHEMA, errors=errors)
+                    return self.async_show_form(
+                        step_id="reauth_confirm" if self._reauth_entry is not None else "user",
+                        data_schema=AUTH_SCHEMA,
+                        errors=errors,
+                    )
 
                 # Store all cameras for setup
                 cameras = device_map
@@ -293,7 +331,11 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     _LOGGER.exception("CuboAI authentication failed: %s", e)
                     errors["base"] = "auth_failed"
 
-        return self.async_show_form(step_id="user", data_schema=AUTH_SCHEMA, errors=errors)
+        return self.async_show_form(
+            step_id="reauth_confirm" if self._reauth_entry is not None else "user",
+            data_schema=AUTH_SCHEMA,
+            errors=errors,
+        )
 
     async def async_step_mfa(self, user_input=None):
         """Handle MFA code input step."""
@@ -329,8 +371,8 @@ class CuboAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 access_token = data["access_token"]
                 refresh_token = data["refresh_token"]
 
-                _LOGGER.debug("Access token (first 20 chars): %s...", access_token[:20])
-                _LOGGER.debug("Refresh token (first 20 chars): %s...", refresh_token[:20])
+                if self._reauth_entry is not None:
+                    return self._finish_reauth(uuid, self._username_input, data, self._user_agent)
 
                 # Fetch all cameras
                 device_map = await self.hass.async_add_executor_job(

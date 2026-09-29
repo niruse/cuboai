@@ -548,6 +548,21 @@ ONVIF and pulls the video from its streaming engine, like an NVR.
 
 ## Troubleshooting
 
+### Sign-in or token renewal failed
+
+If CuboAI rejects the saved refresh token, Home Assistant asks you to sign in
+again on the integration entry under **Settings → Devices & Services**. Use the
+same CuboAI account and complete two-factor authentication if enabled. Recovery
+updates the existing entry, keeping its cameras, entity identities and options;
+you do not need to reinstall or move files.
+
+Tokens are now stored together in their owning Home Assistant config entry.
+The old `cuboai_access_token.json` and `cuboai_refresh_token.json` files are no
+longer read or updated by the integration. They are left untouched, so an old
+file cannot replace tokens from a fresh sign-in. On upgrading, an account whose
+latest rotated tokens were stored only in those files may need to sign in once.
+Temporary network/server errors remain retryable and do not erase credentials.
+
 ### Download diagnostics (start here)
 
 Settings → Devices & Services → CuboAI → ⋮ → **Download diagnostics**. The report is **already

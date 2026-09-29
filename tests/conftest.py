@@ -128,7 +128,12 @@ class _Unauthorized(RuntimeError):
         self.permission = permission
 
 
-_ha_module("homeassistant.exceptions", HomeAssistantError=RuntimeError, Unauthorized=_Unauthorized)
+_ha_module(
+    "homeassistant.exceptions",
+    HomeAssistantError=RuntimeError,
+    Unauthorized=_Unauthorized,
+    ConfigEntryAuthFailed=type("ConfigEntryAuthFailed", (Exception,), {}),
+)
 
 
 # talk.py (the card's microphone). The command decorators hand the handler back

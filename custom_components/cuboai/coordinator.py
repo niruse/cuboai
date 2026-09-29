@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import aiofiles.os
 import aiohttp
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api.async_api import (
@@ -12,9 +13,8 @@ from .api.async_api import (
     get_camera_state,
     get_n_alerts_paged,
     get_subscription_info,
-    refresh_cubo_token,
 )
-from .api.cuboai_functions import save_access_token, save_refresh_token
+from .auth import async_refresh_entry_tokens
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .utils import log_to_file
 
@@ -485,17 +485,10 @@ class CuboAICoordinator(DataUpdateCoordinator):
     async def _refresh_tokens(self, session):
         """Single centralized token refresh."""
         log_to_file("[CuboAICoordinator] Refreshing tokens centrally")
-        resp = await refresh_cubo_token(self._refresh_token, self._user_agent, session)
-        if "access_token" in resp:
-            self._access_token = resp["access_token"]
-            self._refresh_token = resp.get("refresh_token", self._refresh_token)
-            await asyncio.gather(
-                self.hass.async_add_executor_job(save_access_token, self._access_token),
-                self.hass.async_add_executor_job(save_refresh_token, self._refresh_token),
-            )
-            log_to_file("[CuboAICoordinator] Tokens successfully refreshed and saved")
-        else:
-            raise UpdateFailed("Failed to refresh token: no access token in response")
+        self._access_token, self._refresh_token = await async_refresh_entry_tokens(
+            self.hass, self._entry, self._user_agent, session
+        )
+        log_to_file("[CuboAICoordinator] Tokens successfully refreshed and saved")
 
     async def _async_update_data(self) -> dict:
         """Fetch all data for all cameras in a single pass."""
@@ -509,7 +502,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                 return await self._fetch_all(session)
             log_to_file(f"[CuboAICoordinator] ClientResponseError: {e}")
             raise UpdateFailed(f"API error: {e}")
-        except UpdateFailed:
+        except (ConfigEntryAuthFailed, UpdateFailed):
             # Already a coordinator-level failure with a useful message (e.g.
             # every camera failed) — don't re-wrap it as "Unexpected error".
             raise
