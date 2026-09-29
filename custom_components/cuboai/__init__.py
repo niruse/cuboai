@@ -462,6 +462,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # coordinator-written camera_ip_* discovery (reloading mid-refresh tears
         # down the coordinator while it is still iterating cameras).
         "options_snapshot": dict(entry.options),
+        # ...and of the entry DATA minus the session, so a token renewal (the
+        # coordinator writes it to the entry) is told apart from a real data
+        # change such as the camera selection in Configure, which must reload.
+        "data_snapshot": _non_auth_data(entry.data),
     }
 
     _LOGGER.debug("Starting go2rtc manager...")
@@ -497,6 +501,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+# Entry-data keys that make up the account session. Rewriting them never needs a
+# reload: the coordinator already holds renewed tokens, and a re-sign-in reloads
+# the entry itself.
+_AUTH_DATA_KEYS = frozenset({"access_token", "refresh_token", "user_agent", "username", "uuid"})
+
+
+def _non_auth_data(data) -> dict:
+    return {k: v for k, v in data.items() if k not in _AUTH_DATA_KEYS}
+
+
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update options."""
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
@@ -505,10 +519,16 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
         new_options = dict(entry.options)
         changed_keys = {k for k in set(snapshot) | set(new_options) if snapshot.get(k) != new_options.get(k)}
         data["options_snapshot"] = new_options
-        if not changed_keys:
-            # Token persistence changes entry data, not options. Do not reload.
+        new_data = _non_auth_data(entry.data)
+        data_changed = new_data != data.get("data_snapshot", new_data)
+        data["data_snapshot"] = new_data
+        # Any other data change (e.g. the camera selection in Configure) reloads.
+        if not data_changed and not changed_keys:
+            # Only the session changed (token renewal, or a re-sign-in, which
+            # reloads by itself): the running integration already uses it.
+            _LOGGER.debug("Skipping reload for a session-only entry update")
             return
-        if all(k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys):
+        if not data_changed and all(k.startswith("camera_ip_") and not snapshot.get(k) for k in changed_keys):
             # Auto-discovered camera IP written by the coordinator (it only ever
             # fills in previously-empty IPs): picked up on the next poll, no
             # reason to tear the whole integration down mid-refresh. A user
