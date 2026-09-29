@@ -45,6 +45,14 @@
           "unifi_protect_enabled": "Lets UniFi Protect find your first camera and add it as a third-party camera. In Protect, either turn on Settings → System → Discover Third-Party Cameras, or add it by address (shown as unifi_protect_address on its WebRTC Stream sensor). A Cubo 3 sends H.265, which Protect passes to viewers unconverted: turn on 'Transcode these cameras to H.264' for it in Configure if a phone or browser shows no picture. More cameras can be added later in Configure.",
           "unifi_protect_password": "Type this same username and password into Protect when it asks. Protect will not add a camera without a password."
         }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to CuboAI again",
+        "description": "CuboAI could not renew your session. Sign in with the same account to reconnect. Your cameras and settings will be kept.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -63,7 +71,9 @@
       "onvif_camera_port_in_use": "The port a camera already has in UniFi Protect is now used by another program. Free it, or remove that camera in Protect and let it take a new port."
     },
     "abort": {
-      "already_configured": "This CuboAI account is already configured."
+      "already_configured": "This CuboAI account is already configured.",
+      "wrong_account": "Sign in with the same CuboAI account as this integration entry.",
+      "reauth_successful": "CuboAI sign-in updated successfully."
     }
   },
   "options": {
