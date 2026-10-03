@@ -551,7 +551,7 @@ class TestHomeKitActuallyReceivesH264:
                 return False
 
         cam.hass = MagicMock()
-        cam.hass.async_create_task = lambda coro: (created.append(coro), coro.close(), _FakeTask())[2]
+        cam.hass.async_create_background_task = lambda coro, name: (created.append(coro), coro.close(), _FakeTask())[2]
 
         cam._kick_warm_hold("cuboai_h264_DEV1")
         first_deadline = cam._warm_hold_deadline

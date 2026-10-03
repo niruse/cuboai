@@ -266,7 +266,7 @@ async def test_the_watchdog_enforces_the_cap_while_go2rtc_runs(tmp_path):
     import asyncio
 
     m = _manager(tmp_path)
-    m.hass.async_create_task = lambda coro, *a, **kw: asyncio.get_running_loop().create_task(coro)
+    m.hass.async_create_background_task = lambda coro, name, *a, **kw: asyncio.get_running_loop().create_task(coro)
     path = _write_log(m, go2rtc_module.LOG_MAX_BYTES + 5000)
 
     proc = MagicMock()

@@ -341,7 +341,11 @@ class CuboLocalCamera(CoordinatorEntity, Camera):
 
         self._warm_hold_deadline = time.monotonic() + self.WARM_HOLD_SECONDS
         if self._warm_hold_task is None or self._warm_hold_task.done():
-            self._warm_hold_task = self.hass.async_create_task(self._warm_hold(name))
+            # Background: a hold lives up to WARM_HOLD_SECONDS, and a tracked
+            # task kicked during startup (HomeKit, preload) would hold bootstrap.
+            self._warm_hold_task = self.hass.async_create_background_task(
+                self._warm_hold(name), f"cuboai warm hold {self._device_id}"
+            )
 
     async def _warm_hold(self, name: str) -> None:
         """Warm the producer chain, then hold it open until the deadline.
