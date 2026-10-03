@@ -994,9 +994,18 @@ class Go2RTCManager:
     # ── watchdog ──────────────────────────────────────────────────────────────
 
     def _start_watchdog(self) -> None:
-        """(Re)arm the supervisor task for the current process."""
+        """(Re)arm the supervisor task for the current process.
+
+        A BACKGROUND task, never hass.async_create_task: HA's bootstrap waits for
+        every tracked task before it reports startup done, and this loop never
+        finishes. Tracked, it held every restart until the bootstrap wrap-up
+        timeout gave up on it ("Setup timed out for bootstrap waiting on
+        _watchdog()", ~5 minutes; seen live 2026-10-03).
+        """
         self._cancel_watchdog()
-        self._watchdog_task = self.hass.async_create_task(self._watchdog())
+        self._watchdog_task = self.hass.async_create_background_task(
+            self._watchdog(), f"cuboai go2rtc watchdog {self._entry_id}"
+        )
 
     def _cancel_watchdog(self) -> None:
         """Disarm the supervisor.

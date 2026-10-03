@@ -393,7 +393,11 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         task = getattr(self, "_queue_task", None)
         if task:
             task.cancel()
-        self._queue_task = self.hass.async_create_task(self._queue_loop())
+        # Background: the queue can play for hours, and a tracked task holds
+        # HA's startup/shutdown stages until they time out.
+        self._queue_task = self.hass.async_create_background_task(
+            self._queue_loop(), f"cuboai speaker queue {self._device_id}"
+        )
 
     async def _extract_media_url(self, media_id: str) -> str:
         """Extract YouTube or Spotify URL in the background."""
@@ -868,7 +872,10 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._cancel_scheduled_stop()
         if minutes and minutes > 0:
             self._ha_started_uuid = started_uuid
-            self._stop_timer_task = self.hass.async_create_task(self._stop_after(minutes))
+            # Background, like the queue: this sleeps for the whole Play Time.
+            self._stop_timer_task = self.hass.async_create_background_task(
+                self._stop_after(minutes), f"cuboai lullaby timer {self._device_id}"
+            )
 
     async def _stop_after(self, minutes):
         import asyncio
