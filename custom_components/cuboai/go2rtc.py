@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import socket
+import subprocess
 import sys
 import time
 
@@ -12,15 +14,78 @@ from homeassistant.core import HomeAssistant
 from .const import (
     DESIRED_API_PORT,
     DOMAIN,
+    H264_KEYINT,
+    H264_RESOLUTIONS,
     NOTIFY_ON_RESTART_DEFAULT,
     OPT_NOTIFY_ON_RESTART,
     OPT_PROTECT_ENABLED,
+    h264_resolution,
     protect_camera_ids,
     protect_stream_name,
     protect_stream_target,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# ── every camera frame once ───────────────────────────────────────────────────
+#
+# go2rtc's transcodes write to its RTSP server, and ffmpeg's RTSP muxer is
+# constant-frame-rate: ffmpeg pads the output up to the frame rate it GUESSED
+# for the input by repeating frames. A Cubo 3's HEVC is guessed at 29.92 fps
+# while the camera sends 15, so more than half of what libx264 encoded were
+# repeats (#85: dup=604 of 1120 frames, on a Raspberry Pi 4 that then fell to
+# 0.66x real time). Passthrough encodes each camera frame exactly once.
+FPS_MODE_PASSTHROUGH = "-fps_mode passthrough"
+#: The same for ffmpeg before 5.1, which has no -fps_mode (-vsync is deprecated
+#: in later versions but still accepted by 8.1).
+VSYNC_PASSTHROUGH = "-vsync passthrough"
+_FPS_FLAG: str | None = None
+
+
+def fps_passthrough_flag(version_text: str) -> str:
+    """`ffmpeg -version` output -> the option that keeps every frame exactly once.
+
+    A version that cannot be read (a git build says `N-12345-g…`) is taken as
+    current: -fps_mode exists since 5.1, and 5.1 is older than any ffmpeg that
+    Home Assistant 2024.1 (this integration's minimum) ships in its images.
+    """
+    m = re.search(r"ffmpeg version n?(\d+)\.(\d+)", version_text or "")
+    if m and (int(m.group(1)), int(m.group(2))) < (5, 1):
+        return VSYNC_PASSTHROUGH
+    return FPS_MODE_PASSTHROUGH
+
+
+def _ffmpeg_version_text() -> str:
+    """The `ffmpeg -version` banner of the ffmpeg go2rtc runs, or "". Blocking."""
+    try:
+        return subprocess.run(
+            ["ffmpeg", "-hide_banner", "-version"], capture_output=True, text=True, timeout=10, check=False
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def h264_transcode_args(options, fps_flag: str = FPS_MODE_PASSTHROUGH) -> str:
+    """The raw ffmpeg arguments of the `cuboai_h264_<id>` transcode (issue #85).
+
+    * every camera frame once (see FPS_MODE_PASSTHROUGH);
+    * at most the configured size, keeping the aspect ratio: scale=min(...)
+      with force_original_aspect_ratio=decrease only ever SHRINKS, so a source
+      already within the cap is untouched. HomeKit cameras top out at
+      1920x1080 (~level 4.0); a Cubo 3 (SW05) streams 2560x1440, and HomeKit
+      silently refused that ("No Response");
+    * H.264 High, level 4.0, a keyframe every H264_KEYINT frames. go2rtc's
+      template names its own -level:v and -g, which win over the same options
+      given here (they come later on the command line), so both are set
+      through -x264-params, which libx264 applies last (ffprobe: High / 4.0).
+    """
+    width, height = H264_RESOLUTIONS[h264_resolution(options)]
+    return (
+        f"{fps_flag} "
+        f"-vf scale='min({width},iw)':'min({height},ih)':force_original_aspect_ratio=decrease"
+        f" -profile:v high -x264-params level=4.0:keyint={H264_KEYINT}"
+    )
+
 
 # ── go2rtc process watchdog ───────────────────────────────────────────────────
 #
@@ -114,6 +179,22 @@ class Go2RTCManager:
         self._options = options or {}
         self._streams = {}
 
+    async def _fps_passthrough_flag(self) -> str:
+        """FPS_MODE_PASSTHROUGH, or VSYNC_PASSTHROUGH for an ffmpeg older than 5.1.
+
+        Asked once per Home Assistant run, and only when a camera transcodes.
+        If ffmpeg cannot be asked, the current option is assumed.
+        """
+        global _FPS_FLAG
+        if _FPS_FLAG is None:
+            try:
+                text = await self.hass.async_add_executor_job(_ffmpeg_version_text)
+            except Exception:  # noqa: BLE001 - a version probe must never stop the streams
+                text = ""
+            _FPS_FLAG = fps_passthrough_flag(text if isinstance(text, str) else "")
+            _LOGGER.debug("H.264 transcode frame option: %s", _FPS_FLAG)
+        return _FPS_FLAG
+
     async def _resolve_codecs(self):
         """Resolve video codecs for all cameras asynchronously."""
         script_dir = os.path.join(os.path.dirname(__file__), "tutk")
@@ -163,10 +244,12 @@ class Go2RTCManager:
             # INFO with debug logs on so it shows without touching HA's logger
             # config; DEBUG otherwise.
             (_LOGGER.info if debug_logs else _LOGGER.debug)(
-                "go2rtc stream plan for %s: video=%s (h264_transcode %s, option h264_cameras=%s), audio=opus+aac",
+                "go2rtc stream plan for %s: video=%s (h264_transcode %s, size %s, option h264_cameras=%s), "
+                "audio=opus+aac",
                 dev_id,
                 video_codec,
                 "ON" if force_h264 else "off",
+                h264_resolution(self._options),
                 self._options.get("h264_cameras") or [],
             )
 
@@ -264,25 +347,15 @@ class Go2RTCManager:
             #      ~10s cold start plus the up-to-one-GOP wait for a decodable
             #      keyframe instead of dying into a 404.
             if force_h264:
-                # Cap at 1080p / H.264 High level 4.0 for HomeKit (and HLS).
-                # HomeKit cameras top out at 1920x1080 (~level 4.0); a Cubo 3
-                # (SW05) HEVC sensor streams 2560x1440, so this transcode was
-                # emitting 1440p High level ~5.0. HomeKit then sets up a full
-                # SRTP session and SILENTLY refuses the out-of-spec video — a
-                # valid session with nothing on screen, i.e. "No Response"
-                # (issue #85, after the v2.6.18 producer fix). scale=min(...)
-                # with force_original_aspect_ratio=decrease only shrinks a
-                # source ABOVE 1080p, so a native-1080p camera (Cubo 2 / CB02)
-                # is byte-for-byte unaffected. This is the COMPATIBILITY stream
-                # (that is why it exists); full-resolution recording of a 1440p
+                # The COMPATIBILITY stream (that is why it exists): HomeKit-safe
+                # H.264 at most 1080p (or 720p, the option), every camera frame
+                # once, a keyframe every H264_KEYINT frames — see
+                # h264_transcode_args. Full-resolution recording of a 1440p
                 # camera should point its NVR at the native combined stream,
-                # which stays untouched. Verified on go2rtc 1.9.14: the plain
-                # -level:v arg is overridden by go2rtc's template, so the level
-                # is pinned via -x264-params (ffprobe out: High / level 4.0).
-                hk = (
-                    "-vf scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
-                    " -profile:v high -x264-params level=4.0"
-                )
+                # which stays untouched. Verified on go2rtc 1.9.14 + ffmpeg
+                # 8.1.2 (a private go2rtc on a live camera): go2rtc puts these
+                # arguments BEFORE its own template on the ffmpeg command line.
+                hk = h264_transcode_args(self._options, await self._fps_passthrough_flag())
                 self._streams[f"cuboai_h264_{dev_id}"] = [
                     f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw={hk}",
                 ]

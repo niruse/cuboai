@@ -129,6 +129,7 @@ needs a re-login.
 | RTSP port for the local camera stream | first free port (usually `8557`) | Port of the integration's own streaming engine. If it is taken, the engine moves to the next free port; the port in use is always shown on the sensors. |
 | `camera_ip_<device id>` (one per camera) | learned automatically | The camera's LAN address. The integration reaches the camera by a direct probe, not broadcast discovery; the address is learned after the first local connection. Set it by hand (from your router's client list) only if the local sensors and the stream stay unavailable. |
 | Transcode these cameras to H.264 | none | For H.265 cameras (Cubo 3 / SW05) that fail in HomeKit or Home Assistant's own player. Uses extra CPU; leave H.264 cameras (Cubo 2 / CB02) unticked. Also available as `cuboai.set_h264_transcode` and in the card editor. |
+| Size of the H.264 transcode | `1080p` | The largest picture the transcode sends; a smaller camera picture is never enlarged. Choose `720p` if the machine running Home Assistant can't convert 1080p in real time (a Raspberry Pi 4, for example): the picture then falls behind and HomeKit shows *No Response*. *Download diagnostics* says when the conversion is too slow. |
 
 ### NVR export
 
