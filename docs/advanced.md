@@ -34,7 +34,7 @@ Other safeguards:
 | Stream | What it is |
 |---|---|
 | `cuboai_combined_<id>` | The live stream (video + audio). What the card, HomeKit and NVRs use. |
-| `cuboai_h264_<id>` | The H.264 transcode, when *Transcode these cameras to H.264* is on for the camera; then it is the live stream. |
+| `cuboai_h264_<id>` | The H.264 transcode, when *Transcode these cameras to H.264* is on for the camera; then it is the live stream. H.264 High, level 4.0, at most 1080p or 720p (*Size of the H.264 transcode*), each camera frame encoded once, a keyframe every 15 frames. |
 | `cuboai_stamped_<id>` | The live stream with the time burned in, when the RTSP timestamp option is on; then `nvr_rtsp_url` points here. |
 | `cuboai_protect_<id>` | A fixed name UniFi Protect is given; it carries the live stream or the transcode, whichever the H.264 option selects. |
 | `cuboai_dvr_<id>` | Recorded playback; idle until `cuboai.play_recording` asks for a moment. |

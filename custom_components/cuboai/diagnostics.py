@@ -31,6 +31,7 @@ from .const import (
     OPT_PROTECT_ENABLED,
     OPT_PROTECT_PASSWORD,
     effective_ports,
+    h264_resolution,
     live_stream_name,
     protect_stream_name,
 )
@@ -49,8 +50,32 @@ _KEY_EVENT = re.compile(
     r"stop producer|start producer|census tick"
 )
 _CONSUMER = re.compile(r"\[rtsp\] new consumer stream=(\S+)")
+# What the CAMERA sends: the engine's frame census and its muxer. A conversion
+# never shows up here (#85: `{"hevc": 271}` was read as "HomeKit gets HEVC"
+# although HomeKit got the H.264 conversion).
 _VIDEO_CODEC = re.compile(r"kind=video\b.*?\bcodec=([a-z0-9]+)")
 _MUXING = re.compile(r"\[mpegts\] muxing ([a-z0-9]+)")
+# ffmpeg's progress line, which go2rtc logs for its conversions with debug logs
+# on (ffmpeg 8.1, #85):
+#   frame= 1120 fps= 20 q=17.0 size=N/A time=00:00:37.43 bitrate=N/A
+#   dup=604 drop=0 speed=0.661x elapsed=0:00:56.67
+# ffmpeg leaves dup/drop out while both are 0, and elapsed= out before 7.x.
+# q= is -1 when the video is only copied, so q >= 0 means a video encoder ran.
+_PROGRESS = re.compile(
+    r"\bframe=\s*(?P<frame>\d+)\s+fps=\s*(?P<fps>[\d.]+)\s+q=\s*(?P<q>-?[\d.]+)"
+    r".*?\btime=\s*(?P<time>\d+:\d{2}:\d{2}(?:\.\d+)?)"
+    r"(?:.*?\bdup=\s*(?P<dup>\d+)\s+drop=\s*(?P<drop>\d+))?"
+    r".*?\bspeed=\s*(?P<speed>[\d.]+)x"
+    r"(?:.*?\belapsed=\s*(?P<elapsed>\d+:\d{2}:\d{2}(?:\.\d+)?))?"
+)
+#: A conversion is judged only after this long: its first seconds are spent
+#: catching up with what ffmpeg buffered while it waited for a keyframe.
+PROGRESS_WARMUP_S = 20.0
+#: Below this, a conversion of a live camera is falling behind. A machine that
+#: keeps up holds ~1.00x: the camera paces the input.
+SLOW_SPEED = 0.9
+#: Progress lines kept in the download.
+PROGRESS_KEPT = 10
 
 # The two ways the camera handshake fails (see cuboai_transport_py.connect, #98).
 # They look identical to go2rtc but have opposite causes, so they get opposite
@@ -172,10 +197,65 @@ def read_log_lines(log_path: str) -> list[str]:
     return lines
 
 
+def _seconds(clock: str | None) -> float | None:
+    """ffmpeg's H:MM:SS.ss -> seconds."""
+    if not clock:
+        return None
+    h, m, s = clock.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def parse_progress(line: str) -> dict | None:
+    """One ffmpeg progress line of a VIDEO conversion, or None.
+
+    Copy-only processes (q=-1: an audio-only conversion for WebRTC) are left
+    out: their speed says nothing about the H.264 conversion.
+    """
+    m = _PROGRESS.search(line)
+    if not m or float(m.group("q")) < 0:
+        return None
+    frame = int(m.group("frame"))
+    dup = int(m.group("dup") or 0)
+    return {
+        "frame": frame,
+        "encode_fps": float(m.group("fps")),
+        "video_time_s": _seconds(m.group("time")),
+        "elapsed_s": _seconds(m.group("elapsed")),
+        "speed": float(m.group("speed")),
+        "dup": dup,
+        "drop": int(m.group("drop") or 0),
+        "repeated_frames_pct": round(100.0 * dup / frame, 1) if frame else 0.0,
+    }
+
+
+def _warm(progress: dict) -> bool:
+    """Past its first PROGRESS_WARMUP_S seconds (wall time when ffmpeg says so, else video time)."""
+    age = progress["elapsed_s"] if progress["elapsed_s"] is not None else progress["video_time_s"]
+    return (age or 0.0) >= PROGRESS_WARMUP_S
+
+
+def transcode_facts(progress: list[dict]) -> dict:
+    """What the conversions (go2rtc's ffmpeg) did, apart from what the camera sends.
+
+    go2rtc.log does not say which stream a progress line belongs to, so this
+    is about the box: the latest warmed-up line that fell behind is `slow`.
+    """
+    warm = [p for p in progress if _warm(p)]
+    slow = [p for p in warm if p["speed"] < SLOW_SPEED]
+    return {
+        "progress_lines": len(progress),
+        "latest": progress[-PROGRESS_KEPT:],
+        "slowest_speed": min((p["speed"] for p in warm), default=None),
+        "slow": slow[-1] if slow else None,
+    }
+
+
 def log_facts(lines: list[str], scrubber: Scrubber) -> dict:
-    """What go2rtc.log says: who dialed which stream, and what the camera sends."""
+    """What go2rtc.log says: who dialed which stream, what the camera sends, and
+    how the conversions kept up."""
     consumers: dict[str, int] = {}
     codecs: dict[str, int] = {}
+    progress: list[dict] = []
     key_events: list[str] = []
     # [engine lines, echo lines] per failure kind
     failures = {_NO_DISCOVERY_REPLY: [0, 0], _NO_GRANT: [0, 0]}
@@ -187,6 +267,10 @@ def log_facts(lines: list[str], scrubber: Scrubber) -> dict:
         m = _VIDEO_CODEC.search(line) or _MUXING.search(line)
         if m:
             codecs[m.group(1)] = codecs.get(m.group(1), 0) + 1
+        if "speed=" in line:
+            p = parse_progress(line)
+            if p:
+                progress.append(p)
         for phrase, counts in failures.items():
             if phrase in line:
                 counts[0 if _ENGINE_FAILURE_LINE in line else 1] += 1
@@ -195,7 +279,11 @@ def log_facts(lines: list[str], scrubber: Scrubber) -> dict:
     return {
         "lines_read": len(lines),
         "rtsp_consumers_by_stream": consumers,
-        "video_codecs_seen": codecs,
+        # Every camera together: the log does not say which camera a frame
+        # came from. What a conversion OUTPUTS is under "transcode" and, live,
+        # under each camera's streams.h264.video_codec.
+        "camera_video_codecs": codecs,
+        "transcode": transcode_facts(progress),
         # Attempts, not lines: the engine's own line when present, else the echoes.
         "handshake_failures": {
             "no_discovery_reply": failures[_NO_DISCOVERY_REPLY][0] or failures[_NO_DISCOVERY_REPLY][1],
@@ -483,6 +571,38 @@ def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
     return out
 
 
+def _transcode_verdicts(report: dict) -> list[str]:
+    """A conversion that cannot keep up with the camera (#85).
+
+    go2rtc.log does not say which stream a progress line belongs to: the camera
+    is named only when it is the one camera with the H.264 transcode on and no
+    other conversion (the RTSP timestamp) is configured.
+    """
+    slow = ((report.get("go2rtc_log") or {}).get("transcode") or {}).get("slow")
+    if not slow:
+        return []
+    cams = report.get("cameras") or {}
+    transcoding = [alias for alias, cam in cams.items() if cam.get("h264_transcode")]
+    stamped = (report.get("options") or {}).get("rtsp_timestamp_cameras") or []
+    named = len(transcoding) == 1 and not stamped
+    who = f"The H.264 conversion of {transcoding[0]}" if named else "A video conversion (ffmpeg) on this machine"
+    elapsed = slow["elapsed_s"]
+    if elapsed is None:  # ffmpeg before 7.x prints no elapsed=; speed is video time / wall time
+        elapsed = slow["video_time_s"] / slow["speed"] if slow["speed"] > 0 else slow["video_time_s"]
+    behind = max(0.0, elapsed - slow["video_time_s"])
+    text = (
+        f"{who} runs slower than real time: {slow['speed']:.2f}x, {slow['video_time_s']:.0f} s of video in "
+        f"{elapsed:.0f} s, so the picture was {behind:.0f} s behind and falling further. HomeKit gives up on a "
+        "stream like that ('No Response'), and every viewer of the conversion lags. This machine does not have "
+        "the processor for it."
+    )
+    if named and cams[transcoding[0]].get("h264_resolution") != "720p":
+        text += " Set 'Size of the H.264 transcode' to 720p (Configure), which needs far less."
+    else:
+        text += " Close other viewers that convert at the same time, and check what else keeps the processor busy."
+    return [text]
+
+
 def verdicts(report: dict) -> list[str]:
     """Plain-language conclusions. Each rule states one thing that is true of
     this box and matters for HomeKit / HA's stream player."""
@@ -495,11 +615,12 @@ def verdicts(report: dict) -> list[str]:
             "(Configure), reproduce the problem, then download diagnostics again."
         )
     log = report.get("go2rtc_log") or {}
-    log_codecs = set(log.get("video_codecs_seen") or {})
+    log_codecs = set(log.get("camera_video_codecs") or {})
     handshake = log.get("handshake_failures") or {}
     no_reply = handshake.get("no_discovery_reply", 0)
     no_grant = handshake.get("answered_but_no_grant", 0)
     out += _handshake_verdicts(report, no_reply, no_grant, bool(log_codecs))
+    out += _transcode_verdicts(report)
     out += _protect_verdicts(report, log_codecs)
     for alias, cam in report["cameras"].items():
         live = cam["streams"]["combined"].get("video_codec") or []
@@ -596,8 +717,10 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
         dev = cam.get("device_id") or ""
         alias = scrubber.alias_of(dev)
         mine = [eid for eid, uid in our_entities.items() if dev and dev in uid]
+        transcoded = dev in (options.get("h264_cameras") or [])
         report_cams[alias] = {
-            "h264_transcode": dev in (options.get("h264_cameras") or []),
+            "h264_transcode": transcoded,
+            "h264_resolution": h264_resolution(options) if transcoded else None,
             "camera_ip": options.get(f"camera_ip_{dev}") or cam.get("camera_ip") or None,
             "stream_handed_out": live_stream_name(dev, options),
             "recent_stream_requests": calls.get(dev) or [],

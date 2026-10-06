@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.47]
+
+### Fixed
+- **The H.264 transcode no longer encodes every frame twice** (HomeKit "No Response" on a Cubo 3,
+  #85). The transcode writes to the streaming engine's RTSP server, and ffmpeg pads that kind of
+  output up to the frame rate it guessed for the camera by repeating frames. A Cubo 3 was guessed at
+  29.92 fps while it sends 15, so more than half the frames the encoder worked on were repeats
+  (`dup=604` of 1120). On a Raspberry Pi 4 the conversion then ran at 0.53–0.66x real time, so the
+  picture fell further behind the longer it was open and HomeKit gave up. Each camera frame is now
+  encoded exactly once.
+- **The H.264 transcode starts showing sooner.** A new viewer (HomeKit, Home Assistant's player)
+  waits for a keyframe before it can show anything. The transcode made one every 50 frames, which
+  was 5 seconds on a Cubo 2 measured sending 10 fps. It is now every 15 frames: 1 to 1.5 seconds at
+  the 10–15 fps the cameras send.
+
+### Added
+- **Size of the H.264 transcode** (Configure): `1080p` (the default, as before) or `720p`, for a
+  machine that cannot convert 1080p in real time, such as a Raspberry Pi 4. A smaller camera picture
+  is never enlarged. Measured on a Raspberry Pi 5 with a Cubo 2: 0.38 of a processor core at 720p
+  against 0.56 at 1080p.
+- **Download diagnostics says when a conversion is too slow:** any video conversion that runs below
+  0.9x real time after its first 20 seconds gets a verdict with the speed, how far behind the
+  picture was, and what to do. The camera is named when it is the only one being converted.
+
+### Changed
+- In the diagnostics download, `video_codecs_seen` is now `camera_video_codecs`. It only ever counted
+  what the cameras send (for every camera together), never what a conversion outputs: `{"hevc": …}`
+  there does not mean HomeKit was handed H.265. The new `transcode` section lists the conversions'
+  progress (speed, repeated frames).
+
 ## [2.6.46]
 
 ### Fixed

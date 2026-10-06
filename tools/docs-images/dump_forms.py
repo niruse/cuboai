@@ -61,7 +61,9 @@ def _kind(validator):
             return "int", {"min": rng.min, "max": rng.max}
         return "int", {}
     if isinstance(validator, vol.In):
-        return "select", {"choices": dict(validator.container)}
+        container = validator.container
+        choices = dict(container) if isinstance(container, dict) else {c: c for c in container}
+        return "select", {"choices": choices}
     return "text", {}
 
 

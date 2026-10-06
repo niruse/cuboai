@@ -48,6 +48,26 @@ PROTECT_USERNAME_DEFAULT = "cuboai"
 #: Protect with no explanation (the same lesson as the NVR's RTSP port).
 DESIRED_ONVIF_PORT = 8899
 
+# ── H.264 transcode (the `cuboai_h264_<id>` stream for HomeKit / HLS) ────────
+#: Largest picture the transcode sends. 1080p is HomeKit's ceiling; 720p is for
+#: machines that cannot convert 1080p in real time (#85: a Raspberry Pi 4 ran
+#: the 1080p conversion at 0.53-0.66x, so HomeKit gave up). A smaller source is
+#: never enlarged.
+OPT_H264_RESOLUTION = "h264_resolution"
+H264_RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
+H264_RESOLUTION_DEFAULT = "1080p"
+#: Frames between the transcode's keyframes. A new viewer (HomeKit's ffmpeg,
+#: HLS) cannot show anything before the next keyframe; go2rtc's template uses
+#: 50 frames, which was 5 s on a Cubo 2 measured sending 10 fps. 15 frames is
+#: 1-1.5 s at the 10-15 fps the cameras send.
+H264_KEYINT = 15
+
+
+def h264_resolution(options) -> str:
+    """The configured transcode size, or the default for a missing or unknown value."""
+    value = (options or {}).get(OPT_H264_RESOLUTION)
+    return value if value in H264_RESOLUTIONS else H264_RESOLUTION_DEFAULT
+
 
 def effective_ports(hass, entry_id, rtsp_default: int = 8555) -> tuple[int, int]:
     """The (rtsp, api) ports go2rtc ACTUALLY bound, for ONE config entry.
