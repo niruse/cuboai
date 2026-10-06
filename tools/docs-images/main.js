@@ -170,7 +170,12 @@ function field(f, value) {
   else if (value === "" || value === null || value === undefined) shown = "";
   else shown = `<span class="val">${esc(value)}</span>`;
   const req = f.required ? "*" : "";
-  const eye = f.type === "password" ? `<span class="sfx">${icon("mdi:eye", 20, "#6b6b6b")}</span>` : "";
+  const eye =
+    f.type === "password"
+      ? `<span class="sfx">${icon("mdi:eye", 20, "#6b6b6b")}</span>`
+      : f.type === "select"
+        ? `<span class="sfx">${icon("mdi:menu-down", 22, "#6b6b6b")}</span>`
+        : "";
   return `<div class="fld"><div class="tf"><span class="lb">${esc(f.label)}${req}</span>${shown}${eye}</div>${help}</div>`;
 }
 
@@ -331,7 +336,7 @@ const SCENES = {
   async "configure-streaming"() {
     const f = await forms();
     root.innerHTML = dialog(f["configure"], {
-      keys: ["rtsp_port", "nvr_enabled", "nvr_username", "nvr_password", `camera_ip_${DEV}`, `camera_ip_${DEV2}`, "h264_cameras", "rtsp_timestamp_cameras"],
+      keys: ["rtsp_port", "nvr_enabled", "nvr_username", "nvr_password", `camera_ip_${DEV}`, `camera_ip_${DEV2}`, "h264_cameras", "h264_resolution", "rtsp_timestamp_cameras"],
       values: { rtsp_port: 8557, nvr_enabled: true, nvr_password: "", h264_cameras: [DEV2], rtsp_timestamp_cameras: [DEV], ...SAMPLE_IPS },
       more: "… general options above …",
     });

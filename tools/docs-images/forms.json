@@ -330,6 +330,18 @@
         }
       },
       {
+        "key": "h264_resolution",
+        "label": "Size of the H.264 transcode",
+        "help": "1080p keeps full HD, the most HomeKit shows. Choose 720p if the machine running Home Assistant cannot convert 1080p in real time (a Raspberry Pi 4, for example): a picture that falls behind makes HomeKit show 'No Response'. Download diagnostics to check: it says when the conversion is too slow. Applies only to the cameras checked above.",
+        "type": "select",
+        "default": "1080p",
+        "required": false,
+        "choices": {
+          "1080p": "1080p",
+          "720p": "720p"
+        }
+      },
+      {
         "key": "rtsp_timestamp_cameras",
         "label": "Burn the date and time into these cameras' NVR recordings",
         "help": "Only the stream an NVR records (the nvr_rtsp_url on the camera's WebRTC Stream sensor) gets the time burned into the picture. Live view and HomeKit are unchanged. Costs a transcode on this machine per checked camera.",

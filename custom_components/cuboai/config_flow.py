@@ -9,7 +9,9 @@ from .api import cuboai_functions as api
 from .const import (
     DESIRED_ONVIF_PORT,
     DOMAIN,
+    H264_RESOLUTIONS,
     NOTIFY_ON_RESTART_DEFAULT,
+    OPT_H264_RESOLUTION,
     OPT_NOTIFY_ON_RESTART,
     OPT_PROTECT_CAMERA,
     OPT_PROTECT_CAMERAS,
@@ -22,6 +24,7 @@ from .const import (
     assign_protect_ports,
     effective_onvif_ports,
     effective_ports,
+    h264_resolution,
     protect_camera_id,
     protect_camera_ids,
 )
@@ -741,6 +744,14 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
         schema[vol.Optional("h264_cameras", default=self.config_entry.options.get("h264_cameras", []))] = (
             cv.multi_select(h264_options)
         )
+        # How big that transcode is. 720p for a machine that cannot convert
+        # 1080p in real time (#85: a Raspberry Pi 4 managed 0.53-0.66x).
+        schema[
+            vol.Optional(
+                OPT_H264_RESOLUTION,
+                default=h264_resolution(self.config_entry.options),
+            )
+        ] = vol.In(list(H264_RESOLUTIONS))
 
         # Burn the wall-clock time into the RTSP video image for the checked
         # cameras, so an NVR's recordings show when each frame was captured.
