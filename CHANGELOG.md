@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.48]
+
+### Fixed
+- **Home Assistant starts several minutes sooner** (#111). The streaming engine's watchdog, which runs
+  for as long as the integration does, was started as a task Home Assistant waits for during
+  startup. Startup therefore sat out its full wrap-up timeout on every start ("Setup timed out for
+  bootstrap waiting on … `_watchdog()`"), and HomeKit Bridge and automations were not started
+  until then. The watchdog, the camera's stream warm-up, the speaker queue and the lullaby timer
+  now run as background tasks. The reporter measured startup going from about 7 minutes to about 2.
+- **The RTSP port no longer moves after a restart** (#111). Home Assistant does not unload
+  integrations when it stops, so the streaming engine was only stopped on a reload. Where a restart
+  does not also end the container, the engine outlived Home Assistant and kept the RTSP port. The
+  next start then took another one (8557 → 8558), and every NVR or Scrypted URL broke until the
+  integration was reloaded. The engine is now stopped whenever Home Assistant stops, which also
+  lets the camera sessions close properly.
+
+Reported, diagnosed and tested by @mahmoudhamza21 (#111).
+
 ## [2.6.47]
 
 ### Fixed
