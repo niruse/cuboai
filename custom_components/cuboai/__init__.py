@@ -4,7 +4,7 @@ import os
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
@@ -476,6 +476,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("go2rtc manager started.")
 
     hass.data[DOMAIN][entry.entry_id]["go2rtc"] = go2rtc_manager
+    _stop_engine_on_shutdown(hass, entry, go2rtc_manager)
 
     # UniFi Protect (ONVIF): after go2rtc, whose RTSP port Protect is pointed at.
     # A failure here (port taken, no password) is reported and never blocks the
@@ -536,6 +537,26 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
             _LOGGER.debug("Skipping reload for camera IP discovery: %s", changed_keys)
             return
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+def _stop_engine_on_shutdown(hass: HomeAssistant, entry: ConfigEntry, manager: Go2RTCManager) -> None:
+    """Stop the streaming engine when Home Assistant stops (issue #111).
+
+    Home Assistant does not unload config entries when it stops or restarts, so
+    async_unload_entry, the only place go2rtc used to be stopped, never runs
+    then. Where the restart does not also end the container (seen on a Home
+    Assistant OS VM), go2rtc outlived it and kept the RTSP port, so the next
+    start moved to another port and every NVR / Scrypted URL broke. Stopping it
+    here also lets the camera sessions close properly instead of being killed.
+
+    A plain listener, removed on unload, rather than async_listen_once: removing
+    a once-listener after it has fired is an error, and stop() is idempotent.
+    """
+
+    async def _on_stop(_event) -> None:
+        await manager.stop()
+
+    entry.async_on_unload(hass.bus.async_listen(EVENT_HOMEASSISTANT_STOP, _on_stop))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
