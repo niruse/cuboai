@@ -20,6 +20,8 @@ its camera by the `device_id` attribute and lets that entity supply the stream.
 
 Other safeguards:
 
+- **Stopped with Home Assistant.** The engine is stopped when Home Assistant stops or restarts, so
+  it never outlives it and the next start gets the same ports.
 - **Leftover engine cleanup.** If a previous go2rtc survived a hard crash and still holds the ports,
   it is recognised by its `cuboai_*` streams and stopped on startup.
 - **No retry storms.** If the engine could not start at all, camera entities stop offering streams
