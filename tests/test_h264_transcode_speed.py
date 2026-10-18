@@ -197,6 +197,7 @@ async def test_configure_offers_the_size_and_keeps_the_saved_one():
     for saved, shown in (({}, "1080p"), ({OPT_H264_RESOLUTION: "720p"}, "720p")):
         hass = MagicMock()
         hass.data = {DOMAIN: {}}
+        hass.async_add_executor_job = AsyncMock(return_value=[])
         hass.config_entries.async_entries = lambda domain: []
         entry = MagicMock(entry_id="entryA", options=saved, data={"cameras": cams, "all_cameras": cams})
         flow = cf.CuboAIOptionsFlowHandler()

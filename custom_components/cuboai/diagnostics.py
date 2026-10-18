@@ -721,6 +721,9 @@ async def async_get_config_entry_diagnostics(hass, entry) -> dict:
         report_cams[alias] = {
             "h264_transcode": transcoded,
             "h264_resolution": h264_resolution(options) if transcoded else None,
+            "h264_encoder": ("vaapi" if getattr(manager, "_vaapi_enabled", False) is True else "software")
+            if transcoded
+            else None,
             "camera_ip": options.get(f"camera_ip_{dev}") or cam.get("camera_ip") or None,
             "stream_handed_out": live_stream_name(dev, options),
             "recent_stream_requests": calls.get(dev) or [],

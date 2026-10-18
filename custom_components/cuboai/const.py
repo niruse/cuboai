@@ -56,6 +56,11 @@ DESIRED_ONVIF_PORT = 8899
 OPT_H264_RESOLUTION = "h264_resolution"
 H264_RESOLUTIONS = {"1080p": (1920, 1080), "720p": (1280, 720)}
 H264_RESOLUTION_DEFAULT = "1080p"
+OPT_H264_ENCODER = "h264_encoder"
+H264_ENCODERS = {"software": "Software (CPU)", "vaapi": "VAAPI (Linux GPU)"}
+H264_ENCODER_DEFAULT = "software"
+OPT_VAAPI_DEVICE = "vaapi_device"
+VAAPI_DEVICE_PATTERN = r"/dev/dri/renderD[0-9]+"
 #: Frames between the transcode's keyframes. A new viewer (HomeKit's ffmpeg,
 #: HLS) cannot show anything before the next keyframe; go2rtc's template uses
 #: 50 frames, which was 5 s on a Cubo 2 measured sending 10 fps. 15 frames is
@@ -67,6 +72,11 @@ def h264_resolution(options) -> str:
     """The configured transcode size, or the default for a missing or unknown value."""
     value = (options or {}).get(OPT_H264_RESOLUTION)
     return value if value in H264_RESOLUTIONS else H264_RESOLUTION_DEFAULT
+
+
+def h264_encoder(options) -> str:
+    value = (options or {}).get(OPT_H264_ENCODER)
+    return value if isinstance(value, str) and value in H264_ENCODERS else H264_ENCODER_DEFAULT
 
 
 def effective_ports(hass, entry_id, rtsp_default: int = 8555) -> tuple[int, int]:

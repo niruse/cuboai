@@ -9,8 +9,10 @@ from .api import cuboai_functions as api
 from .const import (
     DESIRED_ONVIF_PORT,
     DOMAIN,
+    H264_ENCODERS,
     H264_RESOLUTIONS,
     NOTIFY_ON_RESTART_DEFAULT,
+    OPT_H264_ENCODER,
     OPT_H264_RESOLUTION,
     OPT_NOTIFY_ON_RESTART,
     OPT_PROTECT_CAMERA,
@@ -20,10 +22,12 @@ from .const import (
     OPT_PROTECT_PORT,
     OPT_PROTECT_PORTS,
     OPT_PROTECT_USERNAME,
+    OPT_VAAPI_DEVICE,
     PROTECT_USERNAME_DEFAULT,
     assign_protect_ports,
     effective_onvif_ports,
     effective_ports,
+    h264_encoder,
     h264_resolution,
     protect_camera_id,
     protect_camera_ids,
@@ -568,8 +572,16 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         setup_file_logger(self.hass)
+        from .go2rtc import vaapi_devices
+
+        devices = await self.hass.async_add_executor_job(vaapi_devices)
         errors = {}
         if user_input is not None:
+            if user_input.get(OPT_H264_ENCODER) == "vaapi":
+                if not devices:
+                    errors[OPT_H264_ENCODER] = "vaapi_unavailable"
+                elif user_input.get(OPT_VAAPI_DEVICE) not in devices:
+                    errors[OPT_VAAPI_DEVICE] = "vaapi_device_unavailable"
             # Validate a manually chosen RTSP port BEFORE saving: it is valid
             # if it's the port our own go2rtc currently holds, or if it can
             # actually be bound. Otherwise reject with a clear error instead
@@ -594,6 +606,9 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
             errors.update(protect_errors)
 
         if user_input is not None and not errors:
+            user_input.setdefault(OPT_H264_ENCODER, "software")
+            if OPT_VAAPI_DEVICE in self.config_entry.options:
+                user_input.setdefault(OPT_VAAPI_DEVICE, self.config_entry.options[OPT_VAAPI_DEVICE])
             # Camera selection is stored in entry DATA (it defines which devices
             # exist), the rest are regular options.
             selected = user_input.pop("cameras", None)
@@ -752,6 +767,14 @@ class CuboAIOptionsFlowHandler(config_entries.OptionsFlow):
                 default=h264_resolution(self.config_entry.options),
             )
         ] = vol.In(list(H264_RESOLUTIONS))
+        encoders = H264_ENCODERS if devices else {"software": H264_ENCODERS["software"]}
+        device = self.config_entry.options.get(OPT_VAAPI_DEVICE)
+        encoder = h264_encoder(self.config_entry.options) if device in devices else "software"
+        schema[vol.Optional(OPT_H264_ENCODER, default=encoder)] = vol.In(encoders)
+        if devices:
+            schema[vol.Optional(OPT_VAAPI_DEVICE, default=device if device in devices else devices[0])] = vol.In(
+                devices
+            )
 
         # Burn the wall-clock time into the RTSP video image for the checked
         # cameras, so an NVR's recordings show when each frame was captured.

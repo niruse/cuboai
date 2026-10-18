@@ -130,6 +130,20 @@ needs a re-login.
 | `camera_ip_<device id>` (one per camera) | learned automatically | The camera's LAN address. The integration reaches the camera by a direct probe, not broadcast discovery; the address is learned after the first local connection. Set it by hand (from your router's client list) only if the local sensors and the stream stay unavailable. |
 | Transcode these cameras to H.264 | none | For H.265 cameras (Cubo 3 / SW05) that fail in HomeKit or Home Assistant's own player. Uses extra CPU; leave H.264 cameras (Cubo 2 / CB02) unticked. Also available as `cuboai.set_h264_transcode` and in the card editor. |
 | Size of the H.264 transcode | `1080p` | The largest picture the transcode sends; a smaller camera picture is never enlarged. Choose `720p` if the machine running Home Assistant can't convert 1080p in real time (a Raspberry Pi 4, for example): the picture then falls behind and HomeKit shows *No Response*. *Download diagnostics* says when the conversion is too slow. |
+| H.264 encoder | Software (CPU) | **VAAPI (Linux GPU)** is offered only when an accessible Linux render node is detected inside Home Assistant. Existing installations keep software encoding. |
+| VAAPI render device | first detected render node | Pick from detected render nodes, not a hard-coded path. Hidden if none are accessible. Used only by the VAAPI H.264 encoder. |
+
+#### VAAPI H.264 encoding
+
+In **Configure**, select the cameras under **Transcode these cameras to H.264**, then choose **VAAPI (Linux GPU)** under **H.264 encoder**. This requires a compatible Linux GPU, a working VAAPI driver, and an FFmpeg build with VAAPI decoding, scaling and H.264 encoding support. Support depends on the GPU, driver and camera's source codec; the startup check does not exercise live camera decoding.
+
+Configure discovers `/dev/dri/renderD<number>` character devices on Linux that the Home Assistant process can read and write. It offers a device picker when devices are found; otherwise only Software is available and the device field is hidden. Discovery runs off the event loop and is repeated when saving to reject a device that has disappeared. An existing choice is retained while its device is available. If it disappears, reopening Configure suggests Software rather than silently switching to another GPU; just opening the form never changes saved settings. Device presence alone does not establish driver or codec compatibility, so the startup encoding test still runs.
+
+For Home Assistant Container, pass the render device into the container (for example, `/dev/dri/renderD128:/dev/dri/renderD128` under Compose `devices`), ensure the container user can access it, and include the appropriate VAAPI driver in the image. Enabling the setting does not install drivers or change the container. If no devices appear, fix device passthrough or permissions and reopen Configure. A saved device that becomes unavailable at startup falls back to software without changing stream URLs.
+
+At startup or reload, the integration tests one synthetic frame through the GPU scaler and H.264 encoder without opening a camera session. If the test fails, it logs a warning and generates the existing software transcode instead. This is a startup check, not automatic recovery from every possible live decoder or GPU failure: if the actual stream fails, switch the encoder back to **Software (CPU)**. Diagnostics show the encoder selected after the startup check.
+
+Both encoders retain the same `cuboai_h264_<device_id>` stream name, so Home Assistant, HomeKit and external RTSP consumers can share it without changing URLs when the encoder changes. There is no separate software compatibility stream running alongside the VAAPI stream. Native streams, timestamp burn-in streams, RTSP authentication and port selection keep their existing behaviour. The VAAPI device argument is scoped to that H.264 transcode rather than applied globally to every FFmpeg process.
 
 ### NVR export
 
