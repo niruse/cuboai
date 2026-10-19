@@ -1,9 +1,11 @@
 import asyncio
+import glob
 import logging
 import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -19,6 +21,9 @@ from .const import (
     NOTIFY_ON_RESTART_DEFAULT,
     OPT_NOTIFY_ON_RESTART,
     OPT_PROTECT_ENABLED,
+    OPT_VAAPI_DEVICE,
+    VAAPI_DEVICE_PATTERN,
+    h264_encoder,
     h264_resolution,
     protect_camera_ids,
     protect_stream_name,
@@ -40,6 +45,106 @@ FPS_MODE_PASSTHROUGH = "-fps_mode passthrough"
 #: in later versions but still accepted by 8.1).
 VSYNC_PASSTHROUGH = "-vsync passthrough"
 _FPS_FLAG: str | None = None
+VAAPI_H264_ARGS = f"-c:v h264_vaapi -g {H264_KEYINT} -bf 0 -profile:v high -level:v 4.0 -sei:v 0"
+
+
+def vaapi_dimensions(resolution: str) -> tuple[str, str]:
+    """Return bounded, aspect-preserving VAAPI dimensions."""
+    width, height = H264_RESOLUTIONS[resolution]
+    return (
+        f"'min({width},iw)'",
+        f"'min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+    )
+
+
+def _render_device_ok(device) -> bool:
+    """A Linux render node (`/dev/dri/renderD<n>`) this process can read and write."""
+    try:
+        return bool(
+            isinstance(device, str)
+            and re.fullmatch(VAAPI_DEVICE_PATTERN, device)
+            and stat.S_ISCHR(os.stat(device).st_mode)
+            and os.access(device, os.R_OK | os.W_OK)
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def vaapi_devices() -> list[str]:
+    """List accessible Linux render nodes."""
+    if sys.platform != "linux":
+        return []
+    try:
+        candidates = glob.glob("/dev/dri/renderD*")
+    except OSError:
+        return []
+    devices = [device for device in candidates if _render_device_ok(device)]
+    return sorted(devices, key=lambda device: int(device.rsplit("renderD", 1)[1]))
+
+
+#: (device, resolution) pairs whose encoding test passed in this Home Assistant
+#: run. The test spawns ffmpeg (up to 10 s) and ran on EVERY engine start --
+#: Home Assistant startup awaits that start, and so does each watchdog restart.
+#: Only a pass is remembered: a failure is retried at the next start, so fixing
+#: the driver or the container needs a reload, not a restart. The cheap device
+#: check still runs every time, so a GPU that disappeared falls back at once.
+_VAAPI_PASSED: set[tuple[str, str]] = set()
+
+
+def vaapi_filters(resolution: str) -> str:
+    """The -vf chain go2rtc 1.9.14 builds for `#hardware=vaapi` + `#width/#height`
+    on an h264 output (internal/ffmpeg/hardware: InsertFilter + fixPixelFormat),
+    so the startup test exercises the same filters the live stream runs."""
+    width, height = vaapi_dimensions(resolution)
+    return f"format=vaapi|nv12,hwupload,scale_vaapi={width}:{height}:out_color_matrix=bt709:out_range=tv:format=nv12"
+
+
+def _probe_vaapi(device: str, resolution: str) -> bool:
+    """Whether VAAPI can scale and encode on `device`; blocking (see _VAAPI_PASSED)."""
+    if sys.platform != "linux" or not _render_device_ok(device):
+        return False
+    if (device, resolution) in _VAAPI_PASSED:
+        return True
+    if _vaapi_encode_test(device, resolution):
+        _VAAPI_PASSED.add((device, resolution))
+        return True
+    return False
+
+
+def _vaapi_encode_test(device: str, resolution: str) -> bool:
+    """Scale and encode one synthetic frame through VAAPI. Blocking, <= 10 s."""
+    filters = vaapi_filters(resolution)
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-vaapi_device",
+                device,
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=128x128:rate=1",
+                "-vf",
+                filters,
+                "-frames:v",
+                "1",
+                *VAAPI_H264_ARGS.split(),
+                "-f",
+                "null",
+                "-",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def fps_passthrough_flag(version_text: str) -> str:
@@ -167,6 +272,7 @@ class Go2RTCManager:
         self._streams = {}
         self._cameras = []
         self._options = {}
+        self._vaapi_enabled = False
         # Watchdog state. `_started_at` is monotonic (wall clock can step under
         # NTP and would make a long healthy run look instantaneous).
         self._watchdog_task: asyncio.Task | None = None
@@ -197,6 +303,23 @@ class Go2RTCManager:
 
     async def _resolve_codecs(self):
         """Resolve video codecs for all cameras asynchronously."""
+        self._vaapi_enabled = False
+        if h264_encoder(self._options) == "vaapi" and any(
+            camera.get("device_id") in (self._options.get("h264_cameras") or []) for camera in self._cameras
+        ):
+            try:
+                self._vaapi_enabled = await self.hass.async_add_executor_job(
+                    _probe_vaapi,
+                    self._options.get(OPT_VAAPI_DEVICE, ""),
+                    h264_resolution(self._options),
+                )
+            except Exception:
+                self._vaapi_enabled = False
+            if not self._vaapi_enabled:
+                _LOGGER.warning(
+                    "VAAPI H.264 preflight failed; using software encoding. Check the render device, "
+                    "container permissions, FFmpeg and VAAPI driver."
+                )
         script_dir = os.path.join(os.path.dirname(__file__), "tutk")
         video_script = os.path.join(script_dir, "cuboai_stream_video.py")
         debug_logs = bool(self._options.get("enable_debug_logs"))
@@ -355,10 +478,18 @@ class Go2RTCManager:
                 # which stays untouched. Verified on go2rtc 1.9.14 + ffmpeg
                 # 8.1.2 (a private go2rtc on a live camera): go2rtc puts these
                 # arguments BEFORE its own template on the ffmpeg command line.
-                hk = h264_transcode_args(self._options, await self._fps_passthrough_flag())
-                self._streams[f"cuboai_h264_{dev_id}"] = [
-                    f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw={hk}",
-                ]
+                fps_flag = await self._fps_passthrough_flag()
+                if self._vaapi_enabled:
+                    width, height = vaapi_dimensions(h264_resolution(self._options))
+                    self._streams[f"cuboai_h264_{dev_id}"] = [
+                        f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20"
+                        f"#width={width}#height={height}#hardware=vaapi#input=cuboai_vaapi#raw={fps_flag}",
+                    ]
+                else:
+                    hk = h264_transcode_args(self._options, fps_flag)
+                    self._streams[f"cuboai_h264_{dev_id}"] = [
+                        f"ffmpeg:cuboai_combined_{dev_id}#video=h264#audio=aac#timeout=20#raw={hk}",
+                    ]
 
             # Optional per-camera RTSP timestamp burn-in (opt-in). Burns the
             # wall-clock time into the video IMAGE so an NVR's recordings show
@@ -835,6 +966,15 @@ class Go2RTCManager:
         # made real: the file lives inside the integration directory and is ours to
         # own, and re-reading it would risk resurrecting exactly the stale entries
         # the loop was meant to remove.)
+        if getattr(self, "_vaapi_enabled", False):
+            device = self._options.get(OPT_VAAPI_DEVICE, "")
+            config["ffmpeg"] = {
+                "cuboai_vaapi": (
+                    f"-vaapi_device {device} -fflags nobuffer -flags low_delay -timeout {{timeout}} "
+                    "-user_agent go2rtc/ffmpeg -rtsp_flags prefer_tcp -i {input}"
+                ),
+                "h264/vaapi": VAAPI_H264_ARGS,
+            }
         config["streams"] = dict(self._streams)
         _LOGGER.info("go2rtc config written with streams: %s", sorted(self._streams))
 
