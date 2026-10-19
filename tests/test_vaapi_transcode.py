@@ -1,6 +1,7 @@
 """VAAPI settings, discovery and fallback tests."""
 
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -174,10 +175,32 @@ async def test_device_is_scoped_to_hardware_input_and_nvr_credentials_survive(ma
     assert config["rtsp"]["password"] == "private-test"
 
 
+REAL_STAT = os.stat
+
+
+def fake_render_stat(mode):
+    """os.stat that fakes only /dev/dri nodes (pytest itself calls os.stat)."""
+
+    def fake(path, *args, **kwargs):
+        if str(path).startswith("/dev/dri/"):
+            return MagicMock(st_mode=mode)
+        return REAL_STAT(path, *args, **kwargs)
+
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def fresh_vaapi_cache():
+    g2._VAAPI_PASSED.clear()
+    yield
+    g2._VAAPI_PASSED.clear()
+
+
 @pytest.fixture
 def vaapi_environment(monkeypatch):
     monkeypatch.setattr(g2.sys, "platform", "linux")
     monkeypatch.setattr(g2.os, "access", lambda *args: True)
+    monkeypatch.setattr(g2.os, "stat", fake_render_stat(stat.S_IFCHR | 0o660))
 
 
 @pytest.mark.parametrize("device", ["/dev/dri/renderD128;touch /tmp/test", "/dev/dri/renderD128\n", "", None])
@@ -223,6 +246,46 @@ def test_preflight_requires_real_encoding_success_and_is_bounded(vaapi_environme
     assert "force_original_aspect_ratio=decrease" in arguments[arguments.index("-vf") + 1]
     assert run.call_args.kwargs["timeout"] == 10
     assert not run.call_args.kwargs.get("shell", False)
+
+
+def test_preflight_runs_the_filter_chain_go2rtc_builds_for_the_live_stream(vaapi_environment):
+    with patch.object(g2.subprocess, "run", return_value=MagicMock(returncode=0)) as run:
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+    arguments = run.call_args.args[0]
+    assert arguments[arguments.index("-vf") + 1] == g2.vaapi_filters("1080p")
+    assert g2.vaapi_filters("1080p").startswith("format=vaapi|nv12,hwupload,scale_vaapi='min(1920,iw)'")
+
+
+def test_passed_preflight_is_not_rerun_on_every_engine_start(vaapi_environment):
+    with patch.object(g2.subprocess, "run", return_value=MagicMock(returncode=0)) as run:
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+        assert run.call_count == 1
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "720p")
+        assert run.call_count == 2
+
+
+def test_failed_preflight_is_retried_at_the_next_start(vaapi_environment):
+    with patch.object(g2.subprocess, "run", side_effect=[MagicMock(returncode=1), MagicMock(returncode=0)]) as run:
+        assert not g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+    assert run.call_count == 2
+
+
+def test_remembered_pass_still_falls_back_when_the_device_disappears(vaapi_environment, monkeypatch):
+    with patch.object(g2.subprocess, "run", return_value=MagicMock(returncode=0)):
+        assert g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+    monkeypatch.setattr(g2.os, "access", lambda *args: False)
+    with patch.object(g2.subprocess, "run") as run:
+        assert not g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+    run.assert_not_called()
+
+
+def test_preflight_rejects_a_render_path_that_is_not_a_character_device(vaapi_environment, monkeypatch):
+    monkeypatch.setattr(g2.os, "stat", fake_render_stat(stat.S_IFREG | 0o660))
+    with patch.object(g2.subprocess, "run") as run:
+        assert not g2._probe_vaapi(VAAPI_DEVICE_DEFAULT, "1080p")
+    run.assert_not_called()
 
 
 def options_flow(saved=None, devices=None):

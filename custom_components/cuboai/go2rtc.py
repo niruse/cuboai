@@ -57,39 +57,63 @@ def vaapi_dimensions(resolution: str) -> tuple[str, str]:
     )
 
 
+def _render_device_ok(device) -> bool:
+    """A Linux render node (`/dev/dri/renderD<n>`) this process can read and write."""
+    try:
+        return bool(
+            isinstance(device, str)
+            and re.fullmatch(VAAPI_DEVICE_PATTERN, device)
+            and stat.S_ISCHR(os.stat(device).st_mode)
+            and os.access(device, os.R_OK | os.W_OK)
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def vaapi_devices() -> list[str]:
     """List accessible Linux render nodes."""
     if sys.platform != "linux":
         return []
-    devices = []
     try:
         candidates = glob.glob("/dev/dri/renderD*")
     except OSError:
         return []
-    for device in candidates:
-        try:
-            if (
-                re.fullmatch(VAAPI_DEVICE_PATTERN, device)
-                and stat.S_ISCHR(os.stat(device).st_mode)
-                and os.access(device, os.R_OK | os.W_OK)
-            ):
-                devices.append(device)
-        except OSError:
-            continue
+    devices = [device for device in candidates if _render_device_ok(device)]
     return sorted(devices, key=lambda device: int(device.rsplit("renderD", 1)[1]))
 
 
-def _probe_vaapi(device: str, resolution: str) -> bool:
-    """Probe VAAPI scaling and encoding with one frame."""
-    if (
-        sys.platform != "linux"
-        or not isinstance(device, str)
-        or not re.fullmatch(VAAPI_DEVICE_PATTERN, device)
-        or not os.access(device, os.R_OK | os.W_OK)
-    ):
-        return False
+#: (device, resolution) pairs whose encoding test passed in this Home Assistant
+#: run. The test spawns ffmpeg (up to 10 s) and ran on EVERY engine start --
+#: Home Assistant startup awaits that start, and so does each watchdog restart.
+#: Only a pass is remembered: a failure is retried at the next start, so fixing
+#: the driver or the container needs a reload, not a restart. The cheap device
+#: check still runs every time, so a GPU that disappeared falls back at once.
+_VAAPI_PASSED: set[tuple[str, str]] = set()
+
+
+def vaapi_filters(resolution: str) -> str:
+    """The -vf chain go2rtc 1.9.14 builds for `#hardware=vaapi` + `#width/#height`
+    on an h264 output (internal/ffmpeg/hardware: InsertFilter + fixPixelFormat),
+    so the startup test exercises the same filters the live stream runs."""
     width, height = vaapi_dimensions(resolution)
-    filters = f"format=nv12,hwupload,scale_vaapi={width}:{height}:out_color_matrix=bt709:out_range=tv:format=nv12"
+    return f"format=vaapi|nv12,hwupload,scale_vaapi={width}:{height}:out_color_matrix=bt709:out_range=tv:format=nv12"
+
+
+def _probe_vaapi(device: str, resolution: str) -> bool:
+    """Whether VAAPI can scale and encode on `device`; blocking (see _VAAPI_PASSED)."""
+    if sys.platform != "linux" or not _render_device_ok(device):
+        return False
+    if (device, resolution) in _VAAPI_PASSED:
+        return True
+    if _vaapi_encode_test(device, resolution):
+        _VAAPI_PASSED.add((device, resolution))
+        return True
+    return False
+
+
+def _vaapi_encode_test(device: str, resolution: str) -> bool:
+    """Scale and encode one synthetic frame through VAAPI. Blocking, <= 10 s."""
+    filters = vaapi_filters(resolution)
     try:
         result = subprocess.run(
             [
