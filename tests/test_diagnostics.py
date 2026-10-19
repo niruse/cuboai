@@ -852,3 +852,14 @@ async def test_a_camera_without_the_transcode_reports_no_size():
     """Kill: the size reported for a camera that is not converted."""
     report, _ = await _diagnose(_hass(), _entry())
     assert report["cameras"]["camera_1"]["h264_resolution"] is None
+    assert report["cameras"]["camera_1"]["h264_encoder"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ready,encoder", [(True, "vaapi"), (False, "software")])
+async def test_diagnostics_reports_selected_encoder_after_preflight(ready, encoder):
+    hass = _hass()
+    hass.data[DOMAIN]["entryA"]["go2rtc"]._vaapi_enabled = ready
+    entry = _entry(options={"h264_cameras": [DEV], "h264_encoder": "vaapi"})
+    report, _ = await _diagnose(hass, entry)
+    assert report["cameras"]["camera_1"]["h264_encoder"] == encoder
