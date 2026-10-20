@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.49]
+
+### Added
+- **H.264 encoder: VAAPI (Linux GPU)** (Configure, #117). The H.264 transcode for H.265 cameras
+  (Cubo 3 / SW05) can now run on a Linux GPU through VAAPI instead of the processor. Choose
+  **VAAPI (Linux GPU)** under **H.264 encoder** and pick the render device. It is offered only when
+  Home Assistant can read and write a `/dev/dri/renderD*` device; otherwise only Software is shown.
+  Software stays the default, and existing installations are unchanged. At startup the integration
+  encodes one test frame on the GPU and uses software instead if that fails. Stream names and URLs
+  are the same with either encoder. For Home Assistant Container, pass the render device into the
+  container and include a VAAPI driver in the image; see the README.
+
+### Fixed
+- **The camera card says when its video player is missing** (#118). The picture comes from the
+  WebRTC Camera card, and when that card's code had not loaded (installed from HACS but not added
+  under Settings → Devices & Services, or a page from before the install) the camera card showed
+  its controls with no picture and no error. After 10 seconds it now shows what to install and to
+  reload the page, and the message goes away as soon as the player loads.
+
+Contributed by @divad-iohc (#116). Reported by @kamte (#118).
+
 ## [2.6.48]
 
 ### Fixed
