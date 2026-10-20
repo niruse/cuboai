@@ -651,6 +651,40 @@ function cuboaiWebrtcConfig(found, isMuted) {
   };
 }
 
+// ── WebRTC Camera not loaded (issue #118) ──
+// The picture is AlexxIT's `webrtc-camera` element; this card only waits for
+// it (customElements.whenDefined). When that card's JavaScript never loads --
+// WebRTC Camera installed from HACS but its integration never added, or a
+// browser still running the page from before the install -- the wait never
+// ends: no picture and no error, and the badges fall onto the scrub bar
+// because there is no picture under them. After a grace period, say so.
+const CUBOAI_PLAYER_WAIT_MS = 10000;
+
+function cuboaiWatchForPlayer(card, registry = customElements, doc = document) {
+  if (card.content || card._playerWait || registry.get('webrtc-camera')) return;
+  card._playerWait = setTimeout(() => {
+    card._playerWait = null;
+    if (card.content || registry.get('webrtc-camera') || card._noPlayerEl) return;
+    const el = doc.createElement('div');
+    el.style.cssText = 'background: #fee; border: 1px solid #fcc; color: #c00; padding: 15px; border-radius: 8px;';
+    el.innerHTML =
+      `<h3>Video player not loaded</h3>` +
+      `<p>The picture comes from the <b>WebRTC Camera</b> card by AlexxIT, and its code has not loaded ` +
+      `in this browser.</p>` +
+      `<p>Install <b>WebRTC Camera</b> from HACS, add it under Settings &rarr; Devices &amp; Services, ` +
+      `then reload this page.</p>`;
+    card._noPlayerEl = el;
+    // Where the picture would be: above the scrub bar, so the badges sit on it.
+    const bar = card.dvrBar && card.dvrBar.parentNode === card ? card.dvrBar : null;
+    card.insertBefore(el, bar);
+  }, CUBOAI_PLAYER_WAIT_MS);
+}
+
+function cuboaiPlayerArrived(card) {
+  if (card._playerWait) { clearTimeout(card._playerWait); card._playerWait = null; }
+  if (card._noPlayerEl) { card._noPlayerEl.remove(); card._noPlayerEl = null; }
+}
+
 // ── cuboai mic helpers ──
 // Two-way audio over Home Assistant's own websocket. The card captures the
 // microphone, resamples it to 16 kHz 16-bit mono and sends it as binary
@@ -1312,6 +1346,7 @@ class CuboAICameraCard extends HTMLElement {
     if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
     if (this._tsClock) { clearInterval(this._tsClock); this._tsClock = null; }
+    if (this._playerWait) { clearTimeout(this._playerWait); this._playerWait = null; }
     // Never leave the microphone open on a card nobody is looking at. Checked a
     // moment later, not now: a dashboard that re-flows its columns (masonry, on
     // rotating the phone) takes the card out and puts it straight back, which
@@ -2583,8 +2618,10 @@ class CuboAICameraCard extends HTMLElement {
       }
 
 
+      cuboaiWatchForPlayer(this);
       customElements.whenDefined('webrtc-camera').then(() => {
         if (!this.content) {
+          cuboaiPlayerArrived(this);
           this.content = document.createElement('webrtc-camera');
           // The camera this picture shows: an unpinned card's mic talks to it
           // and to nothing else (_cuboMicDeviceId).
