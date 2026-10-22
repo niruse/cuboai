@@ -74,6 +74,12 @@ PROGRESS_WARMUP_S = 20.0
 #: Below this, a conversion of a live camera is falling behind. A machine that
 #: keeps up holds ~1.00x: the camera paces the input.
 SLOW_SPEED = 0.9
+#: ffmpeg's speed= is an average since the conversion started, so a late start
+#: keeps it under SLOW_SPEED long after the conversion runs at 1.00x (#85,
+#: 2026-10-22: 0.86x with 54 s of video in 62 s, then 1.02x). That start costs a
+#: fixed few seconds; a conversion that cannot keep up adds to its lag every
+#: second. Called slow only when the picture is further behind than this.
+STARTUP_LAG_S = 10.0
 #: Progress lines kept in the download.
 PROGRESS_KEPT = 10
 
@@ -234,6 +240,14 @@ def _warm(progress: dict) -> bool:
     return (age or 0.0) >= PROGRESS_WARMUP_S
 
 
+def _lag_s(progress: dict) -> float:
+    """How far behind real time the picture is: wall time minus video time."""
+    elapsed = progress["elapsed_s"]
+    if elapsed is None:  # ffmpeg before 7.x prints no elapsed=; speed is video time / wall time
+        elapsed = progress["video_time_s"] / progress["speed"] if progress["speed"] > 0 else progress["video_time_s"]
+    return max(0.0, elapsed - progress["video_time_s"])
+
+
 def transcode_facts(progress: list[dict]) -> dict:
     """What the conversions (go2rtc's ffmpeg) did, apart from what the camera sends.
 
@@ -241,7 +255,7 @@ def transcode_facts(progress: list[dict]) -> dict:
     is about the box: the latest warmed-up line that fell behind is `slow`.
     """
     warm = [p for p in progress if _warm(p)]
-    slow = [p for p in warm if p["speed"] < SLOW_SPEED]
+    slow = [p for p in warm if p["speed"] < SLOW_SPEED and _lag_s(p) > STARTUP_LAG_S]
     return {
         "progress_lines": len(progress),
         "latest": progress[-PROGRESS_KEPT:],
@@ -586,10 +600,8 @@ def _transcode_verdicts(report: dict) -> list[str]:
     stamped = (report.get("options") or {}).get("rtsp_timestamp_cameras") or []
     named = len(transcoding) == 1 and not stamped
     who = f"The H.264 conversion of {transcoding[0]}" if named else "A video conversion (ffmpeg) on this machine"
-    elapsed = slow["elapsed_s"]
-    if elapsed is None:  # ffmpeg before 7.x prints no elapsed=; speed is video time / wall time
-        elapsed = slow["video_time_s"] / slow["speed"] if slow["speed"] > 0 else slow["video_time_s"]
-    behind = max(0.0, elapsed - slow["video_time_s"])
+    behind = _lag_s(slow)
+    elapsed = slow["video_time_s"] + behind
     text = (
         f"{who} runs slower than real time: {slow['speed']:.2f}x, {slow['video_time_s']:.0f} s of video in "
         f"{elapsed:.0f} s, so the picture was {behind:.0f} s behind and falling further. HomeKit gives up on a "

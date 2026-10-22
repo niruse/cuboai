@@ -45,7 +45,8 @@ FPS_MODE_PASSTHROUGH = "-fps_mode passthrough"
 #: in later versions but still accepted by 8.1).
 VSYNC_PASSTHROUGH = "-vsync passthrough"
 _FPS_FLAG: str | None = None
-VAAPI_H264_ARGS = f"-c:v h264_vaapi -g {H264_KEYINT} -bf 0 -profile:v high -level:v 4.0 -sei:v 0"
+#: dump_extra: SPS/PPS in front of every keyframe, see h264_transcode_args (#85).
+VAAPI_H264_ARGS = f"-c:v h264_vaapi -g {H264_KEYINT} -bf 0 -profile:v high -level:v 4.0 -sei:v 0 -bsf:v dump_extra"
 
 
 def vaapi_dimensions(resolution: str) -> tuple[str, str]:
@@ -182,13 +183,21 @@ def h264_transcode_args(options, fps_flag: str = FPS_MODE_PASSTHROUGH) -> str:
     * H.264 High, level 4.0, a keyframe every H264_KEYINT frames. go2rtc's
       template names its own -level:v and -g, which win over the same options
       given here (they come later on the command line), so both are set
-      through -x264-params, which libx264 applies last (ffprobe: High / 4.0).
+      through -x264-params, which libx264 applies last (ffprobe: High / 4.0);
+    * SPS/PPS repeated in front of every keyframe (repeat-headers=1). ffmpeg
+      sets the global-header flag for its RTSP output into go2rtc, so libx264
+      otherwise sends them ONLY in the SDP. HomeKit copies the video into RTP
+      for the Apple device, which never sees that SDP, so it got keyframes it
+      could not decode: a full session and still "No Response" (#85, measured
+      2026-10-22 on go2rtc 1.9.14 + ffmpeg 8.1.2: 0 of 7 keyframes carried
+      SPS/PPS; with repeat-headers=1 every one did -- as the camera's own
+      H.264 does, which is why a Cubo 2 played and the transcode did not).
     """
     width, height = H264_RESOLUTIONS[h264_resolution(options)]
     return (
         f"{fps_flag} "
         f"-vf scale='min({width},iw)':'min({height},ih)':force_original_aspect_ratio=decrease"
-        f" -profile:v high -x264-params level=4.0:keyint={H264_KEYINT}"
+        f" -profile:v high -x264-params level=4.0:keyint={H264_KEYINT}:repeat-headers=1"
     )
 
 
