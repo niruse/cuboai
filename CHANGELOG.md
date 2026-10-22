@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.50]
+
+### Fixed
+- **HomeKit shows the H.264 transcode instead of "No Response"** (#85). The transcode for H.265
+  cameras (Cubo 3 / SW05) reached HomeKit on time, but the Home app still showed nothing. The
+  picture's setup information (H.264 SPS/PPS) was sent only once, when the stream was opened, and
+  HomeKit does not pass that on to the Apple device, so the device received a picture it could
+  not decode. It is now repeated with every keyframe, as the camera's own H.264 does. This applies
+  to both the Software and the VAAPI encoder; nothing to change in the settings.
+- **Download diagnostics no longer calls a transcode slow because of its first seconds.** The
+  "slower than real time" message read ffmpeg's average since the start, so a slow start kept it
+  below the limit long after the transcode was keeping up. It now appears only when the picture is
+  more than 10 seconds behind.
+
+Diagnosed and tested by @DerHerzog7 (#85).
+
 ## [2.6.49]
 
 ### Added
