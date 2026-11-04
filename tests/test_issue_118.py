@@ -30,6 +30,7 @@ globalThis.clearTimeout = (id) => { if (timers[id - 1]) timers[id - 1].fn = null
 const fire = () => { const due = timers; timers = []; due.forEach((t) => t.fn && t.fn()); };
 new Function(fs.readFileSync(process.argv[2], 'utf8') +
   ';globalThis.__w = cuboaiWatchForPlayer; globalThis.__a = cuboaiPlayerArrived; globalThis.__ms = CUBOAI_PLAYER_WAIT_MS;')();
+timers = [];  // the define re-checks the file arms at load (test_issue_118_registry_swap)
 
 function makeCard() {
   const card = { children: [] };
