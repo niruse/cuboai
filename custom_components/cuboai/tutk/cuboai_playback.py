@@ -1804,6 +1804,7 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
     set (external interrupt, e.g. a SIGINT handler). Returns a stats dict. The caller owns
     pbsess.start()/close() (so live is always restored)."""
     import cuboai_pts, cuboai_mpegts
+    import cuboai_pure as cp
     def _nal_kf(au):
         # NAL keyframe test for BOTH codecs (see playback_engine copy — the
         # one that actually runs — for the full story: DVR replay never sets
@@ -1812,7 +1813,7 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         if len(au) < 5 or au[:4] != b'\x00\x00\x00\x01':
             return False
         b = au[4]
-        if ((b >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21):
+        if cp.hevc_nal_type(au) in (32, 33, 34, 19, 20, 21):   # 2-byte check: 0x41 is H.264
             return True
         return (b & 0x1f) in (5, 7, 8)
     tl = cuboai_pts.AVTimeline()

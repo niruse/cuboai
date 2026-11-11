@@ -266,11 +266,12 @@ def mux_timed_stream(frames_timed, emit, *, clean_gop=True, mux_audio=False, log
     import time as _t
     from cuboai_mpegts import TSMuxer
     from cuboai_pts import AVTimeline
-    from cuboai_pure import detect_video_codec
+    from cuboai_pure import detect_video_codec, hevc_nal_type
 
     def _nal_kf(au):
-        return (len(au) >= 5 and au[:4] == b'\x00\x00\x00\x01'
-                and ((au[4] >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21))
+        # Two-byte HEVC header check: one byte alone calls an H.264 P-slice (0x41) a VPS.
+        return (au[:4] == b'\x00\x00\x00\x01'
+                and hevc_nal_type(au) in (32, 33, 34, 19, 20, 21))
 
     # AVTimeline is the single source of truth for shared-base A/V PTS (also used by
     # cuboai_pure.record_video) so the live stream and a saved .mp4 stay in lockstep. Its audio

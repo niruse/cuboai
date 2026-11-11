@@ -500,23 +500,48 @@ def _nal_start_offset(au: bytes) -> int:
         return 3
     return 0
 
-def _iter_nal_headers(au: bytes):
-    """Yield the first header byte of every Annex-B NAL in `au`."""
+def _iter_nal_starts(au: bytes):
+    """Yield the offset of the first header byte of every Annex-B NAL in `au`."""
     n, i = len(au), 0
     while i < n - 2:
         if au[i] == 0 and au[i + 1] == 0 and au[i + 2] == 1:
             j = i + 3
             if j < n:
-                yield au[j]
+                yield j
             i = j
         elif (au[i] == 0 and au[i + 1] == 0 and i + 3 < n
               and au[i + 2] == 0 and au[i + 3] == 1):
             j = i + 4
             if j < n:
-                yield au[j]
+                yield j
             i = j
         else:
             i += 1
+
+
+def _iter_nal_headers(au: bytes):
+    """Yield the first header byte of every Annex-B NAL in `au`."""
+    for j in _iter_nal_starts(au):
+        yield au[j]
+
+
+def hevc_nal_type(au: bytes, j: int = 4):
+    """HEVC nal_unit_type of the NAL header at au[j], or None if au[j:j+2] is not a valid
+    HEVC base-layer header.
+
+    The first header byte alone is ambiguous with H.264: x264's ordinary P-slice header 0x41
+    reads as HEVC type 32 (VPS), so on a real libx264 stream 27 of 30 frames looked like HEVC
+    parameter sets, i.e. "hevc" and "keyframe". HEVC's header is two bytes: forbidden bit 0,
+    nuh_layer_id 0 (low bit of byte 0 + top five bits of byte 1) and TemporalId+1 != 0. H.264
+    slices (types 1/5) and the SPS (7) are odd, so their layer bit is set and they never pass.
+    Reported by Fredrik (cuboai-tutk v1.0.0 detect_video_codec).
+    """
+    if j + 1 >= len(au):
+        return None
+    b0, b1 = au[j], au[j + 1]
+    if b0 & 0x81 or b1 & 0xF8 or not b1 & 0x07:
+        return None
+    return (b0 >> 1) & 0x3F
 
 def detect_video_codec(au: bytes, default: str = "hevc") -> str:
     """Return 'hevc' or 'h264' for an Annex-B access unit.
@@ -529,16 +554,18 @@ def detect_video_codec(au: bytes, default: str = "hevc") -> str:
     P-frame-only AU with no parameter set — detection is normally done on a keyframe.
     """
     h264_idr = hevc_pic = None
-    for b in _iter_nal_headers(au):
+    for j in _iter_nal_starts(au):
+        b = au[j]
         if b & 0x80:                                   # forbidden bit set
             continue
         if (b & 0x1F) in (7, 8):                       # H.264 SPS / PPS — decisive
             return "h264"
-        if ((b >> 1) & 0x3F) in (32, 33, 34):          # HEVC VPS/SPS/PPS — decisive
+        t = hevc_nal_type(au, j)                       # None unless a valid 2-byte HEVC header
+        if t in (32, 33, 34):                          # HEVC VPS/SPS/PPS — decisive
             return "hevc"
         if h264_idr is None and (b & 0x1F) == 5:       # H.264 IDR slice
             h264_idr = True
-        if hevc_pic is None and ((b >> 1) & 0x3F) in (19, 20, 21):  # HEVC IDR/CRA
+        if hevc_pic is None and t in (19, 20, 21):     # HEVC IDR/CRA
             hevc_pic = True
     if hevc_pic:
         return "hevc"
@@ -590,11 +617,12 @@ def _is_video_keyframe(unit: bytes, codec: str) -> bool:
     HEVC keyframes carry VPS/SPS/PPS (types 32/34) or an IDR/CRA picture (19-21);
     H.264 keyframes carry an SPS (7)/PPS (8) or an IDR slice (5). Scans all NALs so a
     leading access-unit-delimiter/SEI doesn't hide the keyframe."""
-    for b in _iter_nal_headers(unit):
+    for j in _iter_nal_starts(unit):
+        b = unit[j]
         if b & 0x80:
             continue
         if codec == "hevc":
-            if ((b >> 1) & 0x3F) in (32, 33, 34, 19, 20, 21):
+            if hevc_nal_type(unit, j) in (32, 33, 34, 19, 20, 21):
                 return True
         else:
             if (b & 0x1F) in (7, 8, 5):
@@ -910,6 +938,26 @@ def _unwrap_index(idx_u16, done_upto):
     no wrap has occurred; across the wrap it continues monotonically (65535 -> 65536). A
     late/duplicate index maps far forward so the gate still rejects it."""
     return done_upto + ((idx_u16 - done_upto) & 0xFFFF)
+
+
+def _lift_frag(frag, gmax):
+    """Window one u16 wire fragment-seq against the reader's high-water `gmax`.
+
+    Returns (key, new_gmax); key is None for an out-of-band fragment (drop it). Forward up to
+    256 advances the high-water; up to 128 behind is an in-window retransmit filling a gap.
+    `gmax` and the key are UNBOUNDED ints: the wire value is lifted next to gmax, so the
+    fragment-map keys keep counting 65535 -> 65536 instead of wrapping to 0. With raw u16 keys
+    an AU straddling the wrap sorted its 0.. fragments first, was assembled from a middle chunk
+    and dropped as non-AV, about every 11 min at 0.8 Mbps (reported by Fredrik). Below the wrap
+    the key equals the wire value, so the normal path is byte-identical.
+    """
+    fwd = (frag - gmax) & 0xFFFF
+    if fwd <= 256:
+        return gmax + fwd, gmax + fwd
+    back = (gmax - frag) & 0xFFFF
+    if back <= 128:
+        return gmax - back, gmax
+    return None, gmax
 
 
 def _unwrap_index_back(idx_u16, cur):
@@ -3243,7 +3291,9 @@ class TUTKDirectSession:
             # Concatenate a message's fragments in fragment-seq order, NOT arrival order:
             # a retransmitted fragment arrives late (after later fragments) and must still
             # land in its correct position, or the NAL bytes scramble and the picture fails
-            # to decode. The dict keys also dedupe retransmits.
+            # to decode. The dict keys also dedupe retransmits. Keys are the UNWRAPPED
+            # fragment-seq (see the store below), so an AU straddling 65535 -> 0 still sorts
+            # start-code first.
             return b"".join(frag_map[k] for k in sorted(frag_map))
 
         def is_marker(p):
@@ -3255,8 +3305,8 @@ class TUTKDirectSession:
         def is_kf_marker(p):
             # KF-grace: first frag of a KEYFRAME AU — Annex-B start code then an HEVC
             # VPS(32)/SPS(33)/PPS(34) or IDR(19,20)/CRA(21) NAL (nal_type=(byte4>>1)&0x3f).
-            return (len(p) >= 5 and p[:4] == b"\x00\x00\x00\x01"
-                    and ((p[4] >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21))
+            return (p[:4] == b"\x00\x00\x00\x01"
+                    and hevc_nal_type(p) in (32, 33, 34, 19, 20, 21))
 
         def kf_complete(fm):
             # KF-grace: a keyframe's fragments are consecutive frag-seqs; complete = no
@@ -3534,7 +3584,7 @@ class TUTKDirectSession:
                     if gmax is None:
                         if not is_marker(chunk):
                             continue
-                        gmax = frag
+                        gmax = fkey = frag
                         # SECOND-STREAM dead-read fix (see _idx_seed): this is THIS reader's first
                         # accepted access-unit start. done_upto still holds its -1 initialiser, but
                         # the camera's message-index is session-scoped, so on any read after the
@@ -3546,18 +3596,13 @@ class TUTKDirectSession:
                             done_upto = raw_idx - 1
                             idx = _unwrap_index(raw_idx, done_upto) if self._idx_modular else raw_idx
                     else:
-                        fwd = (frag - gmax) & 0xFFFF
-                        back = (gmax - frag) & 0xFFFF
-                        if fwd <= 256:
-                            gmax = frag
-                        elif back <= 128:
-                            pass                       # in-window retransmit fills a gap
-                        else:
+                        fkey, gmax = _lift_frag(frag, gmax)   # unbounded key, see _lift_frag
+                        if fkey is None:
                             continue                   # out-of-band — drop
                     # Accept only a plausibly-forward message-index (rejects any residual
                     # out-of-band index that would truncate the picture in flight).
                     if done_upto < idx <= done_upto + 256:
-                        msgs.setdefault(idx, {})[frag] = chunk
+                        msgs.setdefault(idx, {})[fkey] = chunk
                     elif self._au_log is not None and ((idx - done_upto) & 0xFFFF) > 0x8000:
                         # a frag arrived for an AU done_upto already SEALED past -> rejected
                         # (the hard-gap cause on a refs=1 stream); note if it's a video marker
