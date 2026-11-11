@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.51]
+
+### Fixed
+- **"Custom element doesn't exist: cuboai-camera-card" now and then after a reload** (#118). While the
+  Home Assistant frontend starts, it swaps the browser's element registry for a new one. When the card
+  file ran before that swap, the cards were defined in the old registry, which the dashboard no longer
+  looks at, so it waited 2 seconds and showed the error even though the file had loaded. The card now
+  checks again shortly after it loads and defines any card that is missing from the registry in use at
+  that moment. It never overrides `customElements.define` for other elements.
+- **H.264 cameras: recordings no longer start in the middle of a picture.** By its first byte alone, an
+  ordinary H.264 picture looks like an H.265 setup block, so on a recording (which carries no keyframe
+  flag of its own) every picture counted as a keyframe. Playback could start mid-sequence, which shows
+  as a frozen or black picture on iPhone while Chrome hides it. The codec and keyframe checks now read
+  the full two-byte H.265 header, everywhere they are made. The same check also stops a live stream
+  from ever being announced as H.265 when the first picture it sees is an ordinary H.264 one.
+- **Live stream: a picture is no longer dropped when the camera's fragment counter wraps.** The live
+  reader ordered a picture's pieces by their 16-bit number, so a picture spanning 65535 → 0 was put
+  together from a middle piece and thrown away, about every 11 minutes at 0.8 Mbps, with a short hold
+  each time.
+
+### Changed
+- Two test fixtures use invented identifiers instead of values copied from a contributor's camera (#125).
+
+Reported and diagnosed by @brott8 (#118) and @Fredde87 (the H.264 and fragment fixes, #125).
+
 ## [2.6.50]
 
 ### Fixed
