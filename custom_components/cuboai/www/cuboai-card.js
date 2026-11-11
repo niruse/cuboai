@@ -4,42 +4,64 @@
 // Assistant's own core UI shell (home-assistant-main, ha-panel-config,
 // ha-init-page, …). It raced HA's frontend bootstrap and blocked those core
 // registrations as "duplicates", producing an intermittent blank white screen
-// that needed many refreshes to load (issue #86). Our own elements are each
-// defined through cuboaiDefine() below, which only ever touches its own tag.
+// that needed many refreshes to load (issue #86). Only register our own
+// elements, never intercept registrations made by other components.
 
-// Define one of OUR elements and keep it findable (#118).
-//
-// Home Assistant's frontend swaps window.customElements for a scoped-registry
-// polyfill while it boots. When this file runs before that swap, our
-// define() lands in the native registry, which the polyfill's get() and
-// whenDefined() never consult: the dashboard waits 2 s and shows "Custom
-// element doesn't exist: cuboai-camera-card" although the code ran, and only
-// a manual re-import fixes it (home-assistant/frontend#52960). So check again
-// once HA's shell is up and a few times after, through whatever registry is
-// current then, and define the tag there if it is missing. A constructor the
-// native registry already holds may be refused, so a fresh empty subclass is
-// the fallback. Never wraps or overrides customElements.define (#86).
+// HA's scoped registry polyfill can replace the registry after this module
+// loads (frontend #52960). Recheck our own definitions as HA starts and for a
+// short bounded window afterward. Some registries also reject constructors
+// already registered natively, so retry with a fresh subclass if necessary.
 const CUBOAI_DEFINE_RECHECK_MS = [500, 2000, 5000, 15000];
 
-function cuboaiDefine(tag, cls, win = window) {
-  const ensure = () => {
-    const registry = win.customElements;
-    if (!registry || registry.get(tag)) return;
+function defineCuboaiElement(name, elementClass) {
+  const ensureRegistered = (initial = false) => {
+    const registry = window.customElements;
+    if (!registry) return;
+
     try {
-      registry.define(tag, cls);
-    } catch (err) {
+      if (registry.get(name)) return;
+    } catch (error) {
+      console.error(`CuboAI: failed to inspect registration for ${name}`, error);
+      if (initial) throw error;
+      return;
+    }
+
+    try {
+      registry.define(name, elementClass);
+      if (!initial) console.info(`CuboAI: registered ${name} after frontend initialization`);
+      return;
+    } catch (originalError) {
       try {
-        registry.define(tag, class extends cls {});
-      } catch (err2) {
-        if (!registry.get(tag)) console.warn(`CuboAI: could not define <${tag}>:`, err2);
+        registry.define(name, class extends elementClass {});
+        console.info(`CuboAI: registered ${name} using a fallback subclass`);
+      } catch (fallbackError) {
+        let alreadyRegistered = false;
+        try {
+          alreadyRegistered = Boolean(registry.get(name));
+        } catch (inspectionError) {
+          console.error(`CuboAI: failed to inspect registration for ${name}`, inspectionError);
+        }
+        if (!alreadyRegistered) {
+          console.error(`CuboAI: failed to register ${name}`, originalError, fallbackError);
+          if (initial) throw fallbackError;
+        }
       }
     }
   };
-  ensure();
+
+  ensureRegistered(true);
+
   try {
-    win.customElements.whenDefined('home-assistant').then(ensure, () => {});
-  } catch (err) { /* no registry yet: the timers below still run */ }
-  CUBOAI_DEFINE_RECHECK_MS.forEach((ms) => win.setTimeout(ensure, ms));
+    window.customElements.whenDefined('home-assistant')
+      .then(() => ensureRegistered())
+      .catch(error => console.error(`CuboAI: frontend readiness check failed for ${name}`, error));
+  } catch (error) {
+    console.error(`CuboAI: frontend readiness check unavailable for ${name}`, error);
+  }
+
+  CUBOAI_DEFINE_RECHECK_MS.forEach((delay) => {
+    setTimeout(() => ensureRegistered(), delay);
+  });
 }
 
 // Find the CuboAI camera entity by the device_id ATTRIBUTE that camera.py
@@ -1365,7 +1387,7 @@ class CuboAICameraCardEditor extends HTMLElement {
   }
 }
 
-cuboaiDefine("cuboai-camera-card-editor", CuboAICameraCardEditor);
+defineCuboaiElement('cuboai-camera-card-editor', CuboAICameraCardEditor);
 
 
 class CuboAICameraCard extends HTMLElement {
@@ -4456,7 +4478,7 @@ class CuboAICameraCard extends HTMLElement {
   }
 }
 
-cuboaiDefine('cuboai-camera-card', CuboAICameraCard);
+defineCuboaiElement('cuboai-camera-card', CuboAICameraCard);
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some(c => c.type === 'cuboai-camera-card')) {
@@ -5068,7 +5090,7 @@ class CuboAITimelineCard extends HTMLElement {
   }
 }
 
-cuboaiDefine("cuboai-timeline-card", CuboAITimelineCard);
+defineCuboaiElement('cuboai-timeline-card', CuboAITimelineCard);
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === "cuboai-timeline-card")) {

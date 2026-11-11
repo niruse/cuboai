@@ -152,8 +152,10 @@ class TestConfig:
 _EVENTS_HARNESS = """
 const fs = require('fs');
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {} };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
+globalThis.setTimeout = () => 0;
 globalThis.document = { createElement: () => ({ style:{}, appendChild(){}, setAttribute(){}, addEventListener(){} }) };
 new Function(fs.readFileSync(process.argv[2], 'utf8') + ';globalThis.__TL = CuboAITimelineCard;')();
 const card = Object.create(globalThis.__TL.prototype);
@@ -445,8 +447,10 @@ class El {
   fire(k, ev) { for (const f of this.handlers[k] || []) f(ev || { stopPropagation() {} }); }
 }
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {} };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
+globalThis.setTimeout = () => 0;
 globalThis.document = { createElement: (t) => new El(t) };
 new Function(fs.readFileSync(process.argv[2], 'utf8') + ';globalThis.__TL = CuboAITimelineCard;')();
 
