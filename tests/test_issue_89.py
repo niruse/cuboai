@@ -164,8 +164,10 @@ class TestCardHasNoStalePortOrEntityIdFilter:
 _HARNESS = """
 const fs = require('fs');
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {} };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
+globalThis.setTimeout = () => 0;
 globalThis.document = { createElement: () => ({ style: {}, appendChild() {}, addEventListener() {} }) };
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const find = new Function(src + '\\n;return cuboaiFindCameraState;')();

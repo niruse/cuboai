@@ -328,8 +328,10 @@ class TestCardKeepsPlaybackInPlace:
 _HARNESS = """
 const fs = require('fs');
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {} };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
+globalThis.setTimeout = () => 0;
 globalThis.document = { createElement: () => ({ style: {}, appendChild(){}, addEventListener(){} }) };
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const find = new Function(src + ';return cuboaiFindRecordingState;')();
@@ -407,8 +409,10 @@ def test_recording_matcher(tmp_path):
 _SPANS_HARNESS = """
 const fs = require('fs');
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {} };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
+globalThis.setTimeout = () => 0;
 globalThis.document = { createElement: () => ({ style:{}, appendChild(){}, setAttribute(){}, addEventListener(){} }) };
 new Function(fs.readFileSync(process.argv[2], 'utf8') + ';globalThis.__TL = CuboAITimelineCard;')();
 const card = Object.create(globalThis.__TL.prototype);
