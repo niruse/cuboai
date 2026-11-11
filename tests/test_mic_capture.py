@@ -364,7 +364,8 @@ globalThis.document = {
   removeEventListener: (n, f) => { docListeners[n] = (docListeners[n] || []).filter((x) => x !== f); },
 };
 globalThis.HTMLElement = class {};
-globalThis.customElements = { get: () => undefined, define: () => {}, whenDefined: () => new Promise(() => {}) };
+const definitions = new Map();
+globalThis.customElements = { get: (name) => definitions.get(name), define: (name, cls) => definitions.set(name, cls), whenDefined: () => new Promise(() => {}) };
 globalThis.window = globalThis;
 // Where the card keeps the remembered mute ('remember' mode): observable, so a
 // talk that writes a mute setting is caught.
