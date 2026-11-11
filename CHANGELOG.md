@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.52]
+
+### Changed
+- **The browser console now says when a CuboAI card had to be registered again** (#126). When Home
+  Assistant's frontend swaps its element registry after the card file has run (#118), the card
+  registers itself again and logs `CuboAI: registered cuboai-camera-card after frontend
+  initialization`. If a card cannot be registered at all, the console says so with the reason, and
+  the other cards still load.
+- Tests: a scenario harness runs the whole card file through registry swaps, retries and failures,
+  and CI now runs the Node-based card tests.
+
+Contributed by @brott8 (#126).
+
 ## [2.6.51]
 
 ### Fixed
