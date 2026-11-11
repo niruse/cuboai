@@ -47,13 +47,13 @@ def _greedy(raw: bytes):
 
 
 HEADER = bytes(8)
-BODY = b'{"mode":"lan","nat":2,"ip":192.168.1.124,"session_id":3}'
+BODY = b'{"mode":"lan","nat":2,"ip":192.0.2.10,"session_id":3}'
 
 
 def test_plain_embedded_object_still_parses():
     got = msgs._extract_json(HEADER + BODY)
     assert got["mode"] == "lan"
-    assert got["ip"] == "192.168.1.124", "the bare dotted-quad repair must still apply"
+    assert got["ip"] == "192.0.2.10", "the bare dotted-quad repair must still apply"
 
 
 def test_trailing_binary_with_a_stray_close_brace():
@@ -109,7 +109,7 @@ def test_session_stats_recovers_the_mode_through_the_parser():
     blob = HEADER + BODY + bytes([0x7D, 0x00, 0x03])
     parsed = msgs.parse_session_stats(blob)
     assert parsed["mode"] == "lan"
-    assert parsed["ip"] == "192.168.1.124"
+    assert parsed["ip"] == "192.0.2.10"
 
 
 if __name__ == "__main__":

@@ -95,7 +95,7 @@ def test_search_frames_are_unchanged_by_the_fix():
     probe tail and breaks connect"). Pinning them against the oracle proves the
     data-channel fix does not touch the frames that establish the session.
     """
-    uid = b"BRR9ZN8XT17UZBWT111A"
+    uid = b"ABCDEFGHJKLMNPQRSTUV"
     for R in (0x0000, 0x1234, 0xFFFF):
         assert live.build_probe(uid, R) == oracle.build_probe(uid, R)
         assert live.build_ack(uid, R) == oracle.build_ack(uid, R)
