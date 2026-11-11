@@ -210,8 +210,17 @@ async function run() {
     const name = scenario.slice('sync_error:'.length);
     const error = new Error('sync define failure');
     e.registry.failures.set(name, error);
-    assert.throws(() => e.load(), err => err === error);
+    // A failure on the first load is logged, never thrown: a throw would stop
+    // the file and leave the cards defined after this one undefined.
+    const classes = e.load();
     assert.equal(e.registry.get(name), undefined);
+    assertLogged(e.logs.error, name, error);
+    names.forEach((other, i) => { if (other !== name) assert.equal(e.registry.get(other), classes[i], other); });
+    e.metadata();
+    // ...and a later recheck registers it once the registry accepts it.
+    e.registry.failures.delete(name);
+    e.advance(500);
+    assert.equal(e.registry.get(name), classes[names.indexOf(name)]);
   } else if (scenario.startsWith('async_error:')) {
     const name = scenario.slice('async_error:'.length);
     const classes = e.load();

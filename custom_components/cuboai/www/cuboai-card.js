@@ -11,6 +11,10 @@
 // loads (frontend #52960). Recheck our own definitions as HA starts and for a
 // short bounded window afterward. Some registries also reject constructors
 // already registered natively, so retry with a fresh subclass if necessary.
+// Never throw, not even on the first load: the three cards are defined one
+// after another at the top level of this file, so a throw for one would stop
+// the file and leave the others undefined. A failure is logged and the
+// rechecks below try again.
 const CUBOAI_DEFINE_RECHECK_MS = [500, 2000, 5000, 15000];
 
 function defineCuboaiElement(name, elementClass) {
@@ -22,7 +26,6 @@ function defineCuboaiElement(name, elementClass) {
       if (registry.get(name)) return;
     } catch (error) {
       console.error(`CuboAI: failed to inspect registration for ${name}`, error);
-      if (initial) throw error;
       return;
     }
 
@@ -43,7 +46,6 @@ function defineCuboaiElement(name, elementClass) {
         }
         if (!alreadyRegistered) {
           console.error(`CuboAI: failed to register ${name}`, originalError, fallbackError);
-          if (initial) throw fallbackError;
         }
       }
     }
