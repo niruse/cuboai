@@ -1804,6 +1804,7 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
     set (external interrupt, e.g. a SIGINT handler). Returns a stats dict. The caller owns
     pbsess.start()/close() (so live is always restored)."""
     import cuboai_pts, cuboai_mpegts
+    import cuboai_pure as cp
     def _nal_kf(au):
         # NAL keyframe test for BOTH codecs. The HEVC set matches the live
         # streamer; the H.264 case (IDR 5 / SPS 7 / PPS 8) is essential here:
@@ -1818,7 +1819,9 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
         if len(au) < 5 or au[:4] != b'\x00\x00\x00\x01':
             return False
         b = au[4]
-        if ((b >> 1) & 0x3f) in (32, 33, 34, 19, 20, 21):
+        # Two-byte HEVC header check: by its first byte alone an H.264 P-slice (0x41)
+        # is an HEVC VPS, which made every P-frame a "keyframe" on H.264 DVR replay.
+        if cp.hevc_nal_type(au) in (32, 33, 34, 19, 20, 21):
             return True                                 # HEVC VPS/SPS/PPS + IRAP
         return (b & 0x1f) in (5, 7, 8)                  # H.264 IDR/SPS/PPS
     tl = cuboai_pts.AVTimeline()
@@ -1840,7 +1843,7 @@ def mux_playback_stream(pbsess, writer, duration=None, idle_timeout=3.0,
             b = au[4]
             # H.264: type = b & 0x1f, with 1/5 the common slice types.
             # HEVC:  type = (b >> 1) & 0x3f, VPS/SPS/PPS are 32-34.
-            if ((b >> 1) & 0x3f) in (32, 33, 34):
+            if cp.hevc_nal_type(au) in (32, 33, 34):
                 return 'hevc'
             if (b & 0x1f) in (1, 5, 7, 8):
                 return 'h264'
