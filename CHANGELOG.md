@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.55]
+
+### Fixed
+- **Fewer lost video fragments.** The camera sometimes sends a fragment with an extra 8-byte header;
+  these were dropped and requested again. They are now read correctly, live and in recordings
+  (#132). On the H.264 test camera loss fell from about 1.1 % to under 0.1 %.
+- **Lost fragments are rebuilt from the camera's parity data** when one fragment of a group is
+  missing, instead of waiting for a resend (#132).
+- **The stream recovers after a network blip.** A send error during a Wi-Fi drop no longer ends the
+  video reader, and after a long outage the stream re-anchors instead of stalling until a reconnect.
+  A lost first fragment is now requested again too (#132).
+- **A slow camera answer no longer reconnects the session.** Some reads take the camera 1-4 s; the
+  session now waits on the live connection, with the whole call capped at 12 s
+  (`CUBOAI_IOCTL_BUDGET_S`) so the regular poll keeps its time (#132).
+- **Stream health figures stay honest** over long uptimes (no more recovery above 100 %), and a
+  history record with a camera clock that stepped back no longer pins the history (#132).
+
+Each stream fix has its own switch (`CUBOAI_AV_EXT`, `CUBOAI_FEC`, `CUBOAI_RESYNC`,
+`CUBOAI_EDGE_WRAP`), all on by default.
+
+Contributed by @Fredde87 (#132).
+
 ## [2.6.54]
 
 ### Added
