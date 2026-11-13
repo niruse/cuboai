@@ -29,7 +29,8 @@ Capture (playable by default; --raw = unprocessed bitstream):
     --talk FILE              Send audio to the camera speaker (native; pure uplink experimental)
 
 Control:
-    --night-light on|off / --brightness 0-100 / --volume 0-100 / --timer repeat|30min|60min /
+    --night-light on|off / --brightness 0-100 / --volume 0-100 / --volume-ramp SECS /
+    --timer repeat|30min|60min /
     --play NAME / --stop / --sleep-mode on|off / --list-songs.  See --help for the full SET
     command group (night-vision, cry/cough detection, sleep-safety, comfort range, …).
     --no-status              Skip the status read (status and AV streaming coexist)
@@ -630,6 +631,13 @@ def _validate_startup(args, uid, account, password, camera_ip):
             errs.append(f"{name} {val} out of range [0,100].")
     if getattr(args, 'duration', None) is not None and args.duration <= 0:
         errs.append(f"--duration must be > 0 (got {args.duration}).")
+    if getattr(args, 'volume_ramp', None) is not None:
+        if args.volume_ramp <= 0:
+            errs.append(f"--volume-ramp must be > 0 (got {args.volume_ramp}).")
+        if getattr(args, 'volume', None) is None:
+            errs.append("--volume-ramp requires --volume (the target level to ramp toward).")
+    if getattr(args, 'volume_ramp_step', None) is not None and args.volume_ramp_step <= 0:
+        errs.append(f"--volume-ramp-step must be > 0 (got {args.volume_ramp_step}).")
     v = getattr(args, 'benchmark_interval', None)
     if v is not None and v <= 0:
         errs.append(f"--benchmark-interval must be > 0 (got {v}).")
@@ -688,6 +696,14 @@ def main():
     parser.add_argument('--night-light', choices=['on','off'],        help='Night light on/off')
     parser.add_argument('--brightness',  type=int,   metavar='0-100', help='Night light brightness %%')
     parser.add_argument('--volume',      type=int,   metavar='0-100', help='Lullaby volume %%')
+    parser.add_argument('--volume-ramp', type=float,  metavar='SECS',
+                        help='Ramp the lullaby volume from the current level to --volume over SECS '
+                             '(wall-clock — finishes in ~SECS regardless of SET round-trip time). '
+                             'Requires --volume.')
+    parser.add_argument('--volume-ramp-step', type=float, metavar='SECS', default=0.4,
+                        help='Minimum seconds between volume SETs during --volume-ramp (flood cap; '
+                             'default 0.4). Total ramp time stays ~--volume-ramp; lowering this only '
+                             'adds resolution.')
     parser.add_argument('--timer',       choices=['repeat','30min','60min'])
     parser.add_argument('--play',        metavar='NAME',              help='Play lullaby by name')
     parser.add_argument('--stop',        action='store_true',         help='Stop lullaby')
@@ -998,20 +1014,58 @@ def main():
             print(f"\n🔊 Updating lullaby settings...", flush=True)
             try:
                 tc, data = transport.ioctl(2440, b'\x00' * 132)
-                cur_vol, cur_timer = 50, LULLABY_TIMER_REPEAT
+                cur_vol, cur_timer, got_cur = 50, LULLABY_TIMER_REPEAT, False
                 if tc == IOTYPE_USER_GET_LULLABY_SCHEDULE_RESP and len(data) >= 16:
                     sched = LullabySchedule.parse(data)
-                    cur_vol, cur_timer = sched.volume, sched.timer_mode
+                    cur_vol, cur_timer, got_cur = sched.volume, sched.timer_mode, True
                 new_vol = args.volume if args.volume is not None else cur_vol
                 timer_map = {'repeat': LULLABY_TIMER_REPEAT,
                              '30min':  LULLABY_TIMER_30MIN,
                              '60min':  LULLABY_TIMER_60MIN}
                 new_timer = timer_map.get(args.timer, cur_timer) if args.timer else cur_timer
-                transport.ioctl(*build_set_lullaby_vol_duration(new_vol, new_timer))
                 t_name = {LULLABY_TIMER_REPEAT:'repeat',
                           LULLABY_TIMER_30MIN:'30min',
                           LULLABY_TIMER_60MIN:'60min'}.get(new_timer, '?')
-                print(f"   ✅ Volume={new_vol}%  Timer={t_name}")
+                # --volume-ramp: step the volume from the current level to the target over the
+                # given duration, instead of one jump. Ramp only when we actually read the
+                # current level and it differs from the target; otherwise fall back to a direct set.
+                ramp = bool(args.volume_ramp) and got_cur and new_vol != cur_vol
+                if args.volume_ramp and not ramp:
+                    why = "current volume unknown (GET failed)" if not got_cur else f"already at {new_vol}%"
+                    print(f"   (no ramp — {why}; setting directly)", flush=True)
+                if ramp:
+                    step_s = max(0.05, args.volume_ramp_step)
+                    dur    = args.volume_ramp
+                    delta  = new_vol - cur_vol
+                    # Wall-clock ramp: the level is a function of ELAPSED time, and each SET is a
+                    # blocking request/response — so we absorb the round-trip into the schedule
+                    # instead of adding it on top. The ramp finishes in ~dur no matter how slow the
+                    # camera replies (a slow RTT just lowers resolution). step_s is the MIN spacing
+                    # between SETs (flood cap): we wake on an absolute grid (never drifts with RTT)
+                    # and only SET when the time-scheduled level actually changes.
+                    print(f"   ↗ Ramping {cur_vol}% → {new_vol}% over ~{dur:g}s "
+                          f"(≥{step_s:g}s between SETs, timer={t_name})", flush=True)
+                    t0 = time.monotonic()
+                    tick, last_sent, n_sets = 0, cur_vol, 0
+                    while True:
+                        elapsed = time.monotonic() - t0
+                        frac = 1.0 if elapsed >= dur else elapsed / dur
+                        lvl = int(round(cur_vol + delta * frac))
+                        if lvl != last_sent:
+                            transport.ioctl(*build_set_lullaby_vol_duration(lvl, new_timer))
+                            last_sent, n_sets = lvl, n_sets + 1
+                            print(f"     · {lvl}%  (t+{elapsed:.2f}s)", flush=True)
+                        if frac >= 1.0:
+                            break
+                        tick += 1
+                        nap = min(t0 + tick * step_s, t0 + dur) - time.monotonic()
+                        if nap > 0:
+                            time.sleep(nap)
+                    print(f"   ✅ Volume={new_vol}%  Timer={t_name} "
+                          f"(ramped in {time.monotonic() - t0:.1f}s, {n_sets} SETs)")
+                else:
+                    transport.ioctl(*build_set_lullaby_vol_duration(new_vol, new_timer))
+                    print(f"   ✅ Volume={new_vol}%  Timer={t_name}")
             except Exception as e:
                 print(f"   ❌ Failed: {e}")
 
