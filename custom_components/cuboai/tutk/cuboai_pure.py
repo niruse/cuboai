@@ -2506,7 +2506,11 @@ class TUTKDirectSession:
             self._hole_req_count.pop(frag, None)   # hole filled -> reset its padded-request count
         if frag not in self._frag_received:        # stats: first arrival of this fragment
             self._stat_frags_recv += 1
-            if frag in self._hole_req_ts:          # it was an outstanding requested hole -> recovered
+            # POP, not just test: the entry used to outlive the fill, so when this frag-seq came
+            # round again 65536 fragments later an ordinary first arrival counted as a "recovered
+            # resend" (recovery_pct 200% reproduced) and a NEW hole at that number was not counted
+            # as lost — health figures improved with uptime.
+            if self._hole_req_ts.pop(frag, None) is not None:   # an outstanding requested hole -> recovered
                 self._stat_resend_recovered += 1
         self._frag_received.add(frag)
         if self._frag_edge is None:
@@ -2730,9 +2734,17 @@ class TUTKDirectSession:
                         sack = [h, pad]
                 else:
                     sack = None
-                if len(self._hole_req_ts) > 2048:   # prune filled holes (bound memory)
-                    self._hole_req_ts = {h: t for h, t in self._hole_req_ts.items()
-                                         if h not in self._frag_received}
+                # Drop holes that fell out of the (una, high-water] window: abandoned ones are never
+                # filled, so they would otherwise sit here until the frag-seq wraps back onto them.
+                # (The old prune removed entries that WERE recently received and kept exactly the
+                # stale ones.) Same window rule as _hole_first_req below; stats/dedup only.
+                if len(self._hole_req_ts) > 64 or len(self._hole_req_count) > 64:
+                    hw = self._frag_D
+                    if hw is not None:
+                        self._hole_req_ts = {h: t for h, t in self._hole_req_ts.items()
+                                             if ((hw - h) & 0xFFFF) <= 1024}
+                        self._hole_req_count = {h: c for h, c in self._hole_req_count.items()
+                                                if ((hw - h) & 0xFFFF) <= 1024}
                 # bound _hole_first_req too — a hole that is truly lost (never arrives)
                 # is never popped by _record_resend_latency, so drop anchors that have fallen
                 # out of the current (una, high-water] window (their frag can no longer return).
