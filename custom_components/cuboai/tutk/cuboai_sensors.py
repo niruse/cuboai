@@ -312,6 +312,7 @@ def get_live_sensors(sess, *, cache: Optional[dict] = None) -> LiveSensors:
 # surfaces and are intentionally NOT exposed here (see SENSORS.md) — don't add them as entities.
 
 _HIST_CACHE_LATEST = "history_latest_record"
+_HIST_CACHE_LATEST_OLDER = "history_latest_older_ts"   # (ts, pulled_at) of the last rejected older record
 _HIST_CACHE_LATEST_GATE = "history_latest_pull_gate"
 _HIST_CACHE_WINDOW = "history_window_records"
 _HIST_CACHE_WINDOW_GATE = "history_window_pull_gate"
@@ -604,9 +605,23 @@ def get_history_sensors(
             # cutoff). Observed live as the history entities blinking
             # unavailable for one cycle every few minutes. Newest record wins,
             # both for what we serve and for what we cache.
+            #
+            # ...but only while the older record is not ADVANCING. A completed-hour fallback returns
+            # the same tail record on every retry; if successive "older" records keep moving forward,
+            # the camera has moved on and its clock stepped back relative to the cached record (NTP
+            # fix after a reboot, DST). Without this the cache stayed pinned for the whole step (2 h
+            # reproduced) with age clamped to 0, so no freshness cutoff could expire it. "Advancing"
+            # = moved forward by no more than the time that really passed between the two pulls
+            # (+2 min slack): a fallback landing on a DIFFERENT completed hour jumps ~3600 s in one
+            # poll and is still a fallback.
             cached = cache.get(_HIST_CACHE_LATEST)
             if cached is not None and int(getattr(cached, "ts", 0)) > int(rec.ts):
-                return _history_sensors_from_record(cached, now, stale=True)
+                last_older = cache.get(_HIST_CACHE_LATEST_OLDER)
+                cache[_HIST_CACHE_LATEST_OLDER] = (int(rec.ts), now.timestamp())
+                step = (int(rec.ts) - last_older[0]) if last_older else 0
+                if not (last_older and 0 < step <= (now.timestamp() - last_older[1]) + 120):
+                    return _history_sensors_from_record(cached, now, stale=True)
+            cache.pop(_HIST_CACHE_LATEST_OLDER, None)
             cache[_HIST_CACHE_LATEST] = rec
             return _history_sensors_from_record(rec, now, stale=False)
     cached = cache.get(_HIST_CACHE_LATEST)
