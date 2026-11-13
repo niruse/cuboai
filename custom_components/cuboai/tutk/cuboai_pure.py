@@ -940,6 +940,88 @@ def _unwrap_index(idx_u16, done_upto):
     return done_upto + ((idx_u16 - done_upto) & 0xFFFF)
 
 
+# ── AV forward error correction (found 2026-11-12) ─────────────────────────────────────────────
+# The camera sends its data fragments in GROUPS: header [36:38] = group number (u16), [38] =
+# position in the group, [39] = group size k (20 or 25 observed). After the k fragments comes one
+# PARITY frame: position == k, payload length 1044 (= the 20-byte sub-header [44:64] + 1024 payload
+# bytes), fields [58:64] zero. These are the "0500… status frames, 1044 bytes" the reader has always
+# dropped as out-of-band. The parity is a systematic Reed-Solomon symbol over GF(2^8) (polynomial
+# 0x11d): with every member's bytes [44:] zero-padded to 1044,
+#     parity = Σ_k  L_k(k_size) · member_k        L_k = Lagrange basis on the points x = 0..k-1
+# i.e. the data polynomial evaluated at x = k. Verified on the recorded capture: 274/274 groups, and
+# 6350/6350 single-fragment leave-one-out reconstructions byte-exact. So ONE lost fragment per group
+# can be rebuilt locally, with no resend round trip.
+def _gf_tables():
+    exp = [0] * 512; log = [0] * 256; x = 1
+    for i in range(255):
+        exp[i] = x; log[x] = i
+        x <<= 1
+        if x & 0x100:
+            x ^= 0x11d
+    for i in range(255, 512):
+        exp[i] = exp[i - 255]
+    mul = [bytes(0 if (c == 0 or b == 0) else exp[log[c] + log[b]] for b in range(256))
+           for c in range(256)]
+    return exp, log, mul
+
+_GF_EXP, _GF_LOG, _GF_MUL = _gf_tables()
+_FEC_COEF = {}
+_FEC_BLOCK = 1044
+
+
+def _fec_coefficients(k):
+    """(coefficients, inverse coefficients) of the parity symbol for a group of k fragments."""
+    c = _FEC_COEF.get(k)
+    if c is None:
+        co = []
+        for i in range(k):
+            num = den = 1
+            for m in range(k):
+                if m != i:
+                    num = _GF_MUL[num][k ^ m]
+                    den = _GF_MUL[den][i ^ m]
+            co.append(_GF_MUL[num][_GF_EXP[255 - _GF_LOG[den]]])
+        c = _FEC_COEF[k] = (co, [_GF_EXP[255 - _GF_LOG[v]] for v in co])
+    return c
+
+
+def _fec_recover(size, members, parity_block):
+    """Rebuild the ONE missing member's bytes [44:] of a group. members: {pos: bytes [44:]} holding
+    size-1 entries; parity_block: the parity frame's 1044 payload bytes. Returns the 1044-byte block
+    (20-byte sub-header + payload, zero-padded) or None."""
+    missing = [m for m in range(size) if m not in members]
+    if len(missing) != 1 or len(parity_block) != _FEC_BLOCK:
+        return None
+    co, ico = _fec_coefficients(size)
+    acc = int.from_bytes(parity_block, 'big')
+    for k, blk in members.items():
+        acc ^= int.from_bytes(blk.ljust(_FEC_BLOCK, b'\0').translate(_GF_MUL[co[k]]), 'big')
+    return missing[0], acc.to_bytes(_FEC_BLOCK, 'big').translate(_GF_MUL[ico[missing[0]]])
+
+
+def _strip_av_ext(dec):
+    """Normalise a camera DATA frame (sub 0x0C) that carries the 8-byte header EXTENSION.
+
+    Found 2026-11-12 on real traffic: when byte[29] has bit 0x08 set, an extra 8-byte block sits at
+    [36:44] and every later header field is shifted by 8 — frag-seq at [54:56] not [46:48],
+    payload length at [60:62] not [52:54], payload at [72:] not [64:]. These are ordinary,
+    in-sequence A/V fragments (~1.4 % of all fragments, one every ~0.6 s). Read with the standard
+    offsets they looked like junk with a "wild" frag-seq (the unrelated counter that lands at
+    [46:48]), so the reader dropped them as out-of-band and then asked the camera to resend data it
+    had already delivered; and when the real frag-seq came within 256 below that counter the ACK
+    high-water jumped to it, inventing ~256 holes at once (the t~60 s burst, once per frag wrap).
+
+    Returns the frame with the block removed and bit 0x08 cleared, so every downstream parser sees
+    a standard frame. Only frames that fit the extended layout EXACTLY (length == 72 + the payload
+    length at [60:62]) are touched; anything else is returned unchanged."""
+    if len(dec) >= 76 and dec[28] == 0x0C and (dec[29] & 0x08):
+        if struct.unpack_from("<H", dec, 60)[0] == len(dec) - 72:
+            out = bytearray(dec[:36] + dec[44:])
+            out[29] &= 0xF7
+            return bytes(out)
+    return dec
+
+
 def _lift_frag(frag, gmax):
     """Window one u16 wire fragment-seq against the reader's high-water `gmax`.
 
@@ -2017,6 +2099,22 @@ class TUTKDirectSession:
         # fixes it; the seed only fires when the index is out of window, so a normal
         # fresh-session stream is byte-identical.
         self._idx_seed = os.environ.get("CUBOAI_IDX_SEED", "1") != "0"
+        # AV header extension (see _strip_av_ext): parse byte[29]&0x08 fragments instead of
+        # discarding them. ⚠ REGRESSION SWITCH: CUBOAI_AV_EXT=0 restores the old drop.
+        self._av_ext = os.environ.get("CUBOAI_AV_EXT", "1") != "0"
+        self._stat_av_ext = 0           # extension fragments seen (counted in BOTH modes)
+        # Forward error correction: rebuild a single lost fragment per group from the camera's
+        # parity frame (see _fec_recover). ⚠ REGRESSION SWITCH: CUBOAI_FEC=0 = parity dropped.
+        self._fec = os.environ.get("CUBOAI_FEC", "1") != "0"
+        self._fec_groups = {}           # group number -> [size, {pos: bytes[44:]}, parity, hdr, pos, frag, done]
+        self._stat_fec_parity = 0       # parity frames seen (counted in BOTH modes)
+        self._stat_fec_recovered = 0    # fragments rebuilt from parity
+        self._stat_fec_bad = 0          # reconstructions rejected by the consistency check
+        # ⚠ REGRESSION SWITCH: CUBOAI_EDGE_WRAP=0 = "a lost fragment 0 is never resend-requested".
+        self._edge_wrap = os.environ.get("CUBOAI_EDGE_WRAP", "1") != "0"
+        # ⚠ REGRESSION SWITCH: CUBOAI_RESYNC=0 = the reader stays deaf after an outage > 256 frags.
+        self._resync = os.environ.get("CUBOAI_RESYNC", "1") != "0"
+        self._stat_resyncs = 0          # outage resyncs performed by the reader
         # minimum in-order wait (AU-indices) before advancing past an absent AU — the
         # scaled grace (~4 at LAN) is too short to wait out a >grace-late frag-burst, so
         # the late-but-complete AU is still skipped+rejected; this floor holds each AU long
@@ -2403,6 +2501,7 @@ class TUTKDirectSession:
     # frames (which carry junk [46:48] values thousands away) while still allowing D to
     # jump over a small burst of genuinely-lost fragments.
     _FRAG_WINDOW = 256
+    _RESYNC_RUN = 24            # consecutive out-of-window frag-seqs that mean "the stream moved on"
     _SACK_MAX_FID = 631         # full-fidelity SACK list cap = native's own loop bound
                                 # (stops at frame_len 0x4ff => 50+2*631). Bounds a
                                 # pathological OOO gap's frame size.
@@ -2650,7 +2749,79 @@ class TUTKDirectSession:
             self._rtt_ewma += self._RTT_ALPHA * (lat - self._rtt_ewma)
         self._rtt_n += 1
 
-    def _compute_holes(self, C):
+    _FEC_KEEP = 24              # groups remembered (≈4 s of stream)
+
+    def _fec_note(self, dec):
+        """Feed one decoded 0x0C frame to the FEC bookkeeping. Returns a rebuilt frame (bytes, in
+        the standard layout) when this frame completes a group with exactly one member missing,
+        else None. Never raises; anything that does not look like a group member is ignored."""
+        size = dec[39]; pos = dec[38]
+        if size < 2 or pos > size or len(dec) < 64:
+            return None
+        avlen = struct.unpack_from("<H", dec, 52)[0]
+        is_parity = (pos == size)
+        if is_parity:
+            if len(dec) != 64 + _FEC_BLOCK or avlen != _FEC_BLOCK or any(dec[58:64]):
+                return None
+            self._stat_fec_parity += 1
+            if not self._fec:
+                return None
+        else:
+            if not self._fec or avlen > 1024 or len(dec) != 64 + avlen or not any(dec[58:64]):
+                return None
+        gno = struct.unpack_from("<H", dec, 36)[0]
+        g = self._fec_groups.get(gno)
+        if g is None or g[0] != size:
+            g = self._fec_groups[gno] = [size, {}, None, None, 0, 0, False]
+            while len(self._fec_groups) > self._FEC_KEEP:      # oldest first (insertion order)
+                self._fec_groups.pop(next(iter(self._fec_groups)))
+        if g[6]:
+            return None
+        if is_parity:
+            g[2] = bytes(dec[64:64 + _FEC_BLOCK])
+        elif pos not in g[1]:
+            g[1][pos] = bytes(dec[44:])
+            if g[3] is None:
+                g[3] = bytes(dec[:44]); g[4] = pos; g[5] = struct.unpack_from("<H", dec, 46)[0]
+        if g[2] is None or len(g[1]) != size - 1:
+            if len(g[1]) == size:
+                g[6] = True; g[1] = None                       # complete without help — free it
+            return None
+        g[6] = True
+        res = _fec_recover(size, g[1], g[2])
+        hdr, hpos, hfrag = g[3], g[4], g[5]
+        g[1] = None; g[2] = None
+        if res is None:
+            return None
+        m, blk = res
+        ln = struct.unpack_from("<H", blk, 8)[0]
+        frag = struct.unpack_from("<H", blk, 2)[0]
+        # Consistency: a sane length, zero padding beyond it, and the frag-seq the group implies.
+        if (ln > 1024 or any(blk[20 + ln:]) or not any(blk[14:20])
+                or frag != ((hfrag + m - hpos) & 0xFFFF)):
+            self._stat_fec_bad += 1
+            return None
+        self._stat_fec_recovered += 1
+        out = bytearray(hdr + blk[:20 + ln])
+        out[29] = 0; out[38] = m
+        return bytes(out)
+
+    def _resync_frag_state(self):
+        """Forget the AV fragment window (D/C/edge, received set, hole bookkeeping) so the next
+        fragment re-seeds it — used by the reader's outage resync. Wire effect: our next ACK reports
+        the stream's real position instead of a high-water the camera left behind long ago."""
+        self._frag_D = None
+        self._frag_C = 0xFFFF
+        self._frag_edge = None
+        self._frag_edge_acked = 0xFFFF
+        self._frag_received = set()
+        self._frag_gap_ts = {}
+        self._hole_req_ts = {}
+        self._hole_first_req = {}
+        self._hole_req_count = {}
+        self._holding_kf = False
+
+    def _compute_holes(self, C, real_edge=False):
         """The MISSING fragment-seqs (HOLES) in (C, high-water] — frags the camera sent
         (frag-seq <= high-water, so we know they exist) that we did NOT receive. This is
         the SACK the camera acts on: the camera RE-SENDS the frags listed in the SACK
@@ -2660,7 +2831,11 @@ class TUTKDirectSession:
         offset is positive; the caller dedups by _RESEND_REQ_INTERVAL and only emits when ≥2
         holes are fresh (the camera ignores a count-1 entry). Capped at _SACK_MAX_FID."""
         hw = self._frag_D
-        if hw is None or C == 0xFFFF:
+        # 0xFFFF doubles as the "no edge yet" sentinel, but it is also a REAL edge once per frag-seq
+        # cycle: when fragment 65535 is the last contiguous one and fragment 0 is missing. Treating
+        # that as "no edge" meant fragment 0 could never be requested — the edge sat there until the
+        # gap-depth cap jumped it. `real_edge` says C came from the tracked edge.
+        if hw is None or (C == 0xFFFF and not (real_edge and self._edge_wrap)):
             return None
         span = (hw - C) & 0xFFFF
         if span == 0 or span > 0x8000:                     # no window / wrapped-backwards guard
@@ -2703,7 +2878,7 @@ class TUTKDirectSession:
                         and ((D - C) & 0xFFFF) < self._una_lag):
                     C = (D - self._una_lag) & 0xFFFF   # C2: lag reported una -> camera keeps buffer deep
                 now = time.time()
-                holes = self._compute_holes(C) or []
+                holes = self._compute_holes(C, self._frag_edge is not None) or []
                 req_interval = self._resend_req_interval()    # static 0.15s or adaptive
                 fresh = [h for h in holes
                          if now - self._hole_req_ts.get(h, 0.0) > req_interval]
@@ -3089,6 +3264,12 @@ class TUTKDirectSession:
             'tx_err': self._stat_tx_err,
             'ioctl_unanswered_alive': self._stat_ioctl_unanswered_alive,
             'stalls': self._stat_stalls,
+            'resyncs': self._stat_resyncs,
+            'av_ext_frames': self._stat_av_ext,
+            'av_ext_parsed': self._av_ext,
+            'fec_parity_frames': self._stat_fec_parity,
+            'fec_recovered': self._stat_fec_recovered,
+            'fec_bad': self._stat_fec_bad,
             'output_stalls': self._stat_output_stalls,
             'first_au_timeouts': self._stat_first_au_timeouts,
             'reconnects': self._stat_reconnects,
@@ -3216,6 +3397,9 @@ class TUTKDirectSession:
         kf_idxs = set()             # KF-grace: msg-indices identified as keyframes (GOP roots)
         last_ack = time.time()
         gmax = None                 # highest accepted global fragment-seq [46:48]
+        oob_prev = -2; oob_run = 0  # outage resync: last out-of-window frag-seq and its run length
+        fec_q = []                  # fragments rebuilt from parity, waiting to be processed
+        self._fec_groups = {}
         # ── ACK rate-limiting — match native's ~10 ACKs/s ──
         # We pace ACKs to native's cadence instead of per-datagram (~113/s): still call
         # _note_cam_data on EVERY datagram (C/D state stays exact), but gate the actual
@@ -3617,11 +3801,16 @@ class TUTKDirectSession:
                 # backs up (a stalled drain opens a contiguity gap and stops the stream).
                 while True:
                     try:
-                        raw, addr = s.recvfrom(8192)
+                        if fec_q:                      # a fragment rebuilt from parity: process it
+                            raw = None                 # exactly as if it had arrived
+                            _fec_dec = fec_q.pop(0)
+                        else:
+                            raw, addr = s.recvfrom(8192)
                     except (BlockingIOError, OSError):
                         break
-                    self._last_rx = time.time()        # stall detector: anything from the camera
-                    if len(raw) < 30:
+                    if raw is not None:
+                        self._last_rx = time.time()    # stall detector: anything from the camera
+                    if raw is not None and len(raw) < 30:
                         # Answer the camera's 24-byte IOTC keepalive (alive-check)
                         # probe, as native does. Native replies to every probe;
                         # otherwise the session is a silent non-responder to liveness
@@ -3636,9 +3825,24 @@ class TUTKDirectSession:
                                 self._stat_keepalive_err += 1   # L1: observable instead of silent
                                 self._stat_tx_err += 1
                         continue
-                    dec = inv_transcode(raw)
+                    dec = inv_transcode(raw) if raw is not None else _fec_dec
                     if len(dec) < 40:
                         continue
+                    if len(dec) >= 76 and dec[28] == 0x0C and (dec[29] & 0x08):
+                        self._stat_av_ext += 1                 # visible even when not parsed
+                        if self._av_ext:
+                            _n = _strip_av_ext(dec)
+                            if _n is not dec:
+                                # The block IS the camera's periodic 0x0a timing record riding on a
+                                # data fragment instead of going out as its own 44-byte frame. Take
+                                # the clock from it exactly as from a standalone 0x0a.
+                                self._cam_clock = struct.unpack_from('<H', dec, 36)[0]
+                                self._cam_clock_ts = time.time()
+                            dec = _n
+                    if raw is not None and dec[28] == 0x0C and len(dec) >= 68:
+                        _r = self._fec_note(dec)
+                        if _r is not None:
+                            fec_q.append(_r)
                     if dec[28] != 0x0C or len(dec) < 68:
                         # capture the camera's ms-clock from cam->host 0x0a [36:38]
                         # so _send_nak can echo it in our 0x0b (THE arming discriminator).
@@ -3699,9 +3903,31 @@ class TUTKDirectSession:
                             done_upto = raw_idx - 1
                             idx = _unwrap_index(raw_idx, done_upto) if self._idx_modular else raw_idx
                     else:
+                        _g0 = gmax
                         fkey, gmax = _lift_frag(frag, gmax)   # unbounded key, see _lift_frag
                         if fkey is None:
+                            # OUTAGE RESYNC. A stray frame has an isolated frag-seq; a STREAM THAT
+                            # MOVED ON has consecutive ones. After a network outage longer than the
+                            # window (>256 fragments, ~2.2 s) every later fragment landed here and
+                            # was dropped for good: no output while fragments kept arriving (the
+                            # silence gate cannot see it; the output-stall gate ends the session).
+                            # A run of _RESYNC_RUN consecutive frag-seqs AHEAD of the window means
+                            # the camera is simply further on: drop the stale state and let the
+                            # start-of-stream seeding below re-anchor on the next AU start.
+                            fwd = (frag - _g0) & 0xFFFF
+                            if self._resync and fwd < 0x8000:
+                                oob_run = oob_run + 1 if frag == ((oob_prev + 1) & 0xFFFF) else 1
+                                oob_prev = frag
+                                if oob_run >= self._RESYNC_RUN:
+                                    self._stat_resyncs += 1
+                                    print(f"[resync] {oob_run} consecutive fragments {fwd} ahead of the "
+                                          f"window — the stream moved on (outage); re-anchoring",
+                                          file=sys.stderr, flush=True)
+                                    gmax = None; oob_run = 0
+                                    msgs.clear(); kf_idxs.clear()
+                                    self._resync_frag_state()
                             continue                   # out-of-band — drop
+                        oob_run = 0
                     # Accept only a plausibly-forward message-index (rejects any residual
                     # out-of-band index that would truncate the picture in flight).
                     if done_upto < idx <= done_upto + 256:
