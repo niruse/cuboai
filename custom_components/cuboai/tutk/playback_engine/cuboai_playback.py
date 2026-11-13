@@ -1162,7 +1162,6 @@ class PlaybackReader:
         self.done_upto = -1     # highest msg-index emitted/skipped
         self.stale = 0          # frames dropped as modularly-behind duplicates (wrapfix only)
         self.frag_hi = None     # highest frag-seq [46:48] seen (for channel-N ACK C/D)
-        self.frag_prev = 0xFFFF
         self.frames = 0         # channel-N fragments fed
         self.frames_video = 0   # video AUs emitted
         self.frames_audio = 0   # audio AUs emitted
@@ -1173,6 +1172,10 @@ class PlaybackReader:
         self.req_frags = set()       # frag-seqs we've SACK-requested (for the honor-rate metric)
         self.honored = 0             # requested frags that subsequently ARRIVED (armed-resend proof)
         self.sub2 = 0                # secondary-substream frags skipped (byte[29] & 0x08 — see feed())
+        self._av_ext = _os.environ.get("CUBOAI_AV_EXT", "1") != "0"
+        self.ext_parsed = 0          # byte[29]&0x08 fragments parsed as A/V (CUBOAI_AV_EXT=1)
+        import cuboai_pure as _cp
+        self._strip_av_ext = _cp._strip_av_ext
         self.vdbg = []          # diagnostic: (unit_len, ks0, ksN, nfrags, fi_off, ts_sec) for 1st video AUs
 
     def feed(self, dec, out):
@@ -1181,6 +1184,17 @@ class PlaybackReader:
             return
         if dec[14] != self.channel:
             return                                  # not our playback channel — ignore (live etc.)
+        if self._av_ext and (dec[29] & 0x08):
+            # CUBOAI_AV_EXT (default ON; =0 restores the old drop): byte[29]&0x08 is an 8-byte header EXTENSION at [36:44]
+            # (the camera's 0x0a timing record riding on a data fragment), not a second sub-stream —
+            # proven on LIVE traffic 2026-11-12 (see cuboai_pure._strip_av_ext). The "far band
+            # ~5120+" below is what the standard offsets read when every field is shifted by 8
+            # (5120 = 0x1400). Normalise it and treat it as the ordinary A/V fragment it is. Not yet
+            # verified on a DVR capture — hence the switch; a frame that does not fit the extended
+            # layout exactly comes back unchanged and is dropped below as before.
+            dec = self._strip_av_ext(dec)
+            if not dec[29] & 0x08:
+                self.ext_parsed += 1
         if dec[58:64] == b"\x00\x00\x00\x00\x00\x00":
             return                                  # reliable IO/control response, not an AV fragment
         # DVR channel N MULTIPLEXES two independent reliable streams under one [14]==N: the A/V
@@ -1624,7 +1638,7 @@ class PlaybackSession:
         cp = self.cp; inner = self.inner; s = inner._sock
         reader = self.reader; N = self.channel
         last_open = 0.0; last_ack0 = 0.0; last_ackN = 0.0; last_nak = 0.0
-        frag_prev = 0xFFFF; engaged = False
+        engaged = False
         while not self._stop_evt.is_set():
             now = time.time()
             if not engaged and now - last_open > self.reopen_interval:
@@ -1640,11 +1654,18 @@ class PlaybackSession:
                     C, D, sack = reader.compute_channel_sack(self._hole_req, 0.15)
                     if sack: self.stats['resend_req'] += len(sack)
                 else:
-                    C, D, sack = frag_prev, reader.frag_hi, None
+                    # Held-edge (non-SACK) ACK: C = highest CONTIGUOUS frag received (mirrors
+                    # compute_channel_sack's own C, minus the SACK list), NOT a stale echo of a
+                    # previous D — a `frag_prev = D`-style lag can itself desync from the real
+                    # contiguous edge, and seeding it 0xFFFF poisoned the very first ACK
+                    # (C=0xFFFF far above D — the wire-proven-harmful pattern). Same degenerate
+                    # fallback as compute_channel_sack: nothing contiguous known yet -> C=D.
+                    C = ((reader.frag_una - 1) & 0xFFFF) if reader.frag_una is not None else reader.frag_hi
+                    D, sack = reader.frag_hi, None
                 try:                              # channel-N ACK uses channel N's OWN counters
                     s.sendto(build_channel_ack(inner, N, C, D, sack=sack, seq=self._seq_N,
                              relseq=self._relseq_N, ackord=self._ackord_N), inner._cam)
-                    self._seq_N += 1; self._relseq_N += 1; self._ackord_N += 1; frag_prev = D
+                    self._seq_N += 1; self._relseq_N += 1; self._ackord_N += 1
                 except Exception: pass
                 last_ackN = now
             # ARM retransmit: echo the session ms-clock in the 0x0b/0x0a pair (THE arming
@@ -1716,7 +1737,7 @@ class PlaybackSession:
         self.stats.update(frames=reader.frames, aus_video=reader.frames_video,
                           aus_audio=reader.frames_audio, dropped=reader.dropped,
                           honored=reader.honored, cam0a_seen=self._nak0a_seen,
-                          req_frags=len(reader.req_frags), sub2=reader.sub2,
+                          req_frags=len(reader.req_frags), sub2=reader.sub2, ext_parsed=getattr(reader, "ext_parsed", 0),
                           feed_errors=self._feed_errors)
 
     def _stop_reader(self):

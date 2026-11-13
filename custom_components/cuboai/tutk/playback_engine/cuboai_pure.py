@@ -1012,6 +1012,29 @@ def _unwrap_index(idx_u16, done_upto):
     return done_upto + ((idx_u16 - done_upto) & 0xFFFF)
 
 
+def _strip_av_ext(dec):
+    """Normalise a camera DATA frame (sub 0x0C) that carries the 8-byte header EXTENSION.
+
+    Found 2026-11-12 on real traffic: when byte[29] has bit 0x08 set, an extra 8-byte block sits at
+    [36:44] and every later header field is shifted by 8 — frag-seq at [54:56] not [46:48],
+    payload length at [60:62] not [52:54], payload at [72:] not [64:]. These are ordinary,
+    in-sequence A/V fragments (~1.4 % of all fragments, one every ~0.6 s). Read with the standard
+    offsets they looked like junk with a "wild" frag-seq (the unrelated counter that lands at
+    [46:48]), so the reader dropped them as out-of-band and then asked the camera to resend data it
+    had already delivered; and when the real frag-seq came within 256 below that counter the ACK
+    high-water jumped to it, inventing ~256 holes at once (the t~60 s burst, once per frag wrap).
+
+    Returns the frame with the block removed and bit 0x08 cleared, so every downstream parser sees
+    a standard frame. Only frames that fit the extended layout EXACTLY (length == 72 + the payload
+    length at [60:62]) are touched; anything else is returned unchanged."""
+    if len(dec) >= 76 and dec[28] == 0x0C and (dec[29] & 0x08):
+        if struct.unpack_from("<H", dec, 60)[0] == len(dec) - 72:
+            out = bytearray(dec[:36] + dec[44:])
+            out[29] &= 0xF7
+            return bytes(out)
+    return dec
+
+
 def _lift_frag(frag, gmax):
     """Window one u16 wire fragment-seq against the reader's high-water `gmax`.
 
