@@ -2563,7 +2563,7 @@ class TUTKDirectSession:
         """
         return len(dec) >= 64 and dec[58:64] == b"\x00\x00\x00\x00\x00\x00"
 
-    def _note_cam_data(self, dec):
+    def _note_cam_data(self, dec, rebuilt=False):
         """Record a camera DATA frame and advance the windowed-ACK state.
 
         The camera runs TWO reliable streams, acked by two different fields, so we route
@@ -2617,6 +2617,13 @@ class TUTKDirectSession:
         # first-request->arrival latency into the resend-latency EWMA (no-op when adaptive
         # is off — _hole_first_req stays empty). Before .add so a duplicate resend of an
         # already-received frag can't double-count (the anchor is popped on first arrival).
+        if rebuilt and frag not in self._frag_received:
+            # Rebuilt from parity (see _fec_note), not resent: the hole is filled, so drop its
+            # request bookkeeping — but it is NOT a resend. Request->rebuild time is not a resend
+            # latency (it would pull the grace estimate down) and it is counted in fec_recovered,
+            # not resend_recovered.
+            self._hole_first_req.pop(frag, None)
+            self._hole_req_ts.pop(frag, None)
         if (self._adaptive_rtt or self._grace_scale) and frag not in self._frag_received:
             self._record_resend_latency(frag)   # also feeds the grace EWMA
         if self._lone_hole and frag not in self._frag_received:
@@ -3851,7 +3858,7 @@ class TUTKDirectSession:
                             self._cam_clock_ts = time.time()
                         maybe_ack()                    # ack ACK/NAK probes (rate-limited)
                         continue
-                    self._note_cam_data(dec)           # advance C/D or data_ack
+                    self._note_cam_data(dec, rebuilt=raw is None)   # advance C/D or data_ack
                     maybe_ack()                        # rate-limited; D/data_ack may have advanced
                     if self._is_io_frame(dec):
                         # Reliable IO/control response (IOCTL retransmit, login/system

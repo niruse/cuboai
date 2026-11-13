@@ -136,3 +136,35 @@ def test_two_missing_in_a_group_rebuild_nothing():
             s._fec_note(m)
     assert s._fec_note(_parity_frame(0, members)) is None
     assert s._stat_fec_bad == 0 and s._stat_fec_recovered == 0
+
+
+def _av(frag):
+    d = bytearray(68)
+    struct.pack_into("<H", d, 46, frag)
+    d[58:64] = b"\x01\x00\x00\x00\x00\x00"
+    return bytes(d)
+
+
+def test_a_rebuilt_fragment_is_not_counted_or_timed_as_a_resend():
+    import time
+
+    for rebuilt in (True, False):
+        s = cp.TUTKDirectSession()
+        s._grace_scale = True  # the timing path under test (other tests may leave CUBOAI_GRACE_SCALE set)
+        for f in range(100):
+            s._note_cam_data(_av(f))
+        now = time.time()
+        s._hole_req_ts[100], s._hole_first_req[100] = now, now - 0.02  # frag 100 was requested
+        s._note_cam_data(_av(100), rebuilt=rebuilt)
+        assert 100 in s._frag_received and 100 not in s._hole_req_ts and 100 not in s._hole_first_req
+        if rebuilt:  # filled, but no resend sample (it would pull the grace estimate down) and no resend count
+            assert s._stat_resend_recovered == 0 and s._rtt_n == 0
+        else:
+            assert s._stat_resend_recovered == 1 and s._rtt_n == 1
+
+
+def test_reader_marks_rebuilt_fragments():
+    import inspect
+
+    src = inspect.getsource(cp.TUTKDirectSession._av_reader)
+    assert "self._note_cam_data(dec, rebuilt=raw is None)" in src
