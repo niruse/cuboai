@@ -124,3 +124,23 @@ def test_live_but_unanswered_keeps_the_session(monkeypatch):
 def test_silent_session_still_reconnects():
     result, err, _dt, reconnects, _s = _run(0.05, chatter=False, answer=False)
     assert result is None and err is not None and reconnects >= 1
+
+
+def test_budget_caps_an_unanswered_live_request(monkeypatch):
+    monkeypatch.setenv("CUBOAI_IOCTL_ALIVE_WAIT", "8")
+    monkeypatch.setenv("CUBOAI_IOCTL_BUDGET_S", "4")
+    result, err, dt, reconnects, _s = _run(99, answer=False)
+    assert result is None and err is not None and reconnects == 0
+    assert dt < 5.0
+
+
+def test_budget_caps_a_silent_session(monkeypatch):
+    monkeypatch.setenv("CUBOAI_IOCTL_BUDGET_S", "5")
+    result, err, dt, reconnects, _s = _run(0.05, chatter=False, answer=False)
+    assert result is None and "BUDGET" in str(err)
+    assert dt < 6.5 and reconnects < 3
+
+
+def test_default_budget_leaves_the_slow_answer_alone():
+    st = _run(3.4)
+    assert st[0] is not None and st[3] == 0

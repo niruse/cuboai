@@ -105,6 +105,7 @@ def _clamp_env_knobs():
         ('CUBOAI_DESYNC_S', 0, 60, 8.0, True),
         ('CUBOAI_LIST_PACE_S', 0, 3600, 0.5, True),
         ('CUBOAI_IOCTL_ALIVE_WAIT', 0, 60, 8.0, True),
+        ('CUBOAI_IOCTL_BUDGET_S', 0, 120, 12.0, True),
     ]
     for env, lo, hi, dflt, isf in KNOBS:
         raw = os.environ.get(env)

@@ -2248,6 +2248,14 @@ class TUTKDirectSession:
         except (TypeError, ValueError):
             self._ioctl_alive_wait = 8.0
         self._stat_ioctl_unanswered_alive = 0   # timeouts on a live session (no reconnect done)
+        # Wall-clock cap on ONE ioctl() call across all its attempts and reconnects, so a caller with
+        # its own deadline (the coordinator's 20 s poll) keeps room for its other requests. Each
+        # attempt's wait is clipped to what is left; no new attempt starts once it is spent.
+        # 0 = no cap (previous behaviour).
+        try:
+            self._ioctl_budget_s = max(0.0, float(os.environ.get("CUBOAI_IOCTL_BUDGET_S", "") or 12.0))
+        except (TypeError, ValueError):
+            self._ioctl_budget_s = 12.0
         self._first_au_s = _env_secs("CUBOAI_FIRST_AU_S")
         # Wedged-output gate: no COMPLETE AU delivered for this long, even though the camera is
         # not silent (late resends still arrive, so the _stall_s AND-on-silence never trips, and
@@ -3066,16 +3074,24 @@ class TUTKDirectSession:
         on the SAME session and is never torn down for one unanswered request.
         """
         last_err = None
+        deadline = (time.time() + self._ioctl_budget_s) if self._ioctl_budget_s else None
         for attempt in range(3):
+            if deadline is not None and deadline - time.time() < 0.5:
+                last_err = f"{last_err} (CUBOAI_IOCTL_BUDGET_S={self._ioctl_budget_s:g} spent)"
+                break
             if self._sock is None or self.session_hdr is None:
                 self.disconnect()
                 if not self.connect():
                     last_err = "handshake failed (no 0x2041)"
                     time.sleep(0.2)
                     continue
+            timeout, alive_wait = 3.0, self._ioctl_alive_wait
+            if deadline is not None:
+                left = max(0.5, deadline - time.time())
+                timeout, alive_wait = min(timeout, left), min(alive_wait, left)
             try:
-                return self._ioctl_once(type_code, payload, timeout=3.0,
-                                        alive_wait=self._ioctl_alive_wait)
+                return self._ioctl_once(type_code, payload, timeout=timeout,
+                                        alive_wait=alive_wait)
             except TimeoutError as e:
                 last_err = str(e)
                 if self._ioctl_alive_wait and getattr(e, "alive", False):
