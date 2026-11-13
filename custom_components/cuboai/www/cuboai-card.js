@@ -88,6 +88,174 @@ function defineCuboaiElement(name, elementClass) {
 //
 // The device_id attribute is immune to all of it. Note the speaker matcher
 // below already worked this way — the camera was the odd one out.
+// Built-in song collections: ready-made YouTube songs by style and language, shown in the music
+// library next to the camera lullabies. Each link was opened and checked (title, channel, length,
+// playable, family-safe) before it went in. Generated from tools/song_collections.json by
+// tools/gen_song_collections.py; edit the JSON, not this block.
+// BEGIN CUBOAI_SONG_COLLECTIONS
+const CUBOAI_SONG_COLLECTIONS = [
+  {"lang": "he", "category": "sleep", "name": "נומי נומי – ילדות ישראלית", "id": "l2tRa4i6lNg", "title": "נומי נומי - שיר ילדים -  שירי ילדות ישראלית", "seconds": 140},
+  {"lang": "he", "category": "sleep", "name": "נומי נומי – אריק איינשטיין ושם טוב לוי", "id": "9EctPmhoNhE", "title": "נומי נומי (feat. Shem Tov Levi) [ילדים - רימאסטרינג]", "seconds": 147},
+  {"lang": "he", "category": "sleep", "name": "לילה טוב – ילדות ישראלית", "id": "69M3-0zZHxY", "title": "ילדות ישראלית - לילה טוב", "seconds": 96},
+  {"lang": "he", "category": "sleep", "name": "שיר ערש – ערוץ בייבי", "id": "P4XwJt6wUHQ", "title": "שיר ערש - שיר לילה טוב לילדים ופעוטות", "seconds": 140},
+  {"lang": "he", "category": "sleep", "name": "שיר ערב – ערוץ הופ!", "id": "AU6sblsXnsQ", "title": "שיר ערב - שירי ילדות אהובים - ערוץ הופ! - לגדול בידיים טובות", "seconds": 129},
+  {"lang": "he", "category": "sleep", "name": "שיר ערש לצבעים – ילדות ישראלית", "id": "zTOsbTnyiNU", "title": "שיר ערש לצבעים - שיר ילדים -  שירי ילדות ישראלית", "seconds": 124},
+  {"lang": "he", "category": "sleep", "name": "נומה ילד – יהורם גאון", "id": "m-CADYKFTP0", "title": "יהורם גאון נומה ילד מתוך שירי ערש 1981", "seconds": 156},
+  {"lang": "he", "category": "sleep", "name": "שיר ערש לתרזה – ילדות ישראלית", "id": "xa4fyCeP50o", "title": "ילדות ישראלית - שיר ערש לתרזה", "seconds": 65},
+  {"lang": "he", "category": "morning", "name": "בוקר טוב – ערוץ בייבי", "id": "RAbDQApVHBk", "title": "בוקר טוב - שיר ילדים - שירי ערוץ בייבי", "seconds": 108},
+  {"lang": "he", "category": "morning", "name": "הי בוקר טוב – מירב האוסמן", "id": "ZrQWEiVG6nU", "title": "הי בוקר טוב מירב האוסמן // חוויה מוסיקלית", "seconds": 110},
+  {"lang": "he", "category": "morning", "name": "בוקר טוב עולם – עפרה ועידן", "id": "EUBJ_waKlKg", "title": "בוקר טוב עולם | שיר פעולות בוקר | שיר בוקר לגן ילדים | שיר פתיחה לילדים | עפרה ועידן | ילד מוזיקה", "seconds": 116},
+  {"lang": "he", "category": "morning", "name": "בוקר טוב לגוף שלי – אוראן טלמור", "id": "B-lVIf7-fLc", "title": "בוקר טוב לגוף שלי - אוראן טלמור | קליפ רשמי | שיר בוקר ותנועה לילדים", "seconds": 221},
+  {"lang": "he", "category": "morning", "name": "נתופף על הגוף – מירב האוסמן", "id": "JCWSe0JShQI", "title": "נתופף על הגוף - מירב האוסמן", "seconds": 65},
+  {"lang": "he", "category": "morning", "name": "ידיים למעלה – ערוץ בייבי", "id": "PRBs4F77AAE", "title": "שיר ילדים: ידיים למעלה. גן הצוציקים מארח את לורן סביר. ערוץ בייבי", "seconds": 97},
+  {"lang": "he", "category": "morning", "name": "ראש וכתפיים – ערוץ בייבי", "id": "YSjF7JMU_G4", "title": "ראש וכתפיים - שיר ילדים - שירי ערוץ בייבי", "seconds": 84},
+  {"lang": "he", "category": "morning", "name": "נגלגל את הידיים – גולי והגיטרה", "id": "WFj_qFak4yM", "title": "ילדות ישראלית  - גולי והגיטרה - נגלגל את הידיים", "seconds": 120},
+  {"lang": "he", "category": "baby", "name": "יונתן הקטן – ילדות ישראלית", "id": "QrkDbNul0U8", "title": "ילדות ישראלית - יונתן הקטן", "seconds": 76},
+  {"lang": "he", "category": "baby", "name": "השפן הקטן – ילדות ישראלית", "id": "-qH8J3gZ-gI", "title": "השפן הקטן -שירי ילדים - ילדות ישראלית", "seconds": 130},
+  {"lang": "he", "category": "baby", "name": "פילפילון – ילדות ישראלית", "id": "AI55ykbv8Xw", "title": "פילפילון - שיר ילדים - שירי חיות ברצף -  ילדות ישראלית", "seconds": 137},
+  {"lang": "he", "category": "baby", "name": "בלוני – ילדות ישראלית", "id": "HSBGD_Wdmt0", "title": "בלוני - שירי ילדות אהובים -  ילדות ישראלית", "seconds": 128},
+  {"lang": "he", "category": "baby", "name": "לדוד משה הייתה חווה – ילדות ישראלית", "id": "VLWVxMVKxj8", "title": "דוד משה - שירים מהעולם לילדים - שירי  ילדות ישראלית", "seconds": 143},
+  {"lang": "he", "category": "baby", "name": "אמא אווזה – כפר השירים", "id": "_MTchRGhayM", "title": "אמא אווזה | שיר ילדים קלאסי בביצוע חדש | כפר השירים", "seconds": 82},
+  {"lang": "he", "category": "baby", "name": "פרפר נחמד – ילדות ישראלית", "id": "XFcXcPnhQMw", "title": "פרפר נחמד - שיר ילדים -  שירי ילדות ישראלית", "seconds": 128},
+  {"lang": "he", "category": "baby", "name": "בלון גדול בלון קטן – יובל המבולבל", "id": "mB6_6J9OC90", "title": "יובל המבולבל - בלון גדול בלון קטן - הופ! שירים", "seconds": 130},
+  {"lang": "en", "category": "sleep", "name": "Twinkle Twinkle Little Star – Super Simple Songs", "id": "yCjJyiqpAuU", "title": "Twinkle Twinkle Little Star | Nursery Rhymes for Kids | Super Simple Songs", "seconds": 154},
+  {"lang": "en", "category": "sleep", "name": "Rock-A-Bye Little One – Super Simple Songs", "id": "1jX8XyYvtWs", "title": "Rock-A-Bye Little One | Baby Lullaby for Bedtime 😴 | Super Simple Songs", "seconds": 158},
+  {"lang": "en", "category": "sleep", "name": "Hush Little Baby – Super Simple Songs", "id": "f_raDpgx_3M", "title": "Hush Little Baby | Lullaby for Babies | Super Simple Songs", "seconds": 143},
+  {"lang": "en", "category": "sleep", "name": "Sweet Dreams (Goodnight Song) – Super Simple Songs", "id": "OKbpLQp509Y", "title": "Sweet Dreams (Goodnight Song) | Soothing Lullaby | Super Simple Songs", "seconds": 188},
+  {"lang": "en", "category": "sleep", "name": "Nap Time – Super Simple Songs", "id": "Yq6qYbwqAk8", "title": "Nap Time | Kids Lullaby | Super Simple Sleep Routine Songs", "seconds": 165},
+  {"lang": "en", "category": "sleep", "name": "Brahms' Lullaby – The Hound + The Fox", "id": "_79LQh3g7kg", "title": "Brahms' Lullaby (Original Lyrics) | The Hound + The Fox", "seconds": 164},
+  {"lang": "en", "category": "sleep", "name": "You Are My Sunshine (Lullaby) – The Hound + The Fox", "id": "dh7LJDHFaqA", "title": "You Are My Sunshine (Lullaby Version) | The Hound + The Fox", "seconds": 204},
+  {"lang": "en", "category": "sleep", "name": "Rain, Rain, Go Away (Lullaby) – Bebefinn", "id": "CEY1Xgn0mjk", "title": "Rain, Rain, Go Away (Lullaby Version)", "seconds": 140},
+  {"lang": "en", "category": "morning", "name": "Good Morning It's Such A Beautiful Day – Super Simple Songs", "id": "K53J44ioDxI", "title": "Good Morning It's Such A Beautiful Day | Have A Great Day | Happy Song | Super Simple Songs", "seconds": 110},
+  {"lang": "en", "category": "morning", "name": "Good Morning Song – The Singing Walrus", "id": "CuI_p7a9VGs", "title": "Good Morning Song for Kids (with lyrics) | The Singing Walrus", "seconds": 156},
+  {"lang": "en", "category": "morning", "name": "The Wheels On The Bus – Super Simple Songs", "id": "9UasekNr8KI", "title": "The Wheels On The Bus | @SuperSimpleSongs Nursery Rhymes & Kids Songs | Super Simple Songs", "seconds": 156},
+  {"lang": "en", "category": "morning", "name": "If You're Happy And You Know It – Super Simple Songs", "id": "M6LoRZsHMSs", "title": "If You’re Happy And You Know It | Kids Songs | Super Simple Songs", "seconds": 97},
+  {"lang": "en", "category": "morning", "name": "Head Shoulders Knees And Toes – Super Simple Songs", "id": "RuqvGiZi0qg", "title": "Head Shoulders Knees And Toes | Noodle & Pals | Super Simple Songs", "seconds": 105},
+  {"lang": "en", "category": "morning", "name": "Hokey Pokey – The Wiggles", "id": "Zh2PalZFs0g", "title": "Hokey Pokey 🕺 Party Songs 🥳 Dancing Songs 💃 Singalong Songs for Kids 🎙️ The Wiggles", "seconds": 230},
+  {"lang": "en", "category": "morning", "name": "Walking Walking – Super Simple Songs", "id": "fPMjnlTEZwU", "title": "Walking Walking | featuring Noodle & Pals | Super Simple Songs", "seconds": 111},
+  {"lang": "en", "category": "morning", "name": "Shake Your Sillies Out – The Learning Station", "id": "NwT5oX_mqS0", "title": "Shake Your Sillies Out ♫ Brain Breaks Songs for Kids ♫ Kids Action Songs by The Learning Station", "seconds": 189},
+  {"lang": "en", "category": "baby", "name": "Old MacDonald Had A Farm – Super Simple Songs", "id": "_6HzoUcx3eo", "title": "Old MacDonald Had A Farm | Nursery Rhymes | Super Simple Songs", "seconds": 197},
+  {"lang": "en", "category": "baby", "name": "Baa Baa Black Sheep – Cocomelon", "id": "MR5XSOdjKMA", "title": "Baa Baa Black Sheep | @CoComelon Nursery Rhymes & Kids Songs", "seconds": 165},
+  {"lang": "en", "category": "baby", "name": "The Itsy Bitsy Spider – Super Simple Songs", "id": "bne3Ix_tJL8", "title": "The Eensy Weensy Spider | Kids Songs and Nursery Rhymes | Super Simple Songs", "seconds": 143},
+  {"lang": "en", "category": "baby", "name": "Five Little Ducks – Super Simple Songs", "id": "pZw9veQ76fo", "title": "Five Little Ducks | Kids Songs | Super Simple Songs", "seconds": 174},
+  {"lang": "en", "category": "baby", "name": "The Alphabet Song – Super Simple Songs", "id": "vD98OvvDNEs", "title": "The Alphabet Song | Kids Songs | Super Simple Songs", "seconds": 184},
+  {"lang": "en", "category": "baby", "name": "Humpty Dumpty – Little Baby Bum", "id": "rgNJP1p6RJM", "title": "Humpty Dumpty | Part 1 | Nursery Rhymes | By LittleBabyBum! | ABCs and 123s", "seconds": 111},
+  {"lang": "en", "category": "baby", "name": "Mary Had a Little Lamb – Mother Goose Club", "id": "7tDcw3ozuCY", "title": "Mary Had a Little Lamb | MUFFIN MAN FRIENDS | Mother Goose Club Playhouse Kids Video", "seconds": 119},
+  {"lang": "ru", "category": "sleep", "name": "Спят усталые игрушки – Спокойной ночи, малыши!", "id": "-97vgdIk6-g", "title": "Песня \"Спят усталые игрушки\". Из \"Спокойной ночи, малыши!\" (1986)", "seconds": 117},
+  {"lang": "ru", "category": "sleep", "name": "Спи, моя радость, усни – Елена Камбурова", "id": "j_mzjJ8MWME", "title": "Спокойной ночи, малыши! Песня \"Спи, моя радость, усни\". Поёт Елена Камбурова (1991)", "seconds": 75},
+  {"lang": "ru", "category": "sleep", "name": "Колыбельная медведицы – Аида Ведищева", "id": "lrcc4pd7CxA", "title": "Колыбельная медведицы (Из м/ф \"Умка\")", "seconds": 122},
+  {"lang": "ru", "category": "sleep", "name": "Баю-баюшки-баю – Бурёнка Даша", "id": "mzDfGCAPj7w", "title": "Бурёнка Даша. Баю-баюшки-баю | Песни для детей", "seconds": 135},
+  {"lang": "ru", "category": "sleep", "name": "Колыбельная – Кукутики", "id": "2rHP57_W2vw", "title": "КОЛЫБЕЛЬНАЯ - КУКУТИКИ - песенка мультик для детей малышей lullaby song for kids", "seconds": 350},
+  {"lang": "ru", "category": "sleep", "name": "Колыбельная «Звёздочка» – Кукутики", "id": "kCv1cE1fkZY", "title": "КОЛЫБЕЛЬНАЯ песня Звёздочка - КУКУТИКИ - Баю бай песенка мультик музыка для сна", "seconds": 188},
+  {"lang": "ru", "category": "sleep", "name": "Колыбельная «Совушка» – Синий трактор", "id": "h8_jYH6PfcU", "title": "КОЛЫБЕЛЬНАЯ - Совушка - Песенка мультик для детей малышей про животных", "seconds": 527},
+  {"lang": "ru", "category": "morning", "name": "Зарядка – Бурёнка Даша", "id": "jU1zXua1DSY", "title": "Бурёнка Даша. Зарядка | Песни для детей", "seconds": 134},
+  {"lang": "ru", "category": "morning", "name": "Зарядка – Кукутики", "id": "7ELMG_9fVeY", "title": "КУКУТИКИ - ЗАРЯДКА - Развивающая полезная песенка мультик для детей малышей", "seconds": 139},
+  {"lang": "ru", "category": "morning", "name": "Делай так – Кукутики", "id": "84U7Xp22qIk", "title": "ДЕЛАЙ ТАК - КУКУТИКИ - Развивающая обучающая детская песенка мультик для малышей про зарядку и звуки", "seconds": 190},
+  {"lang": "ru", "category": "morning", "name": "Зарядка – Синий трактор", "id": "j4w_ISqdsvY", "title": "Синий трактор представляет | Зарядка | Мультики для детей про машинки", "seconds": 268},
+  {"lang": "ru", "category": "morning", "name": "Зарядка – Цветняшки", "id": "ESv44pwl0Xk", "title": "Зарядка — Новая песня Лисёнка Айяяй — Цветняшки — Весёлая песенка и мультик для детей", "seconds": 106},
+  {"lang": "ru", "category": "morning", "name": "Солнышко лучистое – Наше всё!", "id": "P7E85_doSYw", "title": "Солнышко лучистое. Мульт-песенка, видео для детей. Наше всё!", "seconds": 107},
+  {"lang": "ru", "category": "morning", "name": "Если весело живётся, делай так – Наше всё!", "id": "loq3q6AH25g", "title": "Если весело живется, делай так! Развивающий мультфильм для детей. Наше всё!", "seconds": 181},
+  {"lang": "ru", "category": "morning", "name": "Танец маленьких утят – Наше всё!", "id": "hroHApWK578", "title": "Танец маленьких утят. Мультик / Duck dance song. Наше_всё!", "seconds": 169},
+  {"lang": "ru", "category": "baby", "name": "В траве сидел кузнечик – Наше всё!", "id": "IFU6Ty3so-c", "title": "В траве сидел кузнечик. Мульт-песенка с хорошим концом. Видео для детей. Наше всё!", "seconds": 93},
+  {"lang": "ru", "category": "baby", "name": "Антошка – Союзмультфильм", "id": "D_lJCZ9cIS0", "title": "Антошка, Антошка! Пойдем копать картошку! Союзмультфильм, 1969 г.", "seconds": 143},
+  {"lang": "ru", "category": "baby", "name": "Улыбка – Крошка Енот", "id": "OH1d8RR4wlA", "title": "Песня \"Улыбка\" из мультфильма \"Крошка Енот\". Композитор Владимир Шаинский (1975)", "seconds": 161},
+  {"lang": "ru", "category": "baby", "name": "Песенка мамонтёнка", "id": "T967sIrSyVE", "title": "Песенка мамонтенка из мультфильма \"Мама для мамонтенка\" (1981)", "seconds": 82},
+  {"lang": "ru", "category": "baby", "name": "Голубой вагон", "id": "LgJ9CNjCReg", "title": "Голубой вагон", "seconds": 98},
+  {"lang": "ru", "category": "baby", "name": "Песенка крокодила Гены", "id": "TTZ-IB33oYA", "title": "Песенка крокодила Гены (из м/ф \"Чебурашка\")", "seconds": 84},
+  {"lang": "ru", "category": "baby", "name": "Жили у бабуси два весёлых гуся", "id": "d9C0U-moNNc", "title": "Жили у бабуси два веселых гуся, Союзмультфильм, 1970 г.- Веселая карусель", "seconds": 173},
+  {"lang": "ru", "category": "baby", "name": "Паровозик – Кукутики", "id": "CDU3mD83tlw", "title": "КУКУТИКИ - ПАРОВОЗИК развивающая песня мультик для детей про поезд вагоны трактор машинки животных", "seconds": 288},
+  {"lang": "any", "category": "calm", "name": "Music Box Lullabies", "id": "ZqMN0g5gi2I", "title": "Baby's Music Box Lullabies - Collection of soothing nursery lullaby music for infants", "seconds": 1442},
+  {"lang": "any", "category": "calm", "name": "Twinkle Twinkle – piano lullaby", "id": "dUXvkLajeo8", "title": "Twinkle Twinkle Little Star | Bedtime Lullaby | Piano Music | Super Simple Songs", "seconds": 639},
+  {"lang": "any", "category": "calm", "name": "Hush Little Baby – piano lullaby", "id": "OheHnFixwVk", "title": "Hush Little Baby | Bedtime Lullaby | Piano Music | Super Simple Songs", "seconds": 619},
+  {"lang": "any", "category": "calm", "name": "Brahms' Lullaby – music box (1 h)", "id": "6h-Uvppr7e0", "title": "Brahms' Lullaby Music Box- 1 Hour Loop-", "seconds": 3590},
+  {"lang": "any", "category": "calm", "name": "Mozart & Brahms lullabies", "id": "RORK-joDInU", "title": "Mozart & Brahms Lullabies 💕 Sleep Instantly in 3 Minutes😴 Baby Sleep Music 🎶", "seconds": 1971},
+  {"lang": "any", "category": "calm", "name": "Brahms' Lullaby – instrumental (1 h)", "id": "3fKKkIZ_3jM", "title": "Brahms Lullaby | 1 Hour of Calm Instrumental Music for Sleep", "seconds": 3648},
+  {"lang": "any", "category": "calm", "name": "Brahms' Lullaby – soothing (1 h)", "id": "iXC3dxZw-2A", "title": "1 HOUR Brahms Lullaby ♫♫♫ Soothing Music For Babies To Go To Sleep", "seconds": 3763},
+  {"lang": "any", "category": "noise", "name": "White noise (1 h)", "id": "lzmSKX5TF3g", "title": "White Noise 1 Hour Long", "seconds": 3632},
+  {"lang": "any", "category": "noise", "name": "White noise (3 h)", "id": "2y6zdAbN9o8", "title": "White Noise 3 Hour Long", "seconds": 10828},
+  {"lang": "any", "category": "noise", "name": "Pink noise (1 h)", "id": "BqGoN40VPhE", "title": "Pink Noise for Baby Sleep (1 Hour)", "seconds": 3600},
+  {"lang": "any", "category": "noise", "name": "Brown noise (1 h)", "id": "MT0Ta_Qldrs", "title": "Deep Layered Brown Noise ( 1 Hour )", "seconds": 3601},
+  {"lang": "any", "category": "noise", "name": "Womb sounds (1 h)", "id": "AQMMgDB3ZEw", "title": "60 Minutes Womb Sounds (Gets Baby to Sleep Fast! Calms Crying Babies & Colic)", "seconds": 3601},
+  {"lang": "any", "category": "noise", "name": "Shhh & white noise (1 h)", "id": "FEFzYY8bmw0", "title": "Shhh Sound & White Noise 🌛 to Put a Baby to Sleep the whole night 💤 Hushing Baby", "seconds": 3601},
+  {"lang": "any", "category": "noise", "name": "Gentle rain (1 h)", "id": "ox_zQAYaDmE", "title": "1 Hour of Relaxing Smooth Rain Sounds to Fall Asleep", "seconds": 3600},
+  {"lang": "any", "category": "noise", "name": "Ocean waves (3 h)", "id": "Tv8wcOn_LpA", "title": "3 Hour Ocean Waves Sounds", "seconds": 10800},
+];
+// END CUBOAI_SONG_COLLECTIONS
+
+const CUBOAI_SONG_STYLES = [
+  { key: 'sleep', icon: 'mdi:weather-night', label: { he: 'שינה', en: 'Sleep', ru: 'Сон' } },
+  { key: 'morning', icon: 'mdi:weather-sunny', label: { he: 'בוקר ופעילות', en: 'Morning & play', ru: 'Утро и игры' } },
+  { key: 'baby', icon: 'mdi:baby-face-outline', label: { he: 'שירי תינוקות', en: 'Baby songs', ru: 'Детские песни' } },
+  { key: 'calm', icon: 'mdi:piano', label: { he: 'מוזיקה רגועה', en: 'Calm music', ru: 'Спокойная музыка' } },
+  { key: 'noise', icon: 'mdi:waves', label: { he: 'רעש לבן וטבע', en: 'White noise', ru: 'Белый шум' } },
+];
+
+const CUBOAI_SONG_LANGS = [
+  { key: 'all', label: { he: 'הכול', en: 'All', ru: 'Все' } },
+  { key: 'he', label: { he: 'עברית', en: 'Hebrew', ru: 'Иврит' } },
+  { key: 'en', label: { he: 'אנגלית', en: 'English', ru: 'Английский' } },
+  { key: 'ru', label: { he: 'רוסית', en: 'Russian', ru: 'Русский' } },
+];
+
+// The UI language for the collection labels: Hebrew, Russian, else English.
+function cuboaiUiLang(hass) {
+  const l = String((hass && (hass.locale && hass.locale.language || hass.language)) || 'en').toLowerCase();
+  return l.startsWith('he') || l.startsWith('iw') ? 'he' : l.startsWith('ru') ? 'ru' : 'en';
+}
+
+// Songs of one style, in one language ('all' = every language), matching a search text.
+// Instrumental songs (lang 'any') show under every language.
+function cuboaiCollectionSongs(list, style, lang, query) {
+  const q = String(query || '').trim().toLowerCase();
+  return (list || []).filter(s =>
+    s.category === style &&
+    (lang === 'all' || s.lang === lang || s.lang === 'any') &&
+    (!q || String(s.name).toLowerCase().includes(q))
+  );
+}
+
+// Card options for the collections (all optional; YAML or the visual editor):
+//   show_song_collections: false        hide the whole section
+//   song_languages: [he, ru]            which sung languages to offer (default: all three;
+//                                       instrumental songs always show)
+//   song_styles: [sleep, calm, noise]   which styles to offer (default: all five)
+//   default_song_style: sleep           the style shown first
+//   default_song_language: he           the language shown first ('all' = every allowed one)
+// A list may also be a comma-separated string. Unknown values are ignored; an empty style
+// list hides the section.
+function cuboaiCollectionConfig(config) {
+  const c = config || {};
+  const list = (v, known) => {
+    if (v === undefined || v === null || v === '' || v === 'all') return known.slice();
+    const arr = Array.isArray(v) ? v : String(v).split(',');
+    const want = arr.map(x => String(x).trim().toLowerCase());
+    return known.filter(k => want.includes(k));
+  };
+  const styles = list(c.song_styles, CUBOAI_SONG_STYLES.map(s => s.key));
+  const langs = list(c.song_languages, CUBOAI_SONG_LANGS.map(l => l.key).filter(k => k !== 'all'));
+  const show = c.show_song_collections !== false && c.show_song_collections !== 'false' && styles.length > 0;
+  const ds = String(c.default_song_style || '').toLowerCase();
+  const dl = String(c.default_song_language || '').toLowerCase();
+  return {
+    show,
+    styles,
+    langs,
+    defaultStyle: styles.includes(ds) ? ds : styles[0],
+    defaultLang: langs.length === 1 ? langs[0] : (langs.includes(dl) ? dl : 'all'),
+  };
+}
+
+// Songs allowed by the card options, for one style and one language chip.
+function cuboaiVisibleSongs(list, cfg, style, lang, query) {
+  if (!cfg.show || !cfg.styles.includes(style)) return [];
+  return cuboaiCollectionSongs(list, style, lang, query)
+    .filter(s => s.lang === 'any' || cfg.langs.includes(s.lang));
+}
+
+function cuboaiYoutubeUrl(id) {
+  return `https://www.youtube.com/watch?v=${id}`;
+}
+
 function cuboaiFindCameraState(hass, deviceId) {
   if (!hass || !hass.states) return null;
   const shaped = [];
@@ -1119,6 +1287,36 @@ class CuboAICameraCardEditor extends HTMLElement {
     check('#show-music-toggle', c.show_music !== false);
     check('#show-timestamp-toggle', c.show_timestamp === true);
     check('#talk-mute-toggle', c.talk_mutes_speaker === true);
+    this._applyCollectionConfig();
+  }
+
+  // Song-collection options: the form shows the effective values (defaults = everything on).
+  _applyCollectionConfig() {
+    const cc = cuboaiCollectionConfig(this._config);
+    const show = this.querySelector('#show-collections-toggle');
+    if (show) show.checked = (this._config || {}).show_song_collections !== false;
+    this.querySelectorAll('.collection-lang-check').forEach(el => { el.checked = cc.langs.includes(el.dataset.key); });
+    this.querySelectorAll('.collection-style-check').forEach(el => { el.checked = cc.styles.includes(el.dataset.key); });
+    const ds = this.querySelector('#collection-default-style');
+    if (ds) ds.value = cc.defaultStyle || 'sleep';
+    const dl = this.querySelector('#collection-default-lang');
+    if (dl) dl.value = cc.defaultLang || 'all';
+  }
+
+  // Write the collection options back: a full list (= the default) is left out of the YAML.
+  _collectionConfigFromForm(newConfig) {
+    const show = this.querySelector('#show-collections-toggle');
+    if (show && !show.checked) newConfig.show_song_collections = false; else delete newConfig.show_song_collections;
+    const pick = (cls) => [...this.querySelectorAll(cls)].filter(el => el.checked).map(el => el.dataset.key);
+    const langs = pick('.collection-lang-check');
+    const styles = pick('.collection-style-check');
+    if (langs.length === 3) delete newConfig.song_languages; else newConfig.song_languages = langs;
+    if (styles.length === 5) delete newConfig.song_styles; else newConfig.song_styles = styles;
+    const ds = this.querySelector('#collection-default-style');
+    if (ds && ds.value !== 'sleep') newConfig.default_song_style = ds.value; else delete newConfig.default_song_style;
+    const dl = this.querySelector('#collection-default-lang');
+    if (dl && dl.value !== 'all') newConfig.default_song_language = dl.value; else delete newConfig.default_song_language;
+    return newConfig;
   }
 
   set hass(hass) {
@@ -1199,6 +1397,37 @@ class CuboAICameraCardEditor extends HTMLElement {
           <p style="color: var(--secondary-text-color); font-size: 12px; margin-top: 8px;">
             Badges auto-hide when their sensor has no data (mat / thermometer are optional accessories).
           </p>
+        </div>
+
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
+          <label style="display: block; font-weight: 500; margin-bottom: 8px;">Song collections:</label>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+            <input type="checkbox" id="show-collections-toggle">
+            <span>Show the built-in song collections in the music library</span>
+          </label>
+          <div style="font-size: 13px; margin-bottom: 4px;">Languages (instrumental songs always show):</div>
+          <div id="collection-langs" style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px;">
+            ${CUBOAI_SONG_LANGS.filter(l => l.key !== 'all').map(l => `
+              <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                <input type="checkbox" class="collection-lang-check" data-key="${l.key}"><span>${l.label.en}</span>
+              </label>`).join('')}
+          </div>
+          <div style="font-size: 13px; margin-bottom: 4px;">Styles:</div>
+          <div id="collection-styles" style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px;">
+            ${CUBOAI_SONG_STYLES.map(s => `
+              <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                <input type="checkbox" class="collection-style-check" data-key="${s.key}"><span>${s.label.en}</span>
+              </label>`).join('')}
+          </div>
+          <label style="display: block; font-size: 13px; margin-bottom: 4px;">Shown first:</label>
+          <div style="display: flex; gap: 8px;">
+            <select id="collection-default-style" style="flex: 1;">
+              ${CUBOAI_SONG_STYLES.map(s => `<option value="${s.key}">${s.label.en}</option>`).join('')}
+            </select>
+            <select id="collection-default-lang" style="flex: 1;">
+              ${CUBOAI_SONG_LANGS.map(l => `<option value="${l.key}">${l.label.en}</option>`).join('')}
+            </select>
+          </div>
         </div>
 
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #eee);">
@@ -1285,6 +1514,11 @@ class CuboAICameraCardEditor extends HTMLElement {
         el.addEventListener('change', (e) => this._valueChanged(e));
       }
     }
+
+    // Song-collection options
+    this._applyCollectionConfig();
+    this.querySelectorAll('#show-collections-toggle, #collection-default-style, #collection-default-lang, .collection-lang-check, .collection-style-check')
+      .forEach(el => el.addEventListener('change', (e) => this._valueChanged(e)));
 
     // Global song-cache controls (drive the shared switch entity / service,
     // not the per-card config)
@@ -1376,6 +1610,11 @@ class CuboAICameraCardEditor extends HTMLElement {
       if (target.checked) newConfig.show_timestamp = true; else delete newConfig.show_timestamp;
     } else if (target.id === "talk-mute-toggle") {
       if (target.checked) newConfig.talk_mutes_speaker = true; else delete newConfig.talk_mutes_speaker;
+    } else if (target.id === "show-collections-toggle" || target.id === "collection-default-style"
+               || target.id === "collection-default-lang"
+               || target.classList.contains('collection-lang-check')
+               || target.classList.contains('collection-style-check')) {
+      newConfig = this._collectionConfigFromForm(newConfig);
     }
 
     // Use CustomEvent so `detail` is delivered reliably (a plain Event with a
@@ -2947,6 +3186,7 @@ class CuboAICameraCard extends HTMLElement {
                 <option value="youtube">YouTube</option>
                 <option value="spotify">Spotify</option>
                 <option value="lullabies">Lullabies</option>
+                <option value="collections">Song collections</option>
                 <option value="user_added">User Added</option>
               </select>
               <select id="userFilter" class="cubo-select" style="max-width: 100px;">
@@ -3154,6 +3394,7 @@ class CuboAICameraCard extends HTMLElement {
               if (filter === "youtube") matchesCategory = song.category.toLowerCase() === "youtube";
               else if (filter === "spotify") matchesCategory = song.category.toLowerCase() === "spotify";
               else if (filter === "lullabies") matchesCategory = false; // Lullabies are handled separately below
+              else if (filter === "collections") matchesCategory = false; // so are the built-in collections
               else if (filter === "user_added") matchesCategory = song.custom === true;
               
               const selectedUserFilter = userFilter.value;
@@ -3217,6 +3458,74 @@ class CuboAICameraCard extends HTMLElement {
               }
             }
 
+            // Built-in song collections (by style and language).
+            let collectionsHtml = '';
+            const colCfg = cuboaiCollectionConfig(this._config);
+            if ((filter === "all" || filter === "collections") && colCfg.show && CUBOAI_SONG_COLLECTIONS.length) {
+              const ui = cuboaiUiLang(this._hass);
+              const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+              const style = colCfg.styles.includes(this._collectionStyle) ? this._collectionStyle : colCfg.defaultStyle;
+              const lang = (this._collectionLang === 'all' || colCfg.langs.includes(this._collectionLang)) && colCfg.langs.length > 1
+                ? this._collectionLang : colCfg.defaultLang;
+              const songs = cuboaiVisibleSongs(CUBOAI_SONG_COLLECTIONS, colCfg, style, lang, query);
+              const anyMatch = !query || colCfg.styles.some(st => cuboaiVisibleSongs(CUBOAI_SONG_COLLECTIONS, colCfg, st, 'all', query).length);
+              const styleDefs = CUBOAI_SONG_STYLES.filter(s => colCfg.styles.includes(s.key));
+              const langDefs = CUBOAI_SONG_LANGS.filter(l => l.key === 'all' || colCfg.langs.includes(l.key));
+              const expanded = this._collectionsExpanded || (!!query && anyMatch);
+              const title = { he: 'אוסף שירים', en: 'Song collections', ru: 'Подборки песен' }[ui];
+              const empty = { he: 'אין שירים כאן', en: 'No songs here', ru: 'Здесь нет песен' }[ui];
+              const mins = (s) => s >= 3600 ? `${Math.round(s / 360) / 10}h` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+              const chip = (cls, key, active, icon, label) => `
+                <button class="cubo-btn ${active ? '' : 'cubo-btn-sec'} ${cls}" data-key="${key}" style="padding: 3px 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;">
+                  ${icon ? `<ha-icon icon="${icon}" style="--mdc-icon-size: 14px;"></ha-icon>` : ''}${esc(label)}
+                </button>`;
+              if (anyMatch) {
+                collectionsHtml = `
+                  <div class="song-item" style="flex-direction: column; align-items: stretch; gap: 0; padding: 0;">
+                    <div id="toggleCollectionsBtn" class="song-info" style="cursor: pointer; padding: 10px; display: flex; align-items: center; justify-content: space-between; user-select: none;">
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="song-badge lullabies">${esc(title)}</span>
+                        <div class="song-name" style="font-weight: bold;">${esc(CUBOAI_SONG_STYLES.find(s => s.key === style).label[ui])}</div>
+                      </div>
+                      <ha-icon id="collectionsChevron" icon="${expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'}" style="color: var(--secondary-text-color);"></ha-icon>
+                    </div>
+                    <div id="collectionsSublist" style="display: ${expanded ? 'flex' : 'none'}; flex-direction: column; gap: 6px; padding: 0 10px 10px 10px; border-top: 1px dashed var(--divider-color, rgba(0,0,0,0.05));">
+                      <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;">
+                        ${styleDefs.length > 1 ? styleDefs.map(s => chip('collection-style-btn', s.key, s.key === style, s.icon, s.label[ui])).join('') : ''}
+                      </div>
+                      ${colCfg.langs.length > 1 ? `
+                      <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                        ${langDefs.map(l => chip('collection-lang-btn', l.key, l.key === lang, '', l.label[ui])).join('')}
+                      </div>` : ''}
+                      ${songs.length === 0 ? `<div style="padding: 8px; font-size: 12px; font-style: italic; color: var(--secondary-text-color);">${esc(empty)}</div>` : ''}
+                      ${songs.map((song) => {
+                        const url = cuboaiYoutubeUrl(song.id);
+                        return `
+                        <div class="song-item" style="background: var(--card-background-color, #fff); padding: 6px 10px; border: 1px solid var(--divider-color, rgba(0,0,0,0.03));">
+                          <div class="song-info" style="min-width: 0;">
+                            <div class="song-name" title="${esc(song.title || song.name)}" style="font-size: 13px;" dir="auto">${esc(song.name)}</div>
+                            <div style="font-size: 10px; color: var(--secondary-text-color, #727272);">${mins(song.seconds || 0)}</div>
+                          </div>
+                          <div class="song-actions">
+                            ${this._expandedPlaylist ? `
+                              <button class="cubo-btn add-to-active-btn" data-url="${url}" style="padding: 2px 8px; font-size: 11px; background: var(--success-color, #28a745);">Add</button>
+                            ` : `
+                              <button class="icon-btn quick-add-btn" data-url="${url}" title="Add to Playlist">
+                                <ha-icon icon="mdi:playlist-plus" style="--mdc-icon-size: 20px; color: var(--secondary-text-color, #727272);"></ha-icon>
+                              </button>
+                            `}
+                            <button class="icon-btn play-song-btn" data-url="${url}" title="Play song">
+                              <ha-icon icon="mdi:play" style="--mdc-icon-size: 20px; color: var(--primary-color, #03a9f4);"></ha-icon>
+                            </button>
+                          </div>
+                        </div>`;
+                      }).join('')}
+                    </div>
+                  </div>
+                `;
+              }
+            }
+
             // Render Custom/Added list of songs
             const totalSongPages = Math.ceil(filteredCustom.length / sItemsPerPage) || 1;
             if (this._songPage > totalSongPages) this._songPage = totalSongPages;
@@ -3268,7 +3577,30 @@ class CuboAICameraCard extends HTMLElement {
               `;
             }
 
-            songListContainer.innerHTML = lullabiesHtml + customSongsHtml;
+            songListContainer.innerHTML = lullabiesHtml + collectionsHtml + customSongsHtml;
+
+            // Bind song-collection accordion, style and language chips
+            const toggleCollectionsBtn = songListContainer.querySelector('#toggleCollectionsBtn');
+            if (toggleCollectionsBtn) {
+              toggleCollectionsBtn.addEventListener('click', () => {
+                this._collectionsExpanded = !this._collectionsExpanded;
+                renderSongs();
+              });
+            }
+            songListContainer.querySelectorAll('.collection-style-btn').forEach(btn => {
+              btn.addEventListener('click', () => {
+                this._collectionStyle = btn.getAttribute('data-key');
+                this._collectionsExpanded = true;
+                renderSongs();
+              });
+            });
+            songListContainer.querySelectorAll('.collection-lang-btn').forEach(btn => {
+              btn.addEventListener('click', () => {
+                this._collectionLang = btn.getAttribute('data-key');
+                this._collectionsExpanded = true;
+                renderSongs();
+              });
+            });
 
             // Bind Lullabies accordion click
             const toggleLullabiesBtn = songListContainer.querySelector('#toggleLullabiesBtn');

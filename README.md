@@ -266,6 +266,10 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 | `show_env_overlay` | `true` | Temperature / humidity badge (hides itself without data) |
 | `show_mat_overlay` | `true` | Sleep-mat BPM badge (hides itself without a mat) |
 | `show_music` | `true` | The lullabies & music section |
+| `show_song_collections` | `true` | The built-in song collections in the song library |
+| `song_languages` | `[he, en, ru]` | Which sung languages the collections offer (instrumental songs always show) |
+| `song_styles` | all five | Which styles the collections offer: `sleep`, `morning`, `baby`, `calm`, `noise` |
+| `default_song_style` / `default_song_language` | `sleep` / `all` | What the collections show first |
 | `show_timestamp` | `false` | Timestamp badge: the time of the frame on screen; it freezes and turns red if the live picture stalls, and shows the footage time during playback |
 | `show_timeline` | `true` | The recorded-playback bar (YAML only) |
 | `timeline_hours` | `18` | Span of the bar (YAML only) |
@@ -283,6 +287,11 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 - The library, playlists and shuffle/repeat settings are stored in Home Assistant, so every phone
   and tablet sees the same ones.
 - With the song cache on, a song downloaded once replays instantly.
+- **Song collections**: ready-made YouTube songs in five styles: sleep, morning & play, baby songs,
+  calm music and white noise. The sung styles come in Hebrew, English and Russian. Every link was
+  opened and checked (title, channel, length, playable, family-safe) before it went in. The list
+  lives in `tools/song_collections.json`; `python tools/gen_song_collections.py` writes it into the
+  card. Choose which languages and styles appear in the card editor or with the options above.
 
 ### Two-way audio
 
