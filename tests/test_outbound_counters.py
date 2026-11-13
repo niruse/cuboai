@@ -97,5 +97,5 @@ def test_first_time_answer_has_no_retransmit():
 
 
 def test_health_line_reports_send_side_recoveries():
-    src = open(os.path.join(_TUTK, "cuboai_stream_video.py")).read()
+    src = open(os.path.join(_TUTK, "cuboai_stream_video.py"), encoding="utf-8").read()
     assert "cur.get('tx_ioctl_retx', 0)" in src and "cur.get('tx_err', 0)" in src

@@ -73,6 +73,6 @@ def test_verbose_interval_parse_tolerates_garbage(clean_env):
 
 
 def test_validate_cli_uses_the_same_clamp():
-    src = open(os.path.join(_TUTK, "cuboai_validate.py")).read()
+    src = open(os.path.join(_TUTK, "cuboai_validate.py"), encoding="utf-8").read()
     assert "def _clamp_env_knobs" not in src
     assert "from cuboai_stream_video import apply_env_profile, _clamp_env_knobs" in src
