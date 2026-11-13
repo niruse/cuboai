@@ -82,6 +82,46 @@ def _env_float(name: str, default: float) -> float:
 # of THIS streaming entry point, not of the engine. So "no flags here" == production, while the
 # engine on its own stays vanilla.  (CUBOAI_SELECTIVE_ACK / CUBOAI_GRACE_SCALE /
 # CUBOAI_ECHO_CAMCLOCK already default ON inside the engine, so they are not repeated here.)
+def _clamp_env_knobs():
+    """Range-clamp the numeric CUBOAI_* tuning env vars (startup only, stderr only) so a zero/absurd
+    override can't divide-by-zero or break recovery. Non-numeric -> default; out-of-range -> clamp.
+
+    Lives in the streamer module so the go2rtc exec path (apply_env_profile) sanitises exactly like
+    the validate CLI does. It used to live in cuboai_validate and run only there, so a bad CUBOAI_*
+    knob reached get_session() unchecked on the streaming path."""
+    KNOBS = [
+        ('CUBOAI_GAP_DEPTH_CAP', 1, 10000, 200, False),
+        ('CUBOAI_RECOVERY_HOLD', 0, 2000, 24, False),
+        ('CUBOAI_LONE_SKIP_ROUNDS', 0, 2000, 20, False),
+        ('CUBOAI_KF_HOLD', 0, 2000, 40, False),
+        ('CUBOAI_GAP_HOLD_MS', 1, 600000, None, False),
+        ('CUBOAI_VERBOSE_INTERVAL', 0.1, 3600, 5.0, True),
+        ('CUBOAI_VERBOSE_CAMERA_STATS_INTERVAL', 1, 86400, None, False),
+        ('CUBOAI_STALL_S', 0, 60, 4.0, True),
+        ('CUBOAI_OUTPUT_STALL_S', 0, 60, 6.0, True),
+        ('CUBOAI_FIRST_AU_S', 0, 120, 15.0, True),
+        ('CUBOAI_RECONNECT_MAX', 0, 20, 3, False),
+        ('CUBOAI_RECONNECT_TIMEOUT_S', 1, 60, 5.0, True),
+        ('CUBOAI_DESYNC_S', 0, 60, 8.0, True),
+        ('CUBOAI_LIST_PACE_S', 0, 3600, 0.5, True),
+    ]
+    for env, lo, hi, dflt, isf in KNOBS:
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        try:
+            v = float(raw) if isf else int(raw)
+        except ValueError:
+            if dflt is not None:
+                os.environ[env] = str(dflt)
+                print(f"Warning: {env}={raw!r} is not a number; using default {dflt}.", file=sys.stderr)
+            continue
+        cv = min(hi, max(lo, v))
+        if cv != v:
+            os.environ[env] = str(cv if isf else int(cv))
+            print(f"Warning: {env}={raw} out of range [{lo},{hi}]; clamped to {cv}.", file=sys.stderr)
+
+
 PRODUCTION_ENV = {
     'CUBOAI_OUTPUT_FORMAT':    'mpegts',   # MPEG-TS w/ per-AU PTS (MSE/HLS play along currentTime)
     'CUBOAI_STRIP_FRAMEINFO':  '1',        # drop the 24B trailer (HW decoders choke on it → black)
@@ -142,6 +182,7 @@ def apply_env_profile(raw: bool) -> str:
                 env var). The engine reads these at construction, so this MUST run before
                 get_session().
     """
+    _clamp_env_knobs()          # a bad numeric knob must never reach get_session()
     if raw:
         for k, v in RAW_ENV.items():
             os.environ[k] = v
@@ -594,7 +635,7 @@ def main() -> None:
     if verbose:
         import threading as _threading
         v_interval = (args.verbose_interval
-                      or float(os.environ.get('CUBOAI_VERBOSE_INTERVAL', '') or 5.0))
+                      or _env_float('CUBOAI_VERBOSE_INTERVAL', 5.0))
         v_camera = (args.verbose_camera_stats
                     or os.environ.get('CUBOAI_VERBOSE_CAMERA_STATS', '0') != '0')
         _v_stop = _threading.Event()

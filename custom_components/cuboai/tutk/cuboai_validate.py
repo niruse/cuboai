@@ -47,7 +47,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cuboai_session import get_session   # auto-selects TUTKSession (--lib) or PureSession
-from cuboai_stream_video import apply_env_profile   # shared production/raw A/V env profile
+from cuboai_stream_video import apply_env_profile, _clamp_env_knobs   # shared env profile + knob clamp
 from cuboai_messages import (
     build_get_hw_control,
     build_get_light_style,
@@ -600,41 +600,6 @@ def run_benchmark(transport, interval=2.0, cap=None, csv_path=None):
     print("  " + "─" * 50)
     print("  Compare locations by WiFi% (higher is better) and loss% (lower is better).",
           flush=True)
-
-
-def _clamp_env_knobs():
-    """Range-clamp the numeric CUBOAI_* tuning env vars (startup only, stderr only) so a zero/absurd
-    override can't divide-by-zero or break recovery. Non-numeric -> default; out-of-range -> clamp."""
-    KNOBS = [
-        ('CUBOAI_GAP_DEPTH_CAP', 1, 10000, 200, False),
-        ('CUBOAI_RECOVERY_HOLD', 0, 2000, 24, False),
-        ('CUBOAI_LONE_SKIP_ROUNDS', 0, 2000, 20, False),
-        ('CUBOAI_KF_HOLD', 0, 2000, 40, False),
-        ('CUBOAI_GAP_HOLD_MS', 1, 600000, None, False),
-        ('CUBOAI_VERBOSE_INTERVAL', 0.1, 3600, 5.0, True),
-        ('CUBOAI_VERBOSE_CAMERA_STATS_INTERVAL', 1, 86400, None, False),
-        ('CUBOAI_STALL_S', 0, 60, 4.0, True),
-        ('CUBOAI_OUTPUT_STALL_S', 0, 60, 6.0, True),
-        ('CUBOAI_FIRST_AU_S', 0, 120, 15.0, True),
-        ('CUBOAI_RECONNECT_MAX', 0, 20, 3, False),
-        ('CUBOAI_RECONNECT_TIMEOUT_S', 1, 60, 5.0, True),
-        ('CUBOAI_DESYNC_S', 0, 60, 8.0, True),
-    ]
-    for env, lo, hi, dflt, isf in KNOBS:
-        raw = os.environ.get(env)
-        if not raw:
-            continue
-        try:
-            v = float(raw) if isf else int(raw)
-        except ValueError:
-            if dflt is not None:
-                os.environ[env] = str(dflt)
-                print(f"Warning: {env}={raw!r} is not a number; using default {dflt}.", file=sys.stderr)
-            continue
-        cv = min(hi, max(lo, v))
-        if cv != v:
-            os.environ[env] = str(cv if isf else int(cv))
-            print(f"Warning: {env}={raw} out of range [{lo},{hi}]; clamped to {cv}.", file=sys.stderr)
 
 
 def _validate_startup(args, uid, account, password, camera_ip):
