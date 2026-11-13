@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.53]
+
+### Fixed
+- **Settings switches no longer send a damaged command when the camera's reply is cut short** (#131).
+  Turning on cry detection, a detection zone or a few other settings first reads the current settings
+  and writes them back with the change. If that read came back short, the command could be sent with
+  missing fields and no error. It now stops with a clear error in the log instead.
+- **Stream tuning values are checked on the live stream too** (#131). A wrong `CUBOAI_*` value was
+  only corrected by the command-line tool; the video stream itself now applies the same limits.
+
+### Added
+- Diagnostics: the stream statistics now also count what Home Assistant sends to the camera
+  (acknowledgements, commands, retries, send errors), and the health line shows command retries and
+  send errors when there are any (#131).
+- For developers: `set_verified()` reads a setting back after changing it and reports whether the
+  camera really applied it, and the `cuboai_validate` tool can fade the lullaby volume with
+  `--volume-ramp` (#131). Neither is used by the integration itself.
+
+Contributed by @Fredde87 (#131).
+
 ## [2.6.52]
 
 ### Changed
