@@ -63,3 +63,33 @@ def test_clock_is_taken_from_the_extension(monkeypatch):
             f += 1
     r.finish(settle=0.5)
     assert r.sess._cam_clock == 0x7000 + 33
+
+
+def _io_frame(n, flag=0x08):
+    """A reliable IO/control response ([58:64] all zero) of n bytes."""
+    d = bytearray(n)
+    d[8:12] = b"\x08\x04\x12\x00"
+    d[28], d[29] = 0x0C, flag
+    struct.pack_into("<H", d, 52, max(0, n - 64))
+    struct.pack_into("<H", d, 56, 7)
+    if n >= 66:
+        struct.pack_into("<H", d, 64, 0x0965)
+    d[66:] = b"\xab" * (n - 66)
+    return bytes(d)
+
+
+def test_io_frames_are_never_stripped():
+    # The layout test reads [60:62], which lies inside the IO marker [58:64] (all zero on an IO
+    # frame): it can only hold at exactly 72 bytes, and len >= 76 excludes that. So no IO frame,
+    # of any length, is ever cut down — including the 72-byte case.
+    for n in range(64, 1200):
+        f = _io_frame(n)
+        assert cp.TUTKDirectSession._is_io_frame(f)
+        assert cp._strip_av_ext(f) == f, n
+
+
+def test_an_extended_io_frame_is_restored_not_left_misparsed():
+    io = _io_frame(100, flag=0)
+    ext = bytearray(io[:36] + struct.pack("<HHHH", 1, 30, 1, 0) + io[36:])
+    ext[29] |= 0x08
+    assert cp._strip_av_ext(bytes(ext)) == io
