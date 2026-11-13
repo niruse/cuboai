@@ -3931,6 +3931,62 @@ class TUTKDirectSession:
         io_type, payload = builder_result
         return self.ioctl(io_type, payload)
 
+    def set_verified(self, name, value, readback_timeout=2.5):
+        """OPT-IN, SELECTIVE read-back verify for a SET (ported from cuboai-tutk).
+
+        A SET that returns a ..._RESP proves the camera ANSWERED, not that it APPLIED the value:
+        _ioctl_once retransmits until a response arrives, so the SET is loss-RESILIENT, but
+        "accepted but not applied" is a completely different failure from "failed" and nothing in
+        the stack could previously tell them apart. This performs the SET, reads the value back
+        through the paired GET, and reports the three outcomes DISTINCTLY.
+
+        Deliberately NOT blanket (it costs an extra GET per call, and many IOCTLs are actions with
+        no readable state): `name` must be a key of cuboai_messages.SET_READBACK — everything else
+        raises rather than pretending to verify. cuboai_messages.SET_READBACK_UNSUPPORTED records
+        why each excluded setter has no read-back.
+
+        NEVER touches the AV hot path: the read-back GET goes through get_during_stream(), which
+        hands the request to the reader thread when a stream is running (and falls back to a plain
+        ioctl when it is not), so verifying a setting mid-stream cannot race the socket.
+
+        Returns a dict; `verified` is the verdict and is None only when the read-back itself could
+        not be obtained (never silently True):
+          {'name','expected','actual','set_ok','verified','status','confidence','get'}
+          status: 'applied'        — SET answered AND the read-back agrees
+                  'not_applied'    — SET answered but the read-back DISAGREES  <-- the interesting one
+                  'unverified'     — SET answered; the read-back GET failed/returned no field
+                  'set_failed'     — the SET itself never got a response (raised)
+        """
+        import cuboai_messages as cm
+        try:
+            setter, kwarg, get_name, field, coerce, confidence = cm.SET_READBACK[name]
+        except KeyError:
+            why = cm.SET_READBACK_UNSUPPORTED.get(f"set_{name}")
+            raise ValueError(
+                f"'{name}' has no read-back capability"
+                + (f" ({why})" if why else "")
+                + f"; verifiable: {sorted(cm.SET_READBACK)}")
+        out = {'name': name, 'expected': coerce(value), 'actual': None, 'set_ok': False,
+               'verified': None, 'status': 'set_failed', 'confidence': confidence, 'get': get_name}
+        try:
+            getattr(self, setter)(**{kwarg: value})
+        except Exception as e:
+            out['error'] = repr(e)
+            return out
+        out['set_ok'] = True
+        out['status'] = 'unverified'
+        parsed = self.get_during_stream(get_name, timeout=readback_timeout)
+        if not isinstance(parsed, dict) or field not in parsed or parsed[field] is None:
+            return out                       # read-back unavailable -> verified stays None
+        try:
+            out['actual'] = coerce(parsed[field])
+        except (TypeError, ValueError):
+            out['actual'] = parsed[field]
+            return out
+        out['verified'] = (out['actual'] == out['expected'])
+        out['status'] = 'applied' if out['verified'] else 'not_applied'
+        return out
+
     def set_night_light(self, on):
         """Turn the night light on/off."""
         import cuboai_messages as cm

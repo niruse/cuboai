@@ -2117,3 +2117,87 @@ def parse_set_result(raw: bytes) -> dict:
     (+ reserved). result==0 means the camera accepted the change."""
     return {'id': _u32(raw, 0), 'result': _i32(raw, 4),
             'ok': _i32(raw, 4) == 0, 'raw_len': len(raw), 'raw_hex': raw[:16].hex()}
+
+
+# ===========================================================================
+# SET READ-BACK CAPABILITY REGISTRY  (ported from cuboai-tutk)
+# ===========================================================================
+# WHY: a SET is loss-RESILIENT (it rides _ioctl_once's retransmit-until-response loop and only
+# exits on a matching ..._RESP), but a response proves the camera ANSWERED — NOT that it APPLIED
+# the value. "accepted but not applied" is a distinct failure from "failed", and nothing in the
+# stack could tell them apart. This registry says WHICH setters can be proven applied by reading
+# the value back, and how.
+#
+# DELIBERATELY SELECTIVE — read-back is NOT blanket:
+#   * it DOUBLES command traffic when it needs its own GET, so it is opt-in per call;
+#   * many IOCTLs are ACTIONS, not state (lullaby play/stop, snapshot, reboot) — there is nothing
+#     to read back, and those are absent here rather than faked;
+#   * it must never run on the AV hot path — TUTKDirectSession.set_verified() routes its GET
+#     through get_during_stream(), which hands the request to the reader thread instead of racing
+#     the socket (and falls back to a direct ioctl when no stream is running).
+# Note the traffic cost is not uniform: the seven hw_control-backed setters verify through ONE
+# shared get_hw_control, and set_hw_control ALREADY does that GET as its read-modify-write base,
+# so for those the read-back is one extra GET regardless of how many fields changed.
+#
+# Each entry: name -> (setter_method, setter_kwarg, get_name, get_field, coerce, confidence)
+# `confidence` is deliberately explicit and must not be upgraded without evidence:
+#   'live'   = the SET->GET round-trip has been OBSERVED to agree on this camera;
+#   'static' = the pairing is inferred from the builder/parser field names only (UNCONFIRMED).
+# Originally EVERY entry shipped 'static': no SET->GET round-trip had been run against the camera.
+# **2026-07-25,  (small-delta live round trips, each set->verify->restore->verify):**
+# 4 entries upgraded to 'live' (see per-entry notes below) after live round-trip testing.
+# The registry says which setters are read-back-CAPABLE; do not upgrade further entries without a
+# captured round-trip. (set_status_light was the sharpest reason to care, and the live test PROVED
+# it: the status LED is firmware-owned, the SET answers result=0 but the readback DISAGREES —
+# 'live' here means "the round-trip was OBSERVED", not "the value applies". See the per-entry note.)
+SET_READBACK = {
+    # ── standalone on/off IOCTLs (own GET) ──
+    'night_light':      ('set_night_light',      'on',        'get_night_light',   'on',           bool, 'static'),
+    # LIVE 2026-07-25: SET answers result=0, readback DISAGREES both directions (3%->4%/restore
+    # both showed 'applied'=False for status_light in the sense that 'on' never actually flips —
+    # confirmed accepted-but-not-applied, matching the known firmware-owned status LED.
+    'status_light':     ('set_status_light',     'on',        'get_status_light',  'on',           bool, 'live'),
+    # LIVE 2026-07-25: 3%->4%->3%, both directions applied=True, byte-identical readback.
+    'light_brightness': ('set_light_brightness', 'brightness','get_light_style',   'brightness',   int,  'live'),
+    'sleep_mode':       ('set_sleep_mode',       'enabled',   'get_sleep_mode',    'enabled',      bool, 'static'),
+    'auto_capture':     ('set_auto_capture',     'mode',      'get_auto_capture',  'mode',         int,  'static'),
+    # ── detection settings (own GET) ──
+    'cry_enabled':      ('set_cry_detection',    'enabled',   'get_cry_detection', 'enabled',      bool, 'static'),
+    # LIVE 2026-07-25: Medium(2)->High(1)->Medium(2), both directions applied=True.
+    'cry_sensitivity':  ('set_cry_detection',    'sensitivity','get_cry_detection','sensitivity',  int,  'live'),
+    'cough_enabled':    ('set_cough_detection',  'enabled',   'get_cough_detection','enabled',     bool, 'static'),
+    # LIVE 2026-07-25: Medium(2)->High(1)->Medium(2), both directions applied=True.
+    'cough_sensitivity':('set_cough_detection',  'sensitivity','get_cough_detection','sensitivity',int,  'live'),
+    'cough_in_crib':    ('set_cough_detection',  'in_crib',   'get_cough_detection','in_crib_only',bool, 'static'),
+    # ── HW_CONTROL-backed setters: ALL verify through the ONE get_hw_control struct ──
+    'night_vision':     ('set_night_vision',     'mode',      'get_hw_control',    'night_vision',  int, 'static'),
+    'video_flip':       ('set_video_flip',       'on',        'get_hw_control',    'video_flip',   bool, 'static'),
+    'mic_volume':       ('set_mic_volume',       'value',     'get_hw_control',    'mic_level',     int, 'static'),
+    'speaker_volume':   ('set_speaker_volume',   'value',     'get_hw_control',    'speaker_level', int, 'static'),
+}
+
+# NO read-back capability — recorded explicitly so nothing silently claims verification.
+# ACTION = fires an effect, holds no readable state. STRUCT = state exists but the GET returns a
+# composite the registry's scalar comparison cannot honestly check (would need a field-wise
+# comparator + a wire-confirmed field map; unconfirmed, so deliberately absent).
+SET_READBACK_UNSUPPORTED = {
+    'set_lullaby':                'ACTION (starts playback; only `volume` is state — the play itself is not readable)',
+    'set_lullaby_stop':           'ACTION',
+    'set_lullaby_schedule':       'STRUCT (schedule rows; duration lives in the SET tail — GET pairing UNCONFIRMED). '
+                                   'volume/duration kwargs MANUALLY round-tripped live 2026-07-25 ( '
+                                   'outside this registry\'s scalar machinery) and both applied correctly.',
+    # MANUALLY round-tripped live 2026-07-25  outside this registry's scalar
+    # machinery, because both are 4-coupled-field STRUCT writes it cannot honestly score alone:
+    #   sensitivity@12         APPLIES  (0->1->0, byte-exact readback both directions)
+    #   baby_presence_alert@16 DOES NOT APPLY (accepted, result=0, readback UNCHANGED both times,
+    #     confirmed NOT a swap: safety_alert/cover_alert/sensitivity all read back exactly as
+    #     expected in the same call — same accepted-but-ignored class as set_status_light).
+    # safety_alert@8 / cover_alert@12 were not touched this session (echoed unchanged, not tested).
+    'set_sleep_safety':           'STRUCT (4 coupled fields; parse_sleep_safety_setting pairing CONFIRMED for '
+                                   'sensitivity+baby_presence_alert 2026-07-25, see comment above)',
+    'set_sleep_safety_setting':   'STRUCT (**kw passthrough; kwarg->GET-field map CONFIRMED for '
+                                   'sensitivity+baby_presence_alert 2026-07-25, see comment above)',
+    'set_detection_zone':         'STRUCT (normalized box; needs a field-wise comparator)',
+    'set_danger_zone':            'STRUCT (named polygon list; needs a field-wise comparator)',
+    'set_hw_control':             'STRUCT (**kw passthrough — use the per-field entries above instead)',
+}
