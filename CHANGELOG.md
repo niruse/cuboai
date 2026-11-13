@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.54]
+
+### Added
+- **Song collections in the music library.** 85 ready-made YouTube songs in five styles: sleep,
+  morning & play, baby songs, calm music, and white noise & nature sounds. The sung styles come in
+  Hebrew, English and Russian; calm music and white noise are instrumental. Open *Song collections*
+  in the song library, pick a style and a language, and play a song on the camera's speaker or add
+  it to a playlist. Every link was opened and checked (title, channel, length, playable,
+  family-safe) before it went in.
+- **Choose what the collections show**, in the card editor or YAML: `show_song_collections`,
+  `song_languages`, `song_styles`, `default_song_style` and `default_song_language`. Instrumental
+  songs always show; with a single language the language buttons are hidden.
+
 ## [2.6.53]
 
 ### Fixed
