@@ -2105,6 +2105,15 @@ class TUTKDirectSession:
         if not self.camera_ip:
             self.camera_ip = "255.255.255.255"
         self._stat_keepalive_err = 0           # L1: keepalive-reply send failures (surfaces a wedged socket)
+        # OUTBOUND visibility. Every inbound counter used to have no send-side twin, so a send-side
+        # fault (an ACK that never left, an IOCTL that only got through on its third retransmit)
+        # looked exactly like a healthy session. Counted, never acted on.
+        self._stat_tx_ack = 0           # 0x09 ACK/SACK frames SENT (the reliable-channel heartbeat)
+        self._stat_tx_nak = 0           # 0x0a/0x0b NAK frames SENT (gated resend_mode)
+        self._stat_tx_ioctl = 0         # IOCTL request frames SENT (incl. retransmits — see tx_ioctl_retx)
+        self._stat_tx_ioctl_retx = 0    # of those, RETRANSMITS of an unanswered request (masked loss)
+        self._stat_tx_keepalive = 0     # keepalive replies SENT (pair with keepalive_err for a send ratio)
+        self._stat_tx_err = 0           # sendto() failures on a counted path — a wedged socket
         # ── stall detection (gated CUBOAI_STALL_S / CUBOAI_FIRST_AU_S; engine default 0 = OFF) ──
         # A camera session can go silent mid-stream (observed on a CB02 roughly once an hour:
         # a loss burst, then zero fragments forever). Nothing in the reader notices — it keeps
@@ -2748,6 +2757,7 @@ class TUTKDirectSession:
                            self._ack_ord, C, D, self._data_ack, sack=sack, ts32=ts32,
                            win=self._advertise_window),
             self._cam)
+        self._stat_tx_ack += 1
         self._seq += 1
         self._relseq += 1
         self._ack_ord += 1
@@ -2781,6 +2791,7 @@ class TUTKDirectSession:
                              resend_timeout_ms=self._RESEND_TIMEOUT_MS,
                              win=self._advertise_window),
             self._cam)
+        self._stat_tx_nak += 1
         self._seq += 1
         self._relseq += 1
 
@@ -2866,6 +2877,7 @@ class TUTKDirectSession:
         self._relseq += 1
         self._frmno += 1
         s.sendto(req, self._cam)
+        self._stat_tx_ioctl += 1
         t0 = time.time()
         last_tx = t0
         while time.time() - t0 < timeout:
@@ -2876,6 +2888,10 @@ class TUTKDirectSession:
                                        type_code, payload)
                 self._seq += 1
                 s.sendto(req, self._cam)
+                # This retransmit is what makes SETs loss-resilient, and also why a lossy link
+                # looks healthy from outside. Count it so "recovered N times" is visible.
+                self._stat_tx_ioctl += 1
+                self._stat_tx_ioctl_retx += 1
                 last_tx = now
             if not r:
                 continue
@@ -2889,8 +2905,10 @@ class TUTKDirectSession:
                 self._session_fp = xor_frame(raw)[16:20]  # camera's echoed session token
                 try:
                     s.sendto(build_keepalive_reply(raw), addr)
+                    self._stat_tx_keepalive += 1
                 except OSError:
-                    pass
+                    self._stat_keepalive_err += 1
+                    self._stat_tx_err += 1
                 continue
             dec = inv_transcode(raw)
             if len(dec) < 30:
@@ -3006,6 +3024,12 @@ class TUTKDirectSession:
             'gap_cap_jumps': self._stat_gap_cap_jumps,
             'lone_skips': self._stat_lone_skips,
             'keepalive_err': self._stat_keepalive_err,   # L1
+            'tx_ack': self._stat_tx_ack,
+            'tx_nak': self._stat_tx_nak,
+            'tx_ioctl': self._stat_tx_ioctl,
+            'tx_ioctl_retx': self._stat_tx_ioctl_retx,
+            'tx_keepalive': self._stat_tx_keepalive,
+            'tx_err': self._stat_tx_err,
             'stalls': self._stat_stalls,
             'output_stalls': self._stat_output_stalls,
             'first_au_timeouts': self._stat_first_au_timeouts,
@@ -3530,8 +3554,10 @@ class TUTKDirectSession:
                             self._session_fp = xor_frame(raw)[16:20]  # echoed token
                             try:
                                 s.sendto(build_keepalive_reply(raw), addr)
+                                self._stat_tx_keepalive += 1    # outbound side of keepalive_err
                             except OSError:
                                 self._stat_keepalive_err += 1   # L1: observable instead of silent
+                                self._stat_tx_err += 1
                         continue
                     dec = inv_transcode(raw)
                     if len(dec) < 40:

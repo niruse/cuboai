@@ -244,11 +244,11 @@ def _verbose_loop(sess, interval, camera_stats, stop):
             # only when something happened, so a clean session's line is unchanged and any
             # occurrence stands out. (Same rule as the playback engine's health line.)
             _rec = (cur.get('reconnects', 0), cur.get('stalls', 0), cur.get('first_au_timeouts', 0),
-                    cur.get('keepalive_err', 0))
+                    cur.get('keepalive_err', 0), cur.get('tx_ioctl_retx', 0), cur.get('tx_err', 0))
             if any(_rec):
                 line += (f" | RECOVERED reconn {_rec[0]} (fail {cur.get('reconnect_fail', 0)}, "
                          f"{cur.get('reconnect_s', 0)}s) stalls {_rec[1]} first_au {_rec[2]} "
-                         f"kaerr {_rec[3]}")
+                         f"kaerr {_rec[3]} ioctl-retx {_rec[4]} txerr {_rec[5]}")
             # Never poll the camera through a session that is mid-reconnect: the inject slot
             # would fall back to an ioctl() with its OWN disconnect/connect on this thread.
             if camera_stats and tick % 6 == 0 and getattr(sess, 'connected', True):   # slow cadence
