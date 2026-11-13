@@ -736,6 +736,22 @@ def build_check_firmware_update() -> tuple[int, bytes]:
     """GET_UPDATE_INFO_REQ (2400) — current/latest firmware + update availability."""
     return IOTYPE_USER_GET_UPDATE_INFO_REQ, struct.pack('<i', 0) + b'\x00' * 4
 
+def _require_get(get_resp_bytes, min_len: int, name: str) -> None:
+    """Guard a read-modify-write SET builder against a missing/short GET echo.
+
+    RMW builders splice the raw GET response into a fixed-size payload
+    (`payload[a:b] = get_resp_bytes[c:d]`). On a short buffer that slice
+    assignment SILENTLY SHRINKS the bytearray, so the builder returns a
+    malformed / wrong-length wire message with NO error (writing device state
+    from a truncated echo presents later as a firmware quirk). Raise a clear
+    ValueError up front instead — same intent as build_set_danger_zone's guard."""
+    if get_resp_bytes is None:
+        raise ValueError(f"{name} needs the raw GET response (got None)")
+    if len(get_resp_bytes) < min_len:
+        raise ValueError(
+            f"{name} needs a >= {min_len}-byte GET response (got {len(get_resp_bytes)})")
+
+
 def build_set_cry_detect(get_resp_bytes: bytes, *, enabled=None, sensitivity=None,
                          correlation_id: int = 0) -> tuple[int, bytes]:
     """SET_CRY_DETECT_REQ (2326) — read-modify-write of the 40-byte cry-detect struct.
@@ -759,6 +775,7 @@ def build_set_cry_detect(get_resp_bytes: bytes, *, enabled=None, sensitivity=Non
     The previous builder wrote enabled@4 / sensitivity@8 (the audio_filter words),
     which is why a sensitivity change was accepted-but-ignored.
     """
+    _require_get(get_resp_bytes, 40, 'build_set_cry_detect')
     payload = bytearray(40)
     payload[:40] = get_resp_bytes[:40]                  # echo full struct head raw
     struct.pack_into('<i', payload, 0, correlation_id)  # id
@@ -1933,6 +1950,7 @@ def build_set_hw_control(get_resp_bytes: bytes, *,
 
     night_vision_mode: 0=auto, 1=on (IR forced), 2=off.
     """
+    _require_get(get_resp_bytes, 96, 'build_set_hw_control')
     hw = HWControl.parse(get_resp_bytes)
     payload = bytearray(96)
     struct.pack_into('<i', payload, 0,  hw.id)
@@ -1984,6 +2002,7 @@ def build_set_detection_zone_v2(get_resp_bytes: bytes, *,
     SET req layout: id@0, x_max@4, y_max@8, x_min@12, y_min@16,
                                    measurement@20, reserved[60].
     Coordinates are floats in [0,1]. Unchanged coords are echoed byte-for-byte."""
+    _require_get(get_resp_bytes, 28, 'build_set_detection_zone_v2')
     payload = bytearray(84)
     struct.pack_into('<i', payload, 0, correlation_id)
     payload[4:8]   = get_resp_bytes[8:12]    # x_max  (echo raw)
@@ -2019,6 +2038,7 @@ def build_set_hw_policy(get_resp_bytes: bytes, *,
     carries them as plain integers (live: 19/24 °C). We byte-faithfully echo the
     camera's own 9 config words so a same-value SET is a genuine no-op, and apply
     overrides as integers to match the observed wire encoding."""
+    _require_get(get_resp_bytes, 44, 'build_set_hw_policy')
     payload = bytearray(48)
     struct.pack_into('<i', payload, 0, correlation_id)
     payload[4:40] = get_resp_bytes[8:44]      # echo temp_alert..dev_pull_count raw
@@ -2082,6 +2102,7 @@ def build_set_sleep_safety_setting(get_resp_bytes: bytes, *, safety_alert=None,
     Omitted fields are echoed from the current setting; only passed fields change.
     Delegates to build_set_sleep_safety (SET wire: id, safety_alert, cover_alert,
     safety_detection_sensitivity, baby_presence_alert — 5 ints, no reserved)."""
+    _require_get(get_resp_bytes, 24, 'build_set_sleep_safety_setting')
     cur = parse_sleep_safety_setting(get_resp_bytes)
     return build_set_sleep_safety(
         _flag(safety_alert,        cur.get('safety_alert')),
