@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.58]
+
+### Added
+- **Now Playing shows where the song came from and what's next.** After *Play all* in the song
+  collections or a saved playlist's play button, a second line reads e.g. "From: Sleep · Russian ·
+  song 3 of 56 — Next: …" (in Hebrew, English or Russian, like the rest of the collections). Every
+  device sees the same line; playing a single song clears it.
+
 ## [2.6.57]
 
 ### Fixed
