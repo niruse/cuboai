@@ -118,10 +118,14 @@ def test_only_a_refused_download_counts_as_403(message, forbidden):
     assert media_player._is_yt_forbidden(message) is forbidden
 
 
-def test_the_yt_dlp_floor_is_recent():
-    """Home Assistant only upgrades a requirement whose floor the install no longer meets.
+def test_the_yt_dlp_floor_is_recent_but_never_above_home_assistants_pin():
+    """Home Assistant only upgrades a requirement whose floor the install no longer meets, so the
+    floor must be recent. But Home Assistant's own media_extractor pins yt-dlp EXACTLY
+    (`yt-dlp[default]==2026.07.04` in 2026.11): a floor above that pin conflicts with it (hassfest
+    fails, and both integrations fight over the installed version). v2.6.60 shipped 2026.10.26
+    and hassfest rejected it. Raise the floor only when Home Assistant raises its pin.
 
-    Kill: put the 2024 floor back."""
+    Kill: put the 2024 floor back, or a floor above Home Assistant's pin."""
     manifest = json.loads(Path("custom_components/cuboai/manifest.json").read_text(encoding="utf-8"))
     pins = [r for r in manifest["requirements"] if r.startswith("yt-dlp")]
-    assert pins == ["yt-dlp>=2026.10.26"]
+    assert pins == ["yt-dlp>=2026.07.04"]

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.61]
+
+### Fixed
+- **The yt-dlp requirement no longer conflicts with Home Assistant.** 2.6.60 asked for yt-dlp
+  2026.10.26 or newer, but Home Assistant's own media extractor pins exactly 2026.07.04, so the two
+  could fight over the installed version (and Home Assistant's integration check failed). The floor is
+  now 2026.07.04: still a big upgrade for old installs, and the same version Home Assistant uses.
+
 ## [2.6.60]
 
 ### Changed
@@ -14,8 +22,7 @@ All notable changes to this project will be documented in this file.
 - **YouTube downloads refused with 403 are tried once more** with a fresh link. YouTube refuses some
   download links at random; the retry usually gets through. Other errors (a private or removed
   video) are not retried.
-- **Requires yt-dlp 2026.10.26 or newer**, so Home Assistant upgrades an old copy. It also brings
-  audio-only downloads: cached songs are about a third of the size they were.
+- **Requires a recent yt-dlp**, so Home Assistant upgrades an old copy (corrected in 2.6.61).
 
 ### Added
 - **A song bar under Now Playing**, like any player: time played, a bar to drag to any point, time
