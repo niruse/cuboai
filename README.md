@@ -288,7 +288,8 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
   and tablet sees the same ones.
 - With the song cache on, a song downloaded once replays instantly.
 - **Song collections**: ready-made YouTube songs in five styles: sleep, morning & play, baby songs,
-  calm music and white noise. The sung styles come in Hebrew, English and Russian. Every link was
+  calm music and white noise. The sung styles come in Hebrew, English and Russian. **Play all** queues
+  every song the current style and language show (Shuffle applies). Every link was
   opened and checked (title, channel, length, playable, family-safe) before it went in. The list
   lives in `tools/song_collections.json`; `python tools/gen_song_collections.py` writes it into the
   card. Choose which languages and styles appear in the card editor or with the options above.
