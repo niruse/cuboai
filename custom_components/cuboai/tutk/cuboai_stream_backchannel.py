@@ -381,14 +381,22 @@ class _PlaylistFeed:
 
     Home Assistant writes the next song's URL while the current one plays, so it is decoded
     ahead and starts on the next 64 ms frame. The decoder stays at most `ahead` frames (~10 s)
-    in front of the camera. Progress goes to Home Assistant through `emit`:
-      TRACK i   the first frame of song i (0-based, in stdin order) went to the camera
-      SKIP i    song i could not be opened/decoded (nothing of it was played)
-      IDLE      everything written so far has been sent and no next line is there yet
-                (silence goes out meanwhile; EOF on stdin ends the playlist)
-    `done` turns true only when stdin has ended AND every frame has been taken: the talk loop
-    reads it as "nothing more will ever come", so it must not be true while songs are still
-    queued (a short playlist decoded before the camera's grant would otherwise never play)."""
+    in front of the camera. Besides URLs, stdin carries two control lines:
+      SEEK <secs>   play the song being heard from <secs> in. What was queued is dropped and the
+                    song is decoded again from there, in the SAME talk session: no reconnect,
+                    the new audio goes out on the next frame
+      END           no more songs: play out what is queued, then end (EOF does the same; END
+                    keeps stdin open for a SEEK on the last song)
+    Progress goes to Home Assistant through `emit`:
+      DUR i <secs>   song i is <secs> long (when known), as soon as it is opened
+      TRACK i        the first frame of song i (0-based, in stdin order) went to the camera
+      SEEKED i <s>   the first frame after a SEEK went to the camera: song i is now at <s>
+      SKIP i         song i could not be opened/decoded (nothing of it was played)
+      IDLE           everything written so far has been sent and no next line is there yet
+                     (silence goes out meanwhile)
+    `done` turns true only when the playlist has ended AND every frame has been taken: the
+    talk loop reads it as "nothing more will ever come", so it must not be true while songs are
+    still queued (a short playlist decoded before the camera's grant would otherwise never play)."""
 
     def __init__(self, stream, encoder=None, emit=None, ahead=156, open_track=_open_track):
         import collections
@@ -401,64 +409,125 @@ class _PlaylistFeed:
         self._emit = emit or (lambda line: None)
         self._ahead = ahead
         self._open = open_track
-        self._queue = collections.deque()                # frames, and ("TRACK", i) markers
+        self._queue = collections.deque()                # frames, and (marker, ...) tuples
         self._cond = threading.Condition()
-        self._waiting = False                            # the reader is blocked on stdin
+        self._urls = []                                  # every song written, in order
+        self._ended = False                              # END / EOF: no more songs
+        self._next = 0                                   # the next song to decode
+        self._busy = False                               # the decoder is inside a song
+        self._playing = -1                               # the song being heard (its TRACK went out)
+        self._seek = None                                # (generation, secs) asked for, not yet served
+        self._gen = 0                                    # bumped by every SEEK
         self._idle_sent = False
-        self._finished = False                           # stdin ended, every frame queued
+        self._finished = False                           # playlist ended, every frame queued
+        self._tmp = {}                                   # song -> downloaded temp file (kept for SEEK)
         self.error = None
-        self.tracks = 0
         self.frames = 0
         self.dropped = 0                                 # (the _LiveTalk counters' shape)
         self.received = 0
+        self.pulls = 0                                   # next_unit() calls (= frames on the grid)
+        self.silence = 0                                 # ... answered with silence after song 0
+        self._t0 = time.monotonic()
         self._stream = stream
-        self._thread = threading.Thread(target=self._read, name="cuboai-playlist-feed", daemon=True)
+        threading.Thread(target=self._read_lines, name="cuboai-playlist-in", daemon=True).start()
+        self._thread = threading.Thread(target=self._decode, name="cuboai-playlist-feed", daemon=True)
         self._thread.start()
 
-    def _put(self, item):
-        with self._cond:
-            while sum(1 for x in self._queue if not isinstance(x, tuple)) >= self._ahead:
-                self._cond.wait(0.5)
-            self._queue.append(item)
+    @property
+    def tracks(self):
+        return len(self._urls)
 
-    def _read(self):
+    # ── stdin: songs and control lines ──
+
+    def _read_lines(self):
         try:
             while True:
-                with self._cond:
-                    self._waiting = True
                 line = self._stream.readline()
-                with self._cond:
-                    self._waiting = False
-                    self._idle_sent = False
                 if not line:
-                    break                                # EOF: the playlist is over
-                url = line.decode("utf-8", "replace").strip() if isinstance(line, bytes) else line.strip()
-                if not url:
+                    break
+                text = line.decode("utf-8", "replace").strip() if isinstance(line, bytes) else line.strip()
+                if not text:
                     continue
-                i = self.tracks
-                self.tracks += 1
-                tmp = None
-                started = False
+                if text == "END":
+                    with self._cond:
+                        self._ended = True
+                        self._cond.notify_all()
+                elif text.startswith("SEEK "):
+                    try:
+                        secs = max(0.0, float(text.split()[1]))
+                    except (IndexError, ValueError):
+                        continue
+                    with self._cond:
+                        if self._playing >= 0:
+                            self._gen += 1
+                            self._seek = (self._gen, secs)
+                            self._queue.clear()          # what was queued is not played
+                            self._cond.notify_all()
+                else:
+                    with self._cond:
+                        if not self._ended:
+                            self._urls.append(text)
+                            self._idle_sent = False
+                            self._cond.notify_all()
+        except Exception as e:  # noqa: BLE001 - an unreadable stdin ends the playlist
+            print(f"DEBUG: playlist stdin error: {e!r}", file=sys.stderr, flush=True)
+        finally:
+            with self._cond:
+                self._ended = True
+                self._cond.notify_all()
+
+    # ── the decoder ──
+
+    def _put(self, item, gen):
+        """Queue one item; False when a SEEK has made the decode it belongs to stale."""
+        with self._cond:
+            while (self._gen == gen
+                   and sum(1 for x in self._queue if not isinstance(x, tuple)) >= self._ahead):
+                self._cond.wait(0.5)
+            if self._gen != gen:
+                return False
+            self._queue.append(item)
+            self._cond.notify_all()
+            return True
+
+    def _decode(self):
+        try:
+            flushed = False                              # the playlist's tail is queued
+            while True:
+                with self._cond:
+                    # After END the decoder stays until the last song has been HEARD: a SEEK
+                    # on it can still come (and then it decodes and flushes again).
+                    while not (self._seek is not None or self._next < len(self._urls)
+                               or (self._ended and (not flushed or not self._queue))):
+                        self._cond.wait(0.5)
+                    job = "song"
+                    if self._seek is not None:
+                        gen, start = self._seek
+                        self._seek = None
+                        i = self._playing
+                        self._next = i + 1               # the songs after it are decoded again
+                        self._enc.reset()
+                        seeking, flushed = True, False
+                    elif self._next < len(self._urls):
+                        gen, start, i, seeking = self._gen, 0.0, self._next, False
+                        self._next += 1
+                    elif not flushed:
+                        job, gen = "finish", self._gen
+                    else:
+                        break                            # END, and everything has been heard
+                    if job == "song":
+                        url = self._urls[i]
+                        self._busy = True
+                if job == "finish":
+                    for unit in self._enc.finish():
+                        self._put(unit, gen)
+                    flushed = True
+                    continue
                 try:
-                    path, options, tmp = self._open(url)
-                    for unit in self._enc.track(path, options=options):
-                        if not started:
-                            self._put(("TRACK", i))
-                            started = True
-                        self._put(unit)
-                        self.frames += 1
-                except Exception as e:  # noqa: BLE001 - one bad song must not end the playlist
-                    print(f"DEBUG: playlist song {i} failed: {e!r}", file=sys.stderr, flush=True)
+                    self._decode_song(i, url, gen, start, seeking)
                 finally:
-                    if tmp:
-                        try:
-                            os.remove(tmp)
-                        except OSError:
-                            pass
-                if not started:
-                    self._emit(f"SKIP {i}")              # nothing of it played: on to the next
-            for unit in self._enc.finish():
-                self._put(unit)
+                    with self._cond:
+                        self._busy = False
         except Exception as e:  # noqa: BLE001 - reported, then the talk ends cleanly
             self.error = e
             print(f"DEBUG: playlist feed error: {e!r}", file=sys.stderr, flush=True)
@@ -466,6 +535,60 @@ class _PlaylistFeed:
             with self._cond:
                 self._finished = True                    # always AFTER the last frame is queued
                 self._cond.notify_all()
+            for tmp in list(self._tmp.values()):
+                self._remove(tmp)
+
+    def _decode_song(self, i, url, gen, start, seeking):
+        started = False
+        try:
+            if i in self._tmp:                           # a SEEK: the download is still here
+                path, options = self._tmp[i], None
+            elif seeking and url.startswith(("http://", "https://")) and "googlevideo.com" not in url:
+                path, options = url, None                # (its download was already removed)
+            else:
+                t_open = time.monotonic()
+                path, options, tmp = self._open(url)
+                if tmp:
+                    self._tmp[i] = tmp
+                self._dbg(f"song {i} opened in {time.monotonic() - t_open:.1f}s")
+                if not seeking:
+                    dur = self._duration(path, options)
+                    if dur:
+                        self._emit(f"DUR {i} {dur:.1f}")
+            for unit in self._enc.track(path, options=options, start=start):
+                if not started:
+                    marker = ("SEEKED", i, start) if seeking else ("TRACK", i)
+                    if not self._put(marker, gen):
+                        return                           # a newer SEEK took over
+                    started = True
+                if not self._put(unit, gen):
+                    return
+                self.frames += 1
+        except Exception as e:  # noqa: BLE001 - one bad song must not end the playlist
+            print(f"DEBUG: playlist song {i} failed: {e!r}", file=sys.stderr, flush=True)
+        if not started and not seeking:
+            self._emit(f"SKIP {i}")                      # nothing of it played: on to the next
+        self._dbg(f"song {i} decoded: {self.frames} frames so far")
+
+    def _duration(self, path, options):
+        try:
+            import av
+            with av.open(path, options=options) as c:
+                return c.duration / 1_000_000 if c.duration else None
+        except Exception:  # noqa: BLE001 - the length only feeds the seek bar
+            return None
+
+    @staticmethod
+    def _remove(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    def _dbg(self, text):
+        print(f"DEBUG: playlist +{time.monotonic() - self._t0:.1f}s {text}", file=sys.stderr, flush=True)
+
+    # ── the talk loop's side ──
 
     @property
     def done(self):
@@ -475,18 +598,32 @@ class _PlaylistFeed:
     def next_unit(self):
         """The next song frame, or None: send silence (and if `done` was already set before this
         call, the playlist is over)."""
-        lines, unit = [], None
+        lines, unit, old = [], None, []
         with self._cond:
+            self.pulls += 1
             while self._queue and isinstance(self._queue[0], tuple):
-                lines.append(f"TRACK {self._queue.popleft()[1]}")
+                marker = self._queue.popleft()
+                if marker[0] == "TRACK":
+                    old = [t for k, t in self._tmp.items() if k < marker[1]]
+                    self._tmp = {k: t for k, t in self._tmp.items() if k >= marker[1]}
+                    self._playing = marker[1]
+                    lines.append(f"TRACK {marker[1]}")
+                else:
+                    lines.append(f"SEEKED {marker[1]} {marker[2]:.1f}")
+                self._dbg(f"{lines[-1]} at pull {self.pulls}, {self.silence} silence frames so far")
             if self._queue:
                 unit = self._queue.popleft()
                 self._cond.notify_all()
-            elif self._waiting and self.tracks and not self._finished and not self._idle_sent:
+            elif self._urls and not self._finished:
+                self.silence += 1                        # a gap the listener hears
+            if (unit is None and self._urls and self._next >= len(self._urls) and not self._busy
+                    and self._seek is None and not self._ended and not self._idle_sent):
                 self._idle_sent = True
                 lines.append("IDLE")
         for line in lines:                               # outside the lock: a pipe write can block
             self._emit(line)
+        for tmp in old:                                  # songs before the one heard: no SEEK back
+            self._remove(tmp)
         return unit
 
 

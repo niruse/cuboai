@@ -1721,15 +1721,20 @@ class _TrackAacEncoder:
         import av
         self._av = av
         self.rate = rate
-        self._enc = av.CodecContext.create('aac', 'w')
-        self._enc.sample_rate = rate
-        self._enc.layout = 'stereo'
-        self._enc.format = 'fltp'
-        self._enc.bit_rate = bit_rate
-        self._enc.open()
+        self._bit_rate = bit_rate
+        self._enc = self._new_encoder()
         self._fifo = av.AudioFifo()
         self._pts = 0
         self.silent_unit = _LiveAacEncoder(rate=rate, bit_rate=bit_rate).silent_unit
+
+    def _new_encoder(self):
+        enc = self._av.CodecContext.create('aac', 'w')
+        enc.sample_rate = self.rate
+        enc.layout = 'stereo'
+        enc.format = 'fltp'
+        enc.bit_rate = self._bit_rate
+        enc.open()
+        return enc
 
     def _units(self, fr):
         fr.pts = self._pts
@@ -1740,12 +1745,24 @@ class _TrackAacEncoder:
         while self._fifo.samples >= 1024:
             yield from self._units(self._fifo.read(1024))
 
-    def track(self, path, format=None, options=None):
-        """Yield one track's ADTS frames as it decodes. Under 1024 samples of its end stay in
-        the FIFO and lead the next track (no padding, no gap)."""
+    def reset(self):
+        """A seek: forget the samples waiting in the FIFO (what was queued is not played), and
+        start a fresh encoder (one already flushed by `finish()` cannot encode again)."""
+        self._fifo = self._av.AudioFifo()
+        self._enc = self._new_encoder()
+        self._pts = 0
+
+    def track(self, path, format=None, options=None, start=0.0):
+        """Yield one track's ADTS frames as it decodes, from `start` seconds in. Under 1024
+        samples of its end stay in the FIFO and lead the next track (no padding, no gap)."""
         resampler = self._av.AudioResampler(format='fltp', layout='stereo', rate=self.rate)
         with self._av.open(path, format=format, options=options) as inp:
+            if start > 0:
+                # Lands on the packet at or before `start`; the frames before it are skipped below.
+                inp.seek(int(start * 1_000_000), backward=True, any_frame=False)
             for frame in inp.decode(audio=0):
+                if start > 0 and frame.time is not None and frame.time + frame.samples / frame.sample_rate <= start:
+                    continue
                 frame.pts = None
                 for rf in resampler.resample(frame):
                     rf.pts = None

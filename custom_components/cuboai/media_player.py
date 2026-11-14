@@ -12,6 +12,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .playback import playtime_expired as _playtime_expired
@@ -233,6 +234,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
             | MediaPlayerEntityFeature.TURN_ON
             | MediaPlayerEntityFeature.TURN_OFF
             | MediaPlayerEntityFeature.REPEAT_SET
+            | MediaPlayerEntityFeature.SEEK
         )
         self._attr_state = MediaPlayerState.IDLE
         self._queue = []
@@ -594,16 +596,26 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         proc = None
         sent = [first_id]  # raw ids in the order written: the child's track numbers
         resolved = -1  # highest track number the child has started or skipped
-        closed = False
+        durations = {}  # track number -> seconds (the child's DUR lines)
+        playing = -1  # the track being heard
+        closed = False  # END was sent: no more songs for this run
 
         async def _close():
+            """No more songs: END (not EOF, so a SEEK on the last song still reaches the child)."""
             nonlocal closed
             if not closed:
                 closed = True
                 try:
-                    proc.stdin.close()
+                    proc.stdin.write(b"END\n")
+                    await proc.stdin.drain()
                 except Exception:
                     pass
+
+        def _position(seconds, duration=None):
+            self._attr_media_position = seconds
+            self._attr_media_position_updated_at = dt_util.utcnow()
+            if duration is not None:
+                self._attr_media_duration = duration
 
         async def _feed_next():
             """Hand the child the next song, or end the run at a lullaby."""
@@ -647,6 +659,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 if hasattr(stderr_dest, "close"):
                     stderr_dest.close()
             self._backchannel_proc = proc
+            self._playlist_stdin = proc.stdin
             proc.stdin.write(url.encode() + b"\n")
             await proc.stdin.drain()
 
@@ -680,11 +693,14 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                     rid = sent[i]
                     if event == "TRACK":
                         refill["ok"] = True
+                        playing = i
                         if rid not in session_tracks:
                             session_tracks.append(rid)
                         self._attr_state = MediaPlayerState.PLAYING
                         self._attr_media_content_id = rid
                         self._attr_media_title = rid
+                        self._attr_media_duration = None
+                        _position(0.0, durations.get(i))
                         self.async_write_ha_state()
                         if self._attr_repeat == RepeatMode.ONE:
                             self._queue.insert(0, rid)
@@ -699,10 +715,30 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                         await _feed_next()  # something may have been queued since
                     if resolved == len(sent) - 1:
                         await _close()  # nothing more: the child plays out and ends
+                elif event in ("DUR", "SEEKED") and len(parts) >= 4 and parts[2].isdigit():
+                    i = int(parts[2])
+                    try:
+                        secs = float(parts[3])
+                    except ValueError:
+                        continue
+                    if event == "DUR":
+                        durations[i] = secs
+                        if i == playing:
+                            self._attr_media_duration = secs
+                            self.async_write_ha_state()
+                    elif i == playing:  # the seek is heard from now on
+                        _position(secs)
+                        self.async_write_ha_state()
                 elif event == "ERROR":
                     _LOGGER.warning("Speaker playback stopped: %s", " ".join(parts[2:]))
             await proc.wait()
+            try:
+                proc.stdin.close()  # the child has ended; a cancelled run leaves it to SIGTERM
+            except Exception:
+                pass
         finally:
+            self._playlist_stdin = None
+            self._attr_media_position = self._attr_media_duration = None
             # Only once the child has actually exited — a terminated child is still sending
             # SPEAKERSTOP — and also when this task is cancelled (a replaced song, a stop, a reload).
             arbiter.release_after_exit(self._device_id, "player", proc)
@@ -822,6 +858,19 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         """Play media (stub for Music Assistant compatibility)."""
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
+
+    async def async_media_seek(self, position: float) -> None:
+        """Move within the song being heard, inside the open talk session (no reconnect, so no
+        gap): the child drops what it had queued and decodes the song again from `position`.
+        The position bar moves when the child says the new audio went out (SEEKED)."""
+        stdin = getattr(self, "_playlist_stdin", None)
+        if stdin is None:
+            return  # nothing is streaming (idle, or a lullaby the camera plays itself)
+        try:
+            stdin.write(f"SEEK {max(0.0, float(position)):.1f}\n".encode())
+            await stdin.drain()
+        except Exception:
+            _LOGGER.debug("Speaker seek not delivered", exc_info=True)
 
     async def async_media_pause(self) -> None:
         """Pause media (stub)."""

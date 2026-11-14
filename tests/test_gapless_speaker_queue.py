@@ -25,6 +25,8 @@ class _Child:
     def __init__(self, argv):
         self.argv = argv
         self.written = []
+        self.seeks = []  # SEEK lines received
+        self.stdin_closed = False
         self.terminated = False
         self.returncode = None
         self.stdout = asyncio.StreamReader()
@@ -38,13 +40,22 @@ class _Child:
 
         class _Stdin:
             def write(self, data):
+                if child.stdin_closed:
+                    raise BrokenPipeError("stdin is closed")
                 for line in data.decode().splitlines():
-                    child._got(line)
+                    if line == "END":
+                        child._close()
+                    elif line.startswith("SEEK "):
+                        child.seeks.append(float(line.split()[1]))
+                        child._emit(f"SEEKED {child._started - 1} {line.split()[1]}")
+                    else:
+                        child._got(line)
 
             async def drain(self):
                 await asyncio.sleep(0)
 
             def close(self):
+                child.stdin_closed = True
                 child._close()
 
         self.stdin = _Stdin()
@@ -62,6 +73,8 @@ class _Child:
     def _start(self, i, url):
         if self.returncode is not None:
             return
+        if "/bad" not in url:
+            self._emit(f"DUR {i} 120.0")
         self._emit(f"SKIP {i}" if "/bad" in url else f"TRACK {i}")
         self._started = i + 1
         if self._idle_task:
@@ -74,6 +87,8 @@ class _Child:
             self._emit("IDLE")
 
     def _close(self):
+        if self._closed:
+            return
         self._closed = True
         asyncio.get_running_loop().call_later(SONG_S, self._exit, 0)
 
@@ -288,3 +303,58 @@ async def test_a_song_queued_after_the_last_one_started_still_plays(rig):
     await task
     assert rig.children[0].written == ["u:https://youtu.be/a", "u:https://youtu.be/late"]
     assert len(rig.children) == 1
+
+
+async def test_seek_reaches_the_child_and_the_position_follows_it(rig):
+    """Seek goes to the running child as SEEK <secs>; the position moves when the child says
+    the new audio is heard (SEEKED), and the duration comes from DUR.
+
+    Kill: no async_media_seek, ignore SEEKED, or ignore DUR."""
+    from homeassistant.components.media_player import MediaPlayerEntityFeature
+
+    task = asyncio.ensure_future(_run(rig, "https://youtu.be/a"))
+    for _ in range(200):
+        await asyncio.sleep(0.001)
+        if rig.titles:
+            break
+    assert rig.mp._attr_media_duration == 120.0 and rig.mp._attr_media_position == 0.0
+    await rig.mp.async_media_seek(42)
+    await asyncio.sleep(0.01)
+    assert rig.children[0].seeks == [42.0]
+    assert rig.mp._attr_media_position == 42.0
+    await task
+    assert rig.mp._attr_media_position is None  # the run is over: no position any more
+    assert MediaPlayerEntityFeature.SEEK
+
+
+async def test_a_seek_with_nothing_streaming_does_nothing(rig):
+    """Idle (or a lullaby the camera plays itself): there is no child to move.
+
+    Kill: write to a stale pipe / raise."""
+    rig.mp._playlist_stdin = None
+    await rig.mp.async_media_seek(10)
+    assert rig.children == []
+
+
+async def test_the_last_song_ends_with_end_not_eof(rig):
+    """END keeps the child's stdin open, so a seek on the last song still reaches it.
+
+    Kill: close stdin to end the run (a seek on the last song would be lost)."""
+    task = asyncio.ensure_future(_run(rig, "https://youtu.be/a"))
+    for _ in range(300):
+        await asyncio.sleep(0.001)
+        if rig.children and rig.children[0]._closed:
+            break
+    await rig.mp.async_media_seek(5)
+    await task
+    assert rig.children[0].seeks == [5.0]
+
+
+def test_the_speaker_advertises_seek():
+    """The seek bar shows only when the entity says it can seek. Kill: drop SEEK."""
+    import inspect
+
+    from homeassistant.components.media_player import MediaPlayerEntityFeature
+
+    src = inspect.getsource(media_player.CuboAIMediaPlayer.__init__)
+    assert "MediaPlayerEntityFeature.SEEK" in src and MediaPlayerEntityFeature.SEEK
