@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.62]
+
+### Fixed
+- **A cached song whose file was deleted plays anyway.** If a queued song's cached copy disappears
+  before its turn (the cache was cleared, or the file removed), it is downloaded again and played in
+  its place instead of being skipped. Measured on a camera: re-downloaded in 3.3 s while the previous
+  song was still playing, then played right after it with no silence. A song is downloaded again
+  only once; one that still fails is skipped as before.
+
 ## [2.6.61]
 
 ### Fixed
