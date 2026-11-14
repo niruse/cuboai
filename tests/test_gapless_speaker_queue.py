@@ -27,6 +27,7 @@ class _Child:
         self.written = []
         self.seeks = []  # SEEK lines received
         self.stdin_closed = False
+        self.gone = {}  # url -> how many more times it is skipped (a deleted cache file)
         self.terminated = False
         self.returncode = None
         self.stdout = asyncio.StreamReader()
@@ -73,9 +74,12 @@ class _Child:
     def _start(self, i, url):
         if self.returncode is not None:
             return
-        if "/bad" not in url:
+        skip = "/bad" in url or self.gone.get(url, 0) > 0
+        if self.gone.get(url, 0) > 0:
+            self.gone[url] -= 1
+        if not skip:
             self._emit(f"DUR {i} 120.0")
-        self._emit(f"SKIP {i}" if "/bad" in url else f"TRACK {i}")
+        self._emit(f"SKIP {i}" if skip else f"TRACK {i}")
         self._started = i + 1
         if self._idle_task:
             self._idle_task.cancel()
@@ -151,13 +155,18 @@ def rig(monkeypatch):
     mp._backchannel_proc = None
     mp.async_write_ha_state = lambda: titles.append(mp._attr_media_title)
 
+    extracted = []
+
     async def _extract(media_id):
+        extracted.append(media_id)
         if "noextract" in media_id:
             raise ValueError("yt-dlp said no")
+        if "cached" in media_id:
+            return "http://ha:8123/local/cuboai_cache/" + media_id.rsplit("/", 1)[1] + ".webm"
         return "u:" + media_id
 
     mp._extract_media_url = _extract
-    return SimpleNamespace(mp=mp, children=children, titles=titles, arb=arb)
+    return SimpleNamespace(mp=mp, children=children, titles=titles, arb=arb, extracted=extracted)
 
 
 async def _run(rig, first, budget=None):
@@ -358,3 +367,42 @@ def test_the_speaker_advertises_seek():
 
     src = inspect.getsource(media_player.CuboAIMediaPlayer.__init__)
     assert "MediaPlayerEntityFeature.SEEK" in src and MediaPlayerEntityFeature.SEEK
+
+
+CACHED_B = "http://ha:8123/local/cuboai_cache/cached-b.webm"
+
+
+async def test_a_cached_song_whose_file_was_deleted_is_downloaded_again_in_place(rig, monkeypatch):
+    """The cache file vanished after the song was handed over: the child skips it, and the song
+    is fetched again (a new download) and played right there, before the next one.
+
+    Kill: skip it like any failed song, or hand the next song over first."""
+    rig.mp._queue[:] = ["https://youtu.be/cached-b", "https://youtu.be/c"]
+    orig = _Child._got
+
+    def _got(self, url):
+        if url == CACHED_B and url not in self.gone and not self.written.count(url):
+            self.gone[url] = 1  # the file is gone the first time the child reaches it
+        orig(self, url)
+
+    monkeypatch.setattr(_Child, "_got", _got)
+    await _run(rig, "https://youtu.be/a")
+    assert rig.children[0].written == ["u:https://youtu.be/a", CACHED_B, CACHED_B, "u:https://youtu.be/c"]
+    assert rig.extracted.count("https://youtu.be/cached-b") == 2
+    assert [t for t in rig.titles if t] == ["https://youtu.be/a", "https://youtu.be/cached-b", "https://youtu.be/c"]
+
+
+async def test_a_cached_song_that_keeps_failing_is_downloaded_again_only_once(rig, monkeypatch):
+    """Kill: fetch again on every SKIP (a broken song would loop forever)."""
+    rig.mp._queue[:] = ["https://youtu.be/cached-b", "https://youtu.be/c"]
+    orig = _Child._got
+
+    def _got(self, url):
+        if url == CACHED_B:
+            self.gone[url] = 1  # every copy fails
+        orig(self, url)
+
+    monkeypatch.setattr(_Child, "_got", _got)
+    await _run(rig, "https://youtu.be/a")
+    assert rig.children[0].written == ["u:https://youtu.be/a", CACHED_B, CACHED_B, "u:https://youtu.be/c"]
+    assert rig.extracted.count("https://youtu.be/cached-b") == 2

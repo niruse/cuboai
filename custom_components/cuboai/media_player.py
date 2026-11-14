@@ -43,6 +43,10 @@ def _is_yt_content_error(message: str) -> bool:
     return any(marker in lowered for marker in _YT_CONTENT_ERROR_MARKERS)
 
 
+# Where cached songs are served from (www/cuboai_cache -> /local/cuboai_cache/).
+_CACHE_URL_PART = "/local/cuboai_cache/"
+
+
 def _is_yt_forbidden(message: str) -> bool:
     """Whether yt-dlp failed because YouTube refused the download link (HTTP 403)."""
     lowered = str(message).lower()
@@ -617,6 +621,8 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         result = "next"
         proc = None
         sent = [first_id]  # raw ids in the order written: the child's track numbers
+        sent_urls = [url]  # ... and the URL each one was handed over as
+        refetched = set()  # songs already downloaded again after their cached copy vanished
         resolved = -1  # highest track number the child has started or skipped
         durations = {}  # track number -> seconds (the child's DUR lines)
         playing = -1  # the track being heard
@@ -654,14 +660,21 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 except Exception:
                     _LOGGER.exception("Exception in _extract_media_url:")
                     continue
-                try:
-                    proc.stdin.write(nxt_url.encode() + b"\n")
-                    await proc.stdin.drain()
-                except (BrokenPipeError, ConnectionResetError):
-                    await _close()
+                if not await _hand_over(nxt, nxt_url):
                     return
-                sent.append(nxt)
                 return
+
+        async def _hand_over(rid, rid_url):
+            """Write one song to the child; False when its stdin is gone (the run is ending)."""
+            try:
+                proc.stdin.write(rid_url.encode() + b"\n")
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                await _close()
+                return False
+            sent.append(rid)
+            sent_urls.append(rid_url)
+            return True
 
         try:
             # Credentials go in the child's environment only, never argv.
@@ -728,6 +741,19 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                             self._queue.insert(0, rid)
                         elif self._attr_repeat == RepeatMode.ALL:
                             self._queue.append(rid)
+                    elif _CACHE_URL_PART in sent_urls[i] and rid not in refetched and not closed:
+                        # Its cached copy was deleted after it was handed over (the cache was
+                        # cleared, or the file removed): fetching it again downloads it anew. The
+                        # child reports SKIP only when it reaches the song, and the next song is
+                        # handed over only then too, so the new copy keeps its place in the queue.
+                        refetched.add(rid)
+                        _LOGGER.info("The cached copy of %s is gone; downloading it again", rid)
+                        try:
+                            again = await self._extract_media_url(rid)
+                        except Exception:
+                            _LOGGER.warning("Could not play %s on the speaker — skipping it", rid)
+                        else:
+                            await _hand_over(rid, again)
                     else:
                         _LOGGER.warning("Could not play %s on the speaker — skipping it", rid)
                     if resolved == len(sent) - 1:
