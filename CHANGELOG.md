@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.59]
+
+### Changed
+- **Logs no longer contain passwords, tokens or personal details** (#130). Log files are what gets
+  attached to issues, so every line the integration writes is now cleaned before it is written, with
+  nothing to switch on:
+  - passwords, tokens, the camera's TUTK UID and your account id are replaced with `**REDACTED**`;
+  - your account email shows as its first letter and domain (`n…@gmail.com`);
+  - camera ids are shortened to their last 4 characters (`…B447`), so two cameras can still be told
+    apart.
+  This covers `home-assistant.log` (including Home Assistant's own lines about the integration and
+  tracebacks), the debug trace file, and `go2rtc.log`, where the streaming engine's command line used
+  to show the camera's UID, account and password with debug logs on. In `go2rtc.log` camera ids stay
+  whole, because the downloadable diagnostics read it by camera id (and still replace them with
+  `camera_1`, `camera_2` when exporting). Names are unchanged: the integration's title, stream names
+  and RTSP addresses stay as they were.
+
 ## [2.6.58]
 
 ### Added
