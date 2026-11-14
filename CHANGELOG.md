@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.60]
+
+### Changed
+- **Songs follow each other without silence.** A queue of YouTube or Spotify songs (Play all, a
+  playlist, or songs added while one plays) used to open a new connection to the camera speaker for
+  every song, convert the whole song before the first sound, warm up and pad 3.5 s of silence at the
+  end: 8-11 s of silence between songs, measured. Now the whole queue streams through one open
+  connection, each song is converted while it plays, and the next song is fetched during the current
+  one, so it starts on the very next audio frame (0 silence frames, measured on a camera).
+- **YouTube downloads refused with 403 are tried once more** with a fresh link. YouTube refuses some
+  download links at random; the retry usually gets through. Other errors (a private or removed
+  video) are not retried.
+- **Requires yt-dlp 2026.10.26 or newer**, so Home Assistant upgrades an old copy. It also brings
+  audio-only downloads: cached songs are about a third of the size they were.
+
+### Added
+- **A song bar under Now Playing**, like any player: time played, a bar to drag to any point, time
+  left, and -15 s / +15 s. Moving within a song is instant, with no reconnect and no silence.
+- **The Speaker entity supports seek**, with position and length, so Home Assistant's own media
+  controls and `media_player.media_seek` work too.
+
 ## [2.6.59]
 
 ### Changed
