@@ -69,6 +69,39 @@ def test_collections_option_and_section_are_wired():
     assert '<option value="collections">' in src
     assert "lullabiesHtml + collectionsHtml + customSongsHtml" in src
     assert 'filter === "collections") matchesCategory = false' in src
+    # "Play all" plays exactly the songs the view shows, through the helper
+    assert "this._collectionVisibleUrls = songs.map(s => cuboaiYoutubeUrl(s.id));" in src
+    assert "cuboaiPlayAllCalls(this._speakerEntityId, this._collectionVisibleUrls || [], this._shuffleMode)" in src
+    assert 'id="collectionPlayAllBtn"' in src
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_play_all_queues_every_shown_song_in_node():
+    src = CARD.read_text(encoding="utf-8")
+    block = src[src.index("// BEGIN CUBOAI_SONG_COLLECTIONS") : src.index("function cuboaiFindCameraState")]
+    js = (
+        block
+        + """
+const urls = ['u1', 'u2', 'u3', 'u4'];
+const plain = cuboaiPlayAllCalls('media_player.x', urls, false);
+let seq = [0.9, 0.1, 0.5]; let k = 0;
+const shuffled = cuboaiPlayAllCalls('media_player.x', urls, true, () => seq[k++ % seq.length]);
+console.log(JSON.stringify({
+  plain, shuffledIds: shuffled.map(c => c.media_content_id),
+  shuffledEnq: shuffled.map(c => c.enqueue),
+  empty: cuboaiPlayAllCalls('media_player.x', [], true),
+  untouched: urls.join(','),
+}));
+"""
+    )
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, encoding="utf-8", check=True)
+    r = json.loads(out.stdout)
+    assert [c["media_content_id"] for c in r["plain"]] == ["u1", "u2", "u3", "u4"]
+    assert [c["enqueue"] for c in r["plain"]] == ["replace", "add", "add", "add"]
+    assert all(c["entity_id"] == "media_player.x" and c["media_content_type"] == "music" for c in r["plain"])
+    assert sorted(r["shuffledIds"]) == ["u1", "u2", "u3", "u4"] and r["shuffledIds"] != ["u1", "u2", "u3", "u4"]
+    assert r["shuffledEnq"] == ["replace", "add", "add", "add"]
+    assert r["empty"] == [] and r["untouched"] == "u1,u2,u3,u4"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

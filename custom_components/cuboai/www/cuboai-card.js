@@ -256,6 +256,25 @@ function cuboaiYoutubeUrl(id) {
   return `https://www.youtube.com/watch?v=${id}`;
 }
 
+// "Play all" for the songs a collection view shows: one play_media per song, the first
+// replaces what is playing and the rest queue behind it (same as a saved playlist's play).
+// Shuffle follows the card's Shuffle button; Repeat and Play time stay with the speaker.
+function cuboaiPlayAllCalls(entityId, urls, shuffle, random = Math.random) {
+  let list = [...urls];
+  if (shuffle) {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+  }
+  return list.map((url, i) => ({
+    entity_id: entityId,
+    media_content_id: url,
+    media_content_type: 'music',
+    enqueue: i === 0 ? 'replace' : 'add',
+  }));
+}
+
 function cuboaiFindCameraState(hass, deviceId) {
   if (!hass || !hass.states) return null;
   const shaped = [];
@@ -3474,6 +3493,8 @@ class CuboAICameraCard extends HTMLElement {
               const expanded = this._collectionsExpanded || (!!query && anyMatch);
               const title = { he: 'אוסף שירים', en: 'Song collections', ru: 'Подборки песен' }[ui];
               const empty = { he: 'אין שירים כאן', en: 'No songs here', ru: 'Здесь нет песен' }[ui];
+              const playAll = { he: 'נגן הכל', en: 'Play all', ru: 'Играть все' }[ui];
+              this._collectionVisibleUrls = songs.map(s => cuboaiYoutubeUrl(s.id));
               const mins = (s) => s >= 3600 ? `${Math.round(s / 360) / 10}h` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
               const chip = (cls, key, active, icon, label) => `
                 <button class="cubo-btn ${active ? '' : 'cubo-btn-sec'} ${cls}" data-key="${key}" style="padding: 3px 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;">
@@ -3497,7 +3518,10 @@ class CuboAICameraCard extends HTMLElement {
                       <div style="display: flex; flex-wrap: wrap; gap: 4px;">
                         ${langDefs.map(l => chip('collection-lang-btn', l.key, l.key === lang, '', l.label[ui])).join('')}
                       </div>` : ''}
-                      ${songs.length === 0 ? `<div style="padding: 8px; font-size: 12px; font-style: italic; color: var(--secondary-text-color);">${esc(empty)}</div>` : ''}
+                      ${songs.length === 0 ? `<div style="padding: 8px; font-size: 12px; font-style: italic; color: var(--secondary-text-color);">${esc(empty)}</div>` : `
+                      <button id="collectionPlayAllBtn" class="cubo-btn" style="align-self: flex-start; padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; background: var(--success-color, #4caf50);">
+                        <ha-icon icon="mdi:play" style="--mdc-icon-size: 16px;"></ha-icon>${esc(playAll)} (${songs.length})
+                      </button>`}
                       ${songs.map((song) => {
                         const url = cuboaiYoutubeUrl(song.id);
                         return `
@@ -3601,6 +3625,17 @@ class CuboAICameraCard extends HTMLElement {
                 renderSongs();
               });
             });
+            const collectionPlayAllBtn = songListContainer.querySelector('#collectionPlayAllBtn');
+            if (collectionPlayAllBtn) {
+              collectionPlayAllBtn.addEventListener('click', async () => {
+                if (!this._hass || !this._speakerEntityId) return;
+                const calls = cuboaiPlayAllCalls(this._speakerEntityId, this._collectionVisibleUrls || [], this._shuffleMode);
+                // one at a time, so the 'replace' lands before the songs queued behind it
+                for (const c of calls) {
+                  try { await this._hass.callService('media_player', 'play_media', c); } catch (e) { break; }
+                }
+              });
+            }
 
             // Bind Lullabies accordion click
             const toggleLullabiesBtn = songListContainer.querySelector('#toggleLullabiesBtn');
