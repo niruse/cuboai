@@ -314,6 +314,38 @@ function cuboaiCollectionSongName(url, list = CUBOAI_SONG_COLLECTIONS) {
   return song ? song.name : null;
 }
 
+// Where the playing song came from ("Play all" of a collection view, or a saved playlist),
+// for the line under Now Playing. The card stores the list it sent (now_source in the shared
+// settings) because the speaker keeps its queue to itself. null when the playing song is not
+// in that list (something else was played since).
+function cuboaiNowSourceInfo(src, activeUrl, ui, nameOf = cuboaiCollectionSongName) {
+  if (!src || !Array.isArray(src.urls) || !src.urls.length || !activeUrl) return null;
+  const vid = (u) => (String(u).match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([0-9A-Za-z_-]{11})/) || [])[1] || String(u);
+  const ids = src.urls.map(vid);
+  const i = ids.indexOf(vid(activeUrl));
+  if (i < 0) return null;
+  let label = src.name || '';
+  if (src.kind === 'collection') {
+    const st = CUBOAI_SONG_STYLES.find(s => s.key === src.style);
+    const lg = CUBOAI_SONG_LANGS.find(l => l.key === src.lang);
+    label = [st && st.label[ui], lg && lg.label[ui]].filter(Boolean).join(' · ');
+  }
+  const next = src.urls.slice(i + 1, i + 4).map(u => nameOf(u) || u);
+  return { label, pos: i + 1, total: src.urls.length, next };
+}
+
+function cuboaiNowSourceText(info, ui) {
+  if (!info) return '';
+  const w = {
+    he: { from: 'מתוך', song: 'שיר', of: 'מתוך', next: 'הבא' },
+    en: { from: 'From', song: 'song', of: 'of', next: 'Next' },
+    ru: { from: 'Из', song: 'песня', of: 'из', next: 'Далее' },
+  }[ui] || { from: 'From', song: 'song', of: 'of', next: 'Next' };
+  let s = `${w.from}: ${info.label} · ${w.song} ${info.pos} ${w.of} ${info.total}`;
+  if (info.next.length) s += ` — ${w.next}: ${info.next.join(', ')}`;
+  return s;
+}
+
 // "Play all" for the songs a collection view shows: one play_media per song, the first
 // replaces what is playing and the rest queue behind it (same as a saved playlist's play).
 // Shuffle follows the card's Shuffle button; Repeat and Play time stay with the speaker.
@@ -3190,7 +3222,10 @@ class CuboAICameraCard extends HTMLElement {
 
             <div id="nowPlaying" class="cubo-row" style="display: none; background: rgba(3, 169, 244, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(3, 169, 244, 0.2); margin-bottom: 12px; align-items: center;">
               <ha-icon icon="mdi:volume-high" style="color: var(--primary-color, #03a9f4); margin-right: 8px;"></ha-icon>
-              <span id="nowPlayingText" style="font-weight: bold; font-size: 13px; color: var(--primary-color, #03a9f4);">Now Playing: ...</span>
+              <div style="display: flex; flex-direction: column; min-width: 0; gap: 2px;">
+                <span id="nowPlayingText" style="font-weight: bold; font-size: 13px; color: var(--primary-color, #03a9f4);">Now Playing: ...</span>
+                <span id="nowPlayingFrom" dir="auto" style="display: none; font-size: 11px; color: var(--secondary-text-color, #727272);"></span>
+              </div>
             </div>
 
             <div class="cubo-row">
@@ -3553,6 +3588,7 @@ class CuboAICameraCard extends HTMLElement {
               const empty = { he: 'אין שירים כאן', en: 'No songs here', ru: 'Здесь нет песен' }[ui];
               const playAll = { he: 'נגן הכל', en: 'Play all', ru: 'Играть все' }[ui];
               this._collectionVisibleUrls = songs.map(s => cuboaiYoutubeUrl(s.id));
+              this._collectionShown = { style, lang };
               const mins = (s) => s >= 3600 ? `${Math.round(s / 360) / 10}h` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
               const chip = (cls, key, active, icon, label) => `
                 <button class="cubo-btn ${active ? '' : 'cubo-btn-sec'} ${cls}" data-key="${key}" style="padding: 3px 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;">
@@ -3688,6 +3724,8 @@ class CuboAICameraCard extends HTMLElement {
               collectionPlayAllBtn.addEventListener('click', async () => {
                 if (!this._hass || !this._speakerEntityId) return;
                 const calls = cuboaiPlayAllCalls(this._speakerEntityId, this._collectionVisibleUrls || [], this._shuffleMode);
+                const shown = this._collectionShown || {};
+                saveSharedSettings({ now_source: { kind: 'collection', style: shown.style, lang: shown.lang, urls: calls.map(c => c.media_content_id), ts: Date.now() } });
                 // one at a time, so the 'replace' lands before the songs queued behind it
                 for (const c of calls) {
                   try { await this._hass.callService('media_player', 'play_media', c); } catch (e) { break; }
@@ -3772,6 +3810,7 @@ class CuboAICameraCard extends HTMLElement {
             songListContainer.querySelectorAll('.play-song-btn').forEach(btn => {
               btn.addEventListener('click', (e) => {
                 const url = btn.getAttribute('data-url');
+                saveSharedSettings({ now_source: null });
                 const type = btn.getAttribute('data-type');
                 const name = btn.getAttribute('data-name');
                 
@@ -3848,6 +3887,7 @@ class CuboAICameraCard extends HTMLElement {
                   if (this._shuffleMode) {
                     songs = songs.sort(() => Math.random() - 0.5);
                   }
+                  saveSharedSettings({ now_source: { kind: 'playlist', name: pl.name, urls: songs, ts: Date.now() } });
                   
                   if (this._hass) {
                     songs.forEach((url, index) => {
@@ -4867,6 +4907,23 @@ class CuboAICameraCard extends HTMLElement {
         const artist = isLullabyPlaying ? 'CuboAI Lullaby' : (activeAttributes.media_artist || '');
         nowPlayingDiv.style.display = 'flex';
         nowPlayingText.textContent = `Now Playing: ${title}${artist ? ` - ${artist}` : ''}`;
+        const nowPlayingFrom = this.musicBar.querySelector('#nowPlayingFrom');
+        if (nowPlayingFrom) {
+          let fromText = '';
+          try {
+            if (!isLullabyPlaying) {
+              const devId = (speakerState.attributes || {}).device_id;
+              const lib = Object.keys(hass.states || {}).filter(k => k.startsWith('sensor.cuboai_media_library')).map(k => hass.states[k])[0];
+              const src = lib && lib.attributes && lib.attributes.settings && devId ? (lib.attributes.settings[devId] || {}).now_source : null;
+              const custom = (lib && lib.attributes && lib.attributes.custom_songs) || [];
+              const nameOf = (u) => cuboaiCollectionSongName(u) || ((custom.find(s => s.url === u) || {}).name) || null;
+              const ui = cuboaiUiLang(hass);
+              fromText = cuboaiNowSourceText(cuboaiNowSourceInfo(src, activeAttributes.media_content_id || activeAttributes.media_title, ui, nameOf), ui);
+            }
+          } catch (e) { fromText = ''; }
+          nowPlayingFrom.textContent = fromText;
+          nowPlayingFrom.style.display = fromText ? 'block' : 'none';
+        }
       } else {
         nowPlayingDiv.style.display = 'none';
         

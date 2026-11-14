@@ -201,3 +201,46 @@ console.log(JSON.stringify({
     r = json.loads(out.stdout)
     assert r["watch"] == r["name"] and r["short"] == r["name"]
     assert r["other"] is None and r["none"] is None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_now_playing_shows_where_the_song_came_from_in_node():
+    src = CARD.read_text(encoding="utf-8")
+    # Play all and a playlist store their list; a single song clears it; Now Playing reads it
+    assert "saveSharedSettings({ now_source: { kind: 'collection', style: shown.style, lang: shown.lang," in src
+    assert "saveSharedSettings({ now_source: { kind: 'playlist', name: pl.name, urls: songs," in src
+    assert "saveSharedSettings({ now_source: null });" in src
+    assert "cuboaiNowSourceText(cuboaiNowSourceInfo(src, activeAttributes.media_content_id" in src
+    block = src[src.index("// BEGIN CUBOAI_SONG_COLLECTIONS") : src.index("function cuboaiFindCameraState")]
+    js = (
+        block
+        + """
+const ru = CUBOAI_SONG_COLLECTIONS.filter(s => s.lang === 'ru' && s.category === 'sleep').map(s => cuboaiYoutubeUrl(s.id));
+const col = { kind: 'collection', style: 'sleep', lang: 'ru', urls: ru };
+const pl = { kind: 'playlist', name: 'test1', urls: ['https://youtu.be/aaaaaaaaaaa', 'https://youtu.be/bbbbbbbbbbb'] };
+const names = { 'https://youtu.be/bbbbbbbbbbb': 'Song B' };
+const info = cuboaiNowSourceInfo(col, ru[2], 'en');
+console.log(JSON.stringify({
+  info,
+  textEn: cuboaiNowSourceText(info, 'en'),
+  textHe: cuboaiNowSourceText(cuboaiNowSourceInfo(col, ru[2], 'he'), 'he'),
+  last: cuboaiNowSourceInfo(col, ru[ru.length - 1], 'en'),
+  shortUrl: cuboaiNowSourceInfo(col, 'https://youtu.be/' + ru[0].slice(-11), 'en').pos,
+  playlist: cuboaiNowSourceText(cuboaiNowSourceInfo(pl, pl.urls[0], 'en', u => names[u] || null), 'en'),
+  other: cuboaiNowSourceInfo(col, 'https://www.youtube.com/watch?v=zzzzzzzzzzz', 'en'),
+  none: cuboaiNowSourceInfo(null, ru[0], 'en'),
+  empty: cuboaiNowSourceText(null, 'en'),
+  n: ru.length,
+}));
+"""
+    )
+    out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, encoding="utf-8", check=True)
+    r = json.loads(out.stdout)
+    assert (r["info"]["label"], r["info"]["pos"], r["info"]["total"]) == ("Sleep · Russian", 3, r["n"])
+    assert len(r["info"]["next"]) == 3
+    assert r["textEn"].startswith(f"From: Sleep · Russian · song 3 of {r['n']} — Next: ")
+    assert r["textHe"].startswith(f"מתוך: שינה · רוסית · שיר 3 מתוך {r['n']}")
+    assert r["last"]["pos"] == r["n"] and r["last"]["next"] == []
+    assert r["shortUrl"] == 1
+    assert r["playlist"] == "From: test1 · song 1 of 2 — Next: Song B"
+    assert r["other"] is None and r["none"] is None and r["empty"] == ""
