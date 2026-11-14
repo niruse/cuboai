@@ -43,6 +43,12 @@ def _is_yt_content_error(message: str) -> bool:
     return any(marker in lowered for marker in _YT_CONTENT_ERROR_MARKERS)
 
 
+def _is_yt_forbidden(message: str) -> bool:
+    """Whether yt-dlp failed because YouTube refused the download link (HTTP 403)."""
+    lowered = str(message).lower()
+    return "403" in lowered and ("forbidden" in lowered or "http error" in lowered)
+
+
 def _is_song(media_id: str) -> bool:
     """A link or file the speaker queue streams itself; anything else is a lullaby name, which the
     camera plays natively through the Lullaby entity."""
@@ -423,6 +429,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 import glob
                 import hashlib
                 import os
+                import time
 
                 is_caching_enabled = self.hass.data.get("cuboai", {}).get("youtube_cache_enabled", False)
                 cache_dir = self.hass.config.path("www", "cuboai_cache")
@@ -502,42 +509,57 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 if os.path.exists(cookie_path):
                     ydl_opts["cookiefile"] = cookie_path
 
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(media_id, download=is_caching_enabled)
-                        if is_caching_enabled:
-                            existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
-                            if existing:
-                                ext = existing[0].split(".")[-1]
-                                return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
+                failure = None
+                for attempt in (1, 2):
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(media_id, download=is_caching_enabled)
+                            if is_caching_enabled:
+                                existing = glob.glob(os.path.join(cache_dir, f"{cache_hash}.*"))
+                                if existing:
+                                    ext = existing[0].split(".")[-1]
+                                    return f"{base_url}/local/cuboai_cache/{cache_hash}.{ext}"
 
-                        if "entries" in info and len(info["entries"]) > 0:
-                            info = info["entries"][0]
-                        return info.get("url", media_id)
-                except Exception as e:
-                    # Report what actually went wrong, and do NOT try to "repair" it
-                    # by pip-installing a yt-dlp upgrade (which this used to do on
-                    # EVERY failure). That ran a network install inside a worker
-                    # thread, mutated the Home Assistant environment as a side
-                    # effect of pressing play, and then told the user to restart —
-                    # advice that was almost always wrong, because the common causes
-                    # are a private/removed/region-locked video or a stale player
-                    # client, none of which an upgrade fixes. Users chased a restart
-                    # instead of seeing the real message.
-                    reason = str(e).replace("ERROR: ", "").strip()
-                    if _is_yt_content_error(reason):
-                        # Nothing is broken on our side — this particular item cannot
-                        # be fetched. Keep it at WARNING so it doesn't read as a fault.
-                        _LOGGER.warning("Cannot play %s: YouTube says %s", media_id, reason)
-                    else:
-                        _LOGGER.error(
-                            "Could not fetch %s: %s. If this affects every video (not just one), "
-                            "YouTube has likely changed something and yt-dlp needs updating — "
-                            "update the integration, or Home Assistant, to pick up a newer yt-dlp.",
-                            media_id,
-                            reason,
-                        )
-                    return None
+                            if "entries" in info and len(info["entries"]) > 0:
+                                info = info["entries"][0]
+                            return info.get("url", media_id)
+                    except Exception as e:
+                        failure = e
+                        if attempt == 1 and _is_yt_forbidden(str(e)):
+                            # YouTube signs each download link for one client and session, and
+                            # its anti-bot checks refuse some at random (11-14: one song of six
+                            # got 403 on the box, then played fine from another session). A
+                            # fresh request gets a fresh link, which usually passes. Another
+                            # client is no way out: without a JS runtime (HA has none) only the
+                            # android client returns a playable link at all.
+                            _LOGGER.info("YouTube refused the download of %s (403); trying once more", media_id)
+                            time.sleep(1)
+                            continue
+                        break
+
+                # Report what actually went wrong, and do NOT try to "repair" it
+                # by pip-installing a yt-dlp upgrade (which this used to do on
+                # EVERY failure). That ran a network install inside a worker
+                # thread, mutated the Home Assistant environment as a side
+                # effect of pressing play, and then told the user to restart —
+                # advice that was almost always wrong, because the common causes
+                # are a private/removed/region-locked video or a stale player
+                # client, none of which an upgrade fixes. Users chased a restart
+                # instead of seeing the real message.
+                reason = str(failure).replace("ERROR: ", "").strip()
+                if _is_yt_content_error(reason):
+                    # Nothing is broken on our side — this particular item cannot
+                    # be fetched. Keep it at WARNING so it doesn't read as a fault.
+                    _LOGGER.warning("Cannot play %s: YouTube says %s", media_id, reason)
+                else:
+                    _LOGGER.error(
+                        "Could not fetch %s: %s. If this affects every video (not just one), "
+                        "YouTube has likely changed something and yt-dlp needs updating — "
+                        "update the integration, or Home Assistant, to pick up a newer yt-dlp.",
+                        media_id,
+                        reason,
+                    )
+                return None
 
             media_id = await self.hass.async_add_executor_job(_extract_yt_url)
             if not media_id:
