@@ -15,7 +15,12 @@ from .auth import async_refresh_entry_tokens
 from .const import DOMAIN, OPT_PROTECT_ENABLED
 from .downloader import async_ensure_dependencies
 from .go2rtc import Go2RTCManager
+from .redact import install as install_log_redaction
 from .utils import set_debug_logs_enabled, set_log_path
+
+# Clean every log line of this integration (passwords, tokens, email, account
+# and camera ids) before it is written: logs get pasted into public issues.
+install_log_redaction()
 
 _LOGGER = logging.getLogger(__name__)
 

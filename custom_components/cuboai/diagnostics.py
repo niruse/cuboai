@@ -26,6 +26,7 @@ import json
 import os
 import re
 
+from . import redact
 from .const import (
     DOMAIN,
     OPT_PROTECT_ENABLED,
@@ -93,9 +94,10 @@ _NO_GRANT = "no 0x2041 after nO"
 # line count overstates the attempts ~15x (#107: 30 lines, 2 attempts).
 _ENGINE_FAILURE_LINE = "[exec] Connection failed"
 
-_ENV_SECRET = re.compile(r"(CUBOAI_(?:UID|ACCOUNT|PASSWORD))=\S+")
-_URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/\s@:]+:[^/\s@]*@", re.IGNORECASE)
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# The same patterns the logs are cleaned with (redact.py), so they never drift apart.
+_ENV_SECRET = redact.ENV_SECRET
+_URL_USERINFO = redact.URL_USERINFO
+_EMAIL = redact.EMAIL
 
 _SECRET_OPTION_KEYS = {"nvr_password", "nvr_username", "password", "account", "token", "name"}
 

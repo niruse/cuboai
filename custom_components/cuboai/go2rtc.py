@@ -8,11 +8,13 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 import yaml
 from homeassistant.core import HomeAssistant
 
+from . import redact
 from .const import (
     DESIRED_API_PORT,
     DOMAIN,
@@ -1111,16 +1113,24 @@ class Go2RTCManager:
                     return open(log_file_path, "a")
 
                 log_file = await self.hass.async_add_executor_job(_open_log)
+                # go2rtc's output goes through a pipe, not straight into the file:
+                # at exec:debug it logs every engine command line, credentials
+                # included, and go2rtc.log is what users attach to issues.
+                read_fd, out = os.pipe()
             else:
-                log_file = asyncio.subprocess.DEVNULL
+                log_file = None
+                out = asyncio.subprocess.DEVNULL
 
             self.process = await asyncio.create_subprocess_exec(
-                self._binary_path, "-config", self._config_path, stdout=log_file, stderr=log_file
+                self._binary_path, "-config", self._config_path, stdout=out, stderr=out
             )
-            # The child holds its own duplicated fd; close the parent's copy so
-            # reloads don't leak one file handle per restart.
-            if debug_logs and hasattr(log_file, "close"):
-                log_file.close()
+            if log_file is not None:
+                # The child holds its own copy of the write end; close ours so the
+                # pump sees EOF when go2rtc exits.
+                os.close(out)
+                threading.Thread(
+                    target=_pump_log, args=(read_fd, log_file), name="cuboai-go2rtc-log", daemon=True
+                ).start()
             _LOGGER.info(f"go2rtc started with PID {self.process.pid}")
 
             # Health check — wait a moment then verify process is still alive
@@ -1416,3 +1426,20 @@ class Go2RTCManager:
                 pass
 
         await self.hass.async_add_executor_job(_remove)
+
+
+def _pump_log(read_fd: int, log_file) -> None:
+    """go2rtc's output into go2rtc.log, a line at a time, with secrets removed.
+
+    Runs in its own thread and ends when go2rtc exits (EOF on the pipe). Camera
+    ids stay whole (redact.secrets): diagnostics read this file by camera id.
+    It keeps reading even if a write fails, so go2rtc can never block on a full
+    pipe.
+    """
+    with os.fdopen(read_fd, "rb") as source, log_file:
+        for raw in iter(source.readline, b""):
+            try:
+                log_file.write(redact.secrets(raw.decode("utf-8", "replace")))
+                log_file.flush()
+            except Exception:  # noqa: BLE001 - never stop draining the pipe
+                pass
