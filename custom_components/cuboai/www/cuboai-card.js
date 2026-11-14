@@ -2385,7 +2385,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.56';
+        const CARD_VERSION = 'v2.6.57';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';

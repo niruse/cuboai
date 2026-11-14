@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.57]
+
+### Fixed
+- **Now Playing shows the song's name for collection songs**, instead of the YouTube link.
+
 ## [2.6.56]
 
 ### Added
