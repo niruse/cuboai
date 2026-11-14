@@ -94,7 +94,7 @@ console.log(JSON.stringify({
 }));
 """
     )
-    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, encoding="utf-8", check=True)
+    out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, encoding="utf-8", check=True)
     r = json.loads(out.stdout)
     assert [c["media_content_id"] for c in r["plain"]] == ["u1", "u2", "u3", "u4"]
     assert [c["enqueue"] for c in r["plain"]] == ["replace", "add", "add", "add"]
@@ -150,7 +150,7 @@ console.log(JSON.stringify({
 }));
 """
     )
-    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, encoding="utf-8", check=True)
+    out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, encoding="utf-8", check=True)
     first, second = out.stdout.strip().splitlines()
     c = json.loads(second)
     assert c["dflt"] == {
