@@ -14,6 +14,18 @@ clear_youtube_cache:
   name: Clear YouTube cache
   description: Delete all locally cached YouTube audio files (www/cuboai_cache)
 
+get_playlist:
+  name: Get playlist songs
+  description: List the songs of a YouTube playlist, Spotify playlist or Spotify album (no account needed). Returns name, url and length of each song.
+  fields:
+    url:
+      name: Playlist link
+      description: A YouTube playlist link (with list=) or a Spotify playlist/album link.
+      required: true
+      example: https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
+      selector:
+        text:
+
 set_h264_transcode:
   name: Set H.264 transcode
   description: Enable or disable H.264 transcoding for a camera (needed for HomeKit/HLS with H.265 cameras like Cubo 3). Reloads the integration.

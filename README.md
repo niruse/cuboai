@@ -40,8 +40,8 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
   status, Wi-Fi and more. [Entities](#entities)
 - **Controls** — night light and brightness, night vision, lullabies with a timer, sleep mode,
   status LED, flip, baby presence.
-- **Lullabies and music** — the camera's own lullabies, or YouTube / Spotify links, with playlists,
-  gapless song-to-song playback and a seek bar.
+- **Lullabies and music** — the camera's own lullabies, or YouTube / Spotify links (whole
+  playlists and albums too), with playlists, gapless song-to-song playback and a seek bar.
 - **Sleep timeline** — every sensor on one shared time axis. [Timeline card](#timeline-card-and-sleep-figures)
 - **Record to an NVR** — Frigate, Synology, Hikvision/HiLook, Blue Iris… over RTSP.
   [RTSP](#rtsp--recording-to-an-nvr)
@@ -294,6 +294,10 @@ default_song_language: ru
 <img src="docs/images/card-music.png" width="420" alt="The music section: now playing, playlists and the song library">
 
 - **Play** a YouTube or Spotify link, or one of the camera's own lullabies, on the camera's speaker.
+- **Whole playlists**: a YouTube playlist, Spotify playlist or Spotify album link plays all its
+  songs in order (no Spotify account needed; each Spotify song plays from its YouTube match). In
+  *Add Song*, a playlist link can be added as one item or as its songs, and optionally into a
+  saved playlist (an existing one, or a new one named after the list).
 - **Song library** with search, categories, sort, and who added each song; **playlists** with
   shuffle, repeat and a play-time limit.
 - The library, playlists and shuffle/repeat settings are stored in Home Assistant, so every phone
@@ -586,6 +590,7 @@ ONVIF and pulls the video from its streaming engine, like an NVR.
 | `cuboai.play_recording` | `device_id`, `start_time`, `duration` | Plays recorded footage — see [Recorded playback](#recorded-playback) |
 | `cuboai.set_h264_transcode` | `device_id`, `enabled` | Turns the H.264 transcode on or off for one camera (reloads the integration) |
 | `cuboai.clear_youtube_cache` | — | Deletes the cached songs |
+| `cuboai.get_playlist` | `url` | Returns the songs (name, link, length) of a YouTube or Spotify playlist link |
 | `cuboai.save_custom_songs`, `cuboai.save_playlists`, `cuboai.save_settings` | — | Used by the card to store its song library, playlists and settings |
 
 ---

@@ -195,6 +195,27 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     hass.services.async_register(DOMAIN, "clear_youtube_cache", handle_clear_youtube_cache)
 
+    async def handle_get_playlist(call):
+        """The songs of a YouTube or Spotify playlist (or Spotify album), for the card's
+        "add its songs" choice. Read-only: returns them, changes nothing."""
+        import voluptuous as vol
+        from homeassistant.exceptions import HomeAssistantError
+
+        from .playlists import fetch_playlist
+
+        try:
+            url = vol.Schema(cv.string)(call.data.get("url"))
+            return await hass.async_add_executor_job(fetch_playlist, url)
+        except (ValueError, vol.Invalid) as e:
+            raise HomeAssistantError(str(e)) from e
+        except Exception as e:  # network, Spotify page change, yt-dlp
+            _LOGGER.warning("Could not read the playlist: %s", e)
+            raise HomeAssistantError(f"Could not read the playlist: {e}") from e
+
+    from homeassistant.core import SupportsResponse
+
+    hass.services.async_register(DOMAIN, "get_playlist", handle_get_playlist, supports_response=SupportsResponse.ONLY)
+
     async def handle_set_h264_transcode(call):
         """Enable/disable H.264 transcoding for a camera (issue #85).
 

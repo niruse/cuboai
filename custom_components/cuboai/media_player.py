@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 from .playback import playtime_expired as _playtime_expired
 from .playback import should_loop_playback as _should_loop_playback
+from .playlists import is_playlist_link as _is_playlist_link
 from .tutk.cuboai_messages import LULLABY_CATALOG
 
 _LOGGER = logging.getLogger(__name__)
@@ -392,17 +393,32 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
 
             enqueue = kwargs.get("enqueue", "play")
 
+            # A whole YouTube/Spotify playlist (or Spotify album): its songs, in order, read
+            # now so the list plays as it is today. Before, a Spotify playlist played ONE
+            # YouTube video found by the list's name, and a YouTube playlist only its first song.
+            items = [media_id]
+            if _is_playlist_link(media_id):
+                from .playlists import fetch_playlist
+
+                try:
+                    found = await self.hass.async_add_executor_job(fetch_playlist, media_id)
+                except Exception as e:
+                    _LOGGER.warning("Could not read the playlist %s: %s", media_id, e)
+                    return
+                items = [t["url"] for t in found["tracks"]]
+                _LOGGER.info("Playlist %r: %d songs queued", found["name"], len(items))
+
             if enqueue == "add":
-                self._queue.append(media_id)
+                self._queue.extend(items)
                 if self._attr_state != MediaPlayerState.PLAYING and not getattr(self, "_queue_task", None):
                     self._start_queue_loop()
             elif enqueue == "replace":
                 await self.async_media_stop()
-                self._queue.append(media_id)
+                self._queue.extend(items)
                 self._start_queue_loop()
             else:
                 await self.async_media_stop()
-                self._queue.append(media_id)
+                self._queue.extend(items)
                 self._start_queue_loop()
         except Exception:
             _LOGGER.exception("Exception in async_play_media:")

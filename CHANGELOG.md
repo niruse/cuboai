@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.63]
+
+### Added
+- **YouTube and Spotify playlists play as their songs.** Play a YouTube playlist link (with
+  `list=`), a Spotify playlist or a Spotify album, and the speaker queues every song in the list's
+  order. Before, a Spotify playlist played one YouTube video found by the list's name, and a YouTube
+  playlist only its first song. No Spotify account is needed: the list is read from Spotify's public
+  embed page, and each song plays from its YouTube match, as single Spotify songs already did. Lists
+  are capped at 300 songs. A YouTube link to one song inside a list (`watch?v=...&list=...`) still
+  plays that one song.
+- **Add a playlist link to the library in two ways.** Paste a playlist link in *Add Song* and choose
+  *the playlist as one item* (plays all its songs, and follows the list when it changes) or *its
+  songs, each one on its own*. Either way it can also go into an existing saved playlist, or into a
+  new one named after the list. Songs already in the library are not added twice, and the link is
+  saved without its tracking parameters (`si=`, `pi=`).
+- **New service `cuboai.get_playlist`**: returns the songs (name, link, length) of a YouTube or
+  Spotify playlist link. Read-only.
+
 ## [2.6.62]
 
 ### Fixed

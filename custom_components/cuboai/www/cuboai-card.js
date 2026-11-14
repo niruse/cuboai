@@ -372,6 +372,53 @@ function cuboaiNowSourceText(info, ui) {
   return s;
 }
 
+// A YouTube or Spotify playlist link (Spotify albums too), as the server's playlists.py reads it:
+// { source, id, url (the list's own link, no tracking parameters) } or null for a song link.
+function cuboaiPlaylistRef(url) {
+  const s = String(url || '').trim();
+  const sp = s.match(/^https?:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}(?:-[a-z]{2})?\/)?(?:embed\/)?(playlist|album)\/([A-Za-z0-9]{22})(?:[/?#]|$)/);
+  if (sp) return { source: 'spotify', id: sp[2], url: `https://open.spotify.com/${sp[1]}/${sp[2]}` };
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(u.hostname.toLowerCase())) return null;
+  const list = u.searchParams.get('list') || '';
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(list)) return null;
+  return { source: 'youtube', id: list, url: `https://www.youtube.com/playlist?list=${list}` };
+}
+
+// Add a playlist to the library in one of two ways, and optionally to a saved playlist too:
+//   mode 'whole': ONE library item, the list's own link (played, the speaker expands it into
+//                 its songs, so it follows the list as it changes);
+//   mode 'songs': each song as its own library item (songs already there are not added twice).
+// target: '' = library only, '__new__' = a new saved playlist named after the list, else the id
+// of a saved playlist. Returns new copies of songs/playlists plus counts; changes nothing given.
+function cuboaiAddPlaylist(mode, list, name, songs, playlists, target, who, now = Date.now()) {
+  const lib = (songs || []).map(s => Object.assign({}, s));
+  const pls = (playlists || []).map(p => Object.assign({}, p, { songs: (p.songs || []).slice() }));
+  const category = list.source === 'spotify' ? 'Spotify' : 'YouTube';
+  const have = new Set(lib.map(s => s && s.url));
+  const entries = mode === 'songs'
+    ? (list.tracks || []).map(t => ({ name: t.name, url: t.url }))
+    : [{ name: name || list.name || list.url, url: list.url, isPlaylist: true }];
+  let added = 0;
+  for (const e of entries) {
+    if (have.has(e.url)) continue;
+    have.add(e.url);
+    lib.push(Object.assign({ category, custom: true, inPlaylist: false, addedBy: who || 'System' }, e));
+    added += 1;
+  }
+  let pl = null;
+  if (target === '__new__') {
+    pl = { id: String(now), name: name || list.name || 'Playlist', songs: [], addedBy: who || 'System' };
+    pls.push(pl);
+  } else if (target) {
+    pl = pls.find(p => p.id === target) || null;
+  }
+  if (pl) entries.forEach(e => pl.songs.push(e.url));
+  return { songs: lib, playlists: pls, added, inPlaylist: pl ? entries.length : 0, playlistName: pl ? pl.name : '' };
+}
+
 // "Play all" for the songs a collection view shows: one play_media per song, the first
 // replaces what is playing and the rest queue behind it (same as a saved playlist's play).
 // Shuffle follows the card's Shuffle button; Repeat and Play time stay with the speaker.
@@ -2444,7 +2491,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.62';
+        const CARD_VERSION = 'v2.6.63';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -3316,6 +3363,14 @@ class CuboAICameraCard extends HTMLElement {
               <div id="addFormError" style="color: var(--error-color, #f44336); font-size: 11px; margin-bottom: 4px; display: none;"></div>
               <input type="text" id="newSongName" class="cubo-input" placeholder="Song Name" style="margin-bottom: 4px;">
               <input type="text" id="newSongUrl" class="cubo-input" placeholder="YouTube or Spotify Link" style="margin-bottom: 4px;">
+              <div id="listOptions" style="display: none; flex-direction: column; gap: 4px; margin-bottom: 4px; font-size: 12px;">
+                <div style="font-weight: 500;">This link is a playlist. Add:</div>
+                <select id="listMode" class="cubo-select">
+                  <option value="whole">The playlist as one item (plays all its songs)</option>
+                  <option value="songs">Its songs, each one on its own</option>
+                </select>
+                <select id="listTarget" class="cubo-select"></select>
+              </div>
               <div class="cubo-row" style="margin-bottom: 0;">
                 <select id="newSongCat" class="cubo-select" style="flex-grow: 1;">
                   <option value="youtube">YouTube</option>
@@ -4051,6 +4106,8 @@ class CuboAICameraCard extends HTMLElement {
               this._editingIndex = null;
               newSongName.value = '';
               newSongUrl.value = '';
+              const lo = this.musicBar.querySelector('#listOptions');
+              if (lo) lo.style.display = 'none';
               const addFormTitle = this.musicBar.querySelector('#addFormTitle');
               if (addFormTitle) addFormTitle.textContent = "Add Song to Library";
               saveSongBtn.textContent = "Add Song";
@@ -4060,11 +4117,74 @@ class CuboAICameraCard extends HTMLElement {
 
           // Removed playAllBtn listener
 
+          // A playlist link: show how to add it (one item / its songs) and where (library only,
+          // a saved playlist, or a new one named after the list), and pick its category.
+          const listOptions = this.musicBar.querySelector('#listOptions');
+          const listMode = this.musicBar.querySelector('#listMode');
+          const listTarget = this.musicBar.querySelector('#listTarget');
+          const showListOptions = () => {
+            const ref = (this._editingIndex === undefined || this._editingIndex === null)
+              ? cuboaiPlaylistRef(newSongUrl.value) : null;
+            listOptions.style.display = ref ? 'flex' : 'none';
+            if (!ref) return;
+            newSongCat.value = ref.source;
+            const keep = listTarget.value;
+            listTarget.innerHTML = '<option value="">Library only</option><option value="__new__">Library + a new saved playlist</option>'
+              + loadPlaylists().map(p => `<option value="${String(p.id).replace(/"/g, '&quot;')}"></option>`).join('');
+            // Names go in as text, never as HTML (they come from users and from YouTube/Spotify).
+            const pls = loadPlaylists();
+            Array.from(listTarget.options).slice(2).forEach((o, i) => { o.textContent = `Library + playlist "${pls[i].name}"`; });
+            if (Array.from(listTarget.options).some(o => o.value === keep)) listTarget.value = keep;
+          };
+          newSongUrl.addEventListener('input', showListOptions);
+
+          const addPlaylistLink = async (ref, name) => {
+            const who = this._hass && this._hass.user ? this._hass.user.name : "System";
+            let list = { source: ref.source, url: ref.url, name: '', tracks: [] };
+            if (listMode.value === 'songs' || !name) {
+              saveSongBtn.disabled = true;
+              const was = saveSongBtn.textContent;
+              saveSongBtn.textContent = 'Reading…';
+              try {
+                const res = await this._hass.callWS({
+                  type: 'call_service', domain: 'cuboai', service: 'get_playlist',
+                  service_data: { url: ref.url }, return_response: true,
+                });
+                list = Object.assign({}, res.response, { source: ref.source });
+              } catch (e) {
+                if (addFormError) {
+                  addFormError.textContent = `Could not read the playlist: ${(e && e.message) || e}`;
+                  addFormError.style.display = 'block';
+                }
+                return;
+              } finally {
+                saveSongBtn.disabled = false;
+                saveSongBtn.textContent = was;
+              }
+            }
+            const out = cuboaiAddPlaylist(listMode.value, list, name, loadCustomSongs(), loadPlaylists(), listTarget.value, who);
+            saveCustomSongs(out.songs);
+            if (out.inPlaylist) savePlaylists(out.playlists);
+            newSongName.value = '';
+            newSongUrl.value = '';
+            listOptions.style.display = 'none';
+            addForm.style.display = 'none';
+            toggleAddFormBtn.textContent = '+ Add Song';
+            renderSongs();
+          };
+
           saveSongBtn.addEventListener('click', () => {
             const name = newSongName.value.trim();
             const url = newSongUrl.value.trim();
             const cat = newSongCat.value;
-            
+
+            const listRef = (this._editingIndex === undefined || this._editingIndex === null) ? cuboaiPlaylistRef(url) : null;
+            if (listRef && this._hass) {
+              if (addFormError) addFormError.style.display = 'none';
+              addPlaylistLink(listRef, name);
+              return;
+            }
+
             if (!name || !url) return;
 
             if (cat === "youtube" && !url.includes("youtube.com") && !url.includes("youtu.be")) {
