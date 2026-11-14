@@ -277,6 +277,17 @@ transcode for this camera and the song cache (with a *Clear Song Cache* button).
 | `talk_mutes_speaker` | `false` | Mute the room's sound on this device while you talk; it comes back when you stop |
 | `talk_dry_run` | `false` | Microphone test mode: everything except the camera, nothing plays (YAML only) |
 
+Song collections, for example: only Russian and English, no white noise, opening on Russian sleep songs
+(or `show_song_collections: false` to hide them completely). The same choices are in the card editor.
+
+```yaml
+type: custom:cuboai-camera-card
+song_languages: [ru, en]
+song_styles: [sleep, morning, baby, calm]
+default_song_style: sleep
+default_song_language: ru
+```
+
 ### Lullabies and music
 
 <img src="docs/images/card-music.png" width="420" alt="The music section: now playing, playlists and the song library">
