@@ -177,3 +177,27 @@ console.log(JSON.stringify({
     assert (r["uiHe"], r["uiRu"], r["uiEn"]) == ("he", "ru", "en")
     assert r["url"] == "https://www.youtube.com/watch?v=aaaaaaaaaaa"
     assert r["styles"] == 5
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_now_playing_shows_the_collection_song_name_in_node():
+    src = CARD.read_text(encoding="utf-8")
+    assert "else if (collectionName) title = collectionName;" in src
+    block = src[src.index("// BEGIN CUBOAI_SONG_COLLECTIONS") : src.index("function cuboaiFindCameraState")]
+    js = (
+        block
+        + """
+const first = CUBOAI_SONG_COLLECTIONS[0];
+console.log(JSON.stringify({
+  watch: cuboaiCollectionSongName('https://www.youtube.com/watch?v=' + first.id),
+  short: cuboaiCollectionSongName('https://youtu.be/' + first.id + '?feature=shared'),
+  name: first.name,
+  other: cuboaiCollectionSongName('https://www.youtube.com/watch?v=zzzzzzzzzzz'),
+  none: cuboaiCollectionSongName(undefined),
+}));
+"""
+    )
+    out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, encoding="utf-8", check=True)
+    r = json.loads(out.stdout)
+    assert r["watch"] == r["name"] and r["short"] == r["name"]
+    assert r["other"] is None and r["none"] is None

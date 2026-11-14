@@ -306,6 +306,14 @@ function cuboaiYoutubeUrl(id) {
   return `https://www.youtube.com/watch?v=${id}`;
 }
 
+// The collection song's name for a playing URL (any YouTube form), for "Now Playing".
+function cuboaiCollectionSongName(url, list = CUBOAI_SONG_COLLECTIONS) {
+  const m = String(url || '').match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([0-9A-Za-z_-]{11})/);
+  if (!m) return null;
+  const song = list.find(s => s.id === m[1]);
+  return song ? song.name : null;
+}
+
 // "Play all" for the songs a collection view shows: one play_media per song, the first
 // replaces what is playing and the rest queue behind it (same as a saved playlist's play).
 // Shuffle follows the card's Shuffle button; Repeat and Play time stay with the speaker.
@@ -4847,7 +4855,9 @@ class CuboAICameraCard extends HTMLElement {
               
               return activeUrl.includes(s.url) || s.url.includes(activeUrl);
             });
+            const collectionName = song ? null : cuboaiCollectionSongName(activeUrl);
             if (song) title = song.name;
+            else if (collectionName) title = collectionName;
             else if (activeAttributes.media_title && activeAttributes.media_title !== activeAttributes.media_content_id) title = activeAttributes.media_title;
             else title = activeUrl;
           } else {
