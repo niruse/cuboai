@@ -2,7 +2,8 @@
 """
 cuboai_stream_backchannel.py — Two-way audio backchannel for CuboAI cameras.
 
-Three modes:
+Four modes (the fourth, --playlist, is documented at _PlaylistFeed: Home Assistant's speaker
+queue, one talk session for a whole run of songs, a URL per stdin line):
   1. File/URL mode (TTS): called with a URL or file path as sys.argv[1].
      Downloads the file and sends it to the camera speaker in one shot.
 
@@ -350,6 +351,205 @@ class _LiveTalk:
         self.proto.emit(f"END sent={self.sent} speech={speech} rx={rx} dropped={dropped} camera={camera}")
 
 
+# ── speaker playlist (--playlist) ────────────────────────────────────────────────
+
+_YT_OPTIONS = {'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                             '(KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+
+
+def _open_track(url):
+    """(path, options, temp_file) for one playlist line: a YouTube stream is read directly with a
+    browser User-Agent, any other http(s) URL (TTS, a media-source file) is downloaded first, as
+    the one-song file mode always did; a local path is used as is."""
+    if not url.startswith(("http://", "https://")):
+        return url, None, None
+    if "googlevideo.com" in url:
+        return url, _YT_OPTIONS, None
+    import urllib.request
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".audio")
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            tmp.write(response.read())
+    finally:
+        tmp.close()
+    return tmp.name, None, tmp.name
+
+
+class _PlaylistFeed:
+    """Songs for ONE talk session: a URL per stdin line, decoded back to back into one stream.
+
+    Home Assistant writes the next song's URL while the current one plays, so it is decoded
+    ahead and starts on the next 64 ms frame. The decoder stays at most `ahead` frames (~10 s)
+    in front of the camera. Progress goes to Home Assistant through `emit`:
+      TRACK i   the first frame of song i (0-based, in stdin order) went to the camera
+      SKIP i    song i could not be opened/decoded (nothing of it was played)
+      IDLE      everything written so far has been sent and no next line is there yet
+                (silence goes out meanwhile; EOF on stdin ends the playlist)
+    `done` turns true only when stdin has ended AND every frame has been taken: the talk loop
+    reads it as "nothing more will ever come", so it must not be true while songs are still
+    queued (a short playlist decoded before the camera's grant would otherwise never play)."""
+
+    def __init__(self, stream, encoder=None, emit=None, ahead=156, open_track=_open_track):
+        import collections
+
+        if encoder is None:
+            from cuboai_pure import _TrackAacEncoder
+            encoder = _TrackAacEncoder()
+        self._enc = encoder
+        self.silent_unit = encoder.silent_unit
+        self._emit = emit or (lambda line: None)
+        self._ahead = ahead
+        self._open = open_track
+        self._queue = collections.deque()                # frames, and ("TRACK", i) markers
+        self._cond = threading.Condition()
+        self._waiting = False                            # the reader is blocked on stdin
+        self._idle_sent = False
+        self._finished = False                           # stdin ended, every frame queued
+        self.error = None
+        self.tracks = 0
+        self.frames = 0
+        self.dropped = 0                                 # (the _LiveTalk counters' shape)
+        self.received = 0
+        self._stream = stream
+        self._thread = threading.Thread(target=self._read, name="cuboai-playlist-feed", daemon=True)
+        self._thread.start()
+
+    def _put(self, item):
+        with self._cond:
+            while sum(1 for x in self._queue if not isinstance(x, tuple)) >= self._ahead:
+                self._cond.wait(0.5)
+            self._queue.append(item)
+
+    def _read(self):
+        try:
+            while True:
+                with self._cond:
+                    self._waiting = True
+                line = self._stream.readline()
+                with self._cond:
+                    self._waiting = False
+                    self._idle_sent = False
+                if not line:
+                    break                                # EOF: the playlist is over
+                url = line.decode("utf-8", "replace").strip() if isinstance(line, bytes) else line.strip()
+                if not url:
+                    continue
+                i = self.tracks
+                self.tracks += 1
+                tmp = None
+                started = False
+                try:
+                    path, options, tmp = self._open(url)
+                    for unit in self._enc.track(path, options=options):
+                        if not started:
+                            self._put(("TRACK", i))
+                            started = True
+                        self._put(unit)
+                        self.frames += 1
+                except Exception as e:  # noqa: BLE001 - one bad song must not end the playlist
+                    print(f"DEBUG: playlist song {i} failed: {e!r}", file=sys.stderr, flush=True)
+                finally:
+                    if tmp:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                if not started:
+                    self._emit(f"SKIP {i}")              # nothing of it played: on to the next
+            for unit in self._enc.finish():
+                self._put(unit)
+        except Exception as e:  # noqa: BLE001 - reported, then the talk ends cleanly
+            self.error = e
+            print(f"DEBUG: playlist feed error: {e!r}", file=sys.stderr, flush=True)
+        finally:
+            with self._cond:
+                self._finished = True                    # always AFTER the last frame is queued
+                self._cond.notify_all()
+
+    @property
+    def done(self):
+        with self._cond:
+            return self._finished and not self._queue
+
+    def next_unit(self):
+        """The next song frame, or None: send silence (and if `done` was already set before this
+        call, the playlist is over)."""
+        lines, unit = [], None
+        with self._cond:
+            while self._queue and isinstance(self._queue[0], tuple):
+                lines.append(f"TRACK {self._queue.popleft()[1]}")
+            if self._queue:
+                unit = self._queue.popleft()
+                self._cond.notify_all()
+            elif self._waiting and self.tracks and not self._finished and not self._idle_sent:
+                self._idle_sent = True
+                lines.append("IDLE")
+        for line in lines:                               # outside the lock: a pipe write can block
+            self._emit(line)
+        return unit
+
+
+def _handle_playlist(args, proto):
+    """--playlist: stdin URLs -> ONE talk session (or --dry-run: no camera). Returns the exit code."""
+    talk = _LiveTalk(proto)
+    try:
+        talk.feed = _PlaylistFeed(_stdin_raw_lines(), emit=proto.emit)
+        if args.dry_run:
+            print("DEBUG: playlist DRY RUN - no camera, nothing plays", file=sys.stderr, flush=True)
+            proto.emit("READY")
+            talk.sent = _DryTalk(talk.feed, float("inf"), on_status=talk.status).run()
+            if talk.feed.error is not None:
+                talk.fail("internal")
+                return 1
+            return 0
+        uid, account, password, camera_ip = _camera_env()
+        if not all([uid, account, password]):
+            print("ERROR: Missing CUBOAI_UID/ACCOUNT/PASSWORD env vars.", file=sys.stderr, flush=True)
+            talk.fail("internal")
+            return 1
+        from cuboai_pure import TalkTimeout
+
+        phase = "connect"
+        try:
+            from cuboai_session import get_session
+            with get_session(uid, account, password,
+                             camera_ip=camera_ip if camera_ip else None,
+                             defer_stream_start=True, defer_video_start_late=True,
+                             auto_discover_lib=False) as sess:
+                phase = "talk"
+                if hasattr(sess, '_inner') and hasattr(sess._inner, '_send_video_start_mid'):
+                    sess._inner._send_video_start_mid()
+                    time.sleep(0.5)
+                proto.emit("READY")
+                talk.sent = sess.send_audio_file("playlist", live_source=talk.feed,
+                                                 grant_timeout=GRANT_TIMEOUT,
+                                                 liveness_timeout=LIVENESS_TIMEOUT,
+                                                 tail_frames=TAIL_FRAMES, on_status=talk.status)
+        except TalkTimeout as e:
+            talk.sent = max(talk.sent, e.sent)
+            talk.fail("camera_refused" if e.reason == "grant" else "camera_lost", e)
+            return 1
+        except (RuntimeError, OSError) as e:
+            talk.fail("camera_unreachable" if phase == "connect" or "handshake failed" in str(e)
+                      else "camera_lost", e)
+            return 1
+        if talk.feed.error is not None:
+            talk.fail("internal")
+            return 1
+        return 0
+    except Exception as e:  # noqa: BLE001 - reported to Home Assistant, then END
+        talk.fail("internal", e)
+        return 1
+    finally:
+        talk.end()
+
+
+def _stdin_raw_lines():
+    """stdin for line reads (the playlist): buffered, but read only by the feed's own thread."""
+    return sys.stdin.buffer
+
+
 def _check_adts(unit):
     """Raise ValueError unless `unit` is one whole ADTS frame in the format the camera takes:
     AAC-LC, sampling index 8 (16 kHz), channel config 2. --dry-run's stand-in for the camera."""
@@ -518,6 +718,11 @@ def main() -> None:
     # Graceful shutdown on SIGTERM (go2rtc / Home Assistant send this to stop us): sys.exit unwinds
     # through send_audio_file's `finally`, which sends SPEAKERSTOP.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "--playlist":
+        import types
+        args = types.SimpleNamespace(dry_run="--dry-run" in sys.argv[2:])
+        sys.exit(_handle_playlist(args, _Proto.claim_stdout()))
 
     if len(sys.argv) >= 2 and sys.argv[1].startswith("--"):
         sys.exit(_live_main(sys.argv[1:]))               # a media URL never starts with "--"

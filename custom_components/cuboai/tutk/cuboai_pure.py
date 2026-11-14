@@ -1705,6 +1705,72 @@ class _LiveAacEncoder:
         return out
 
 
+class _TrackAacEncoder:
+    """Songs -> ONE continuous AAC-LC ADTS stream, a track at a time (the speaker's playlist talk).
+
+    `_aac_units` encodes a whole file before the first frame can go out, and pads ~3.5 s of
+    silence after it so SPEAKERSTOP does not cut the end off. Played one song per talk session
+    that cost, per song: the whole-file transcode, a fresh connect + warmup + talk grant, and the
+    padding — seconds of silence between every two songs. Here a track's frames come out while
+    it decodes, and the encoder, its FIFO and its pts run on across tracks, so the next song
+    starts on the very next 64 ms frame. `finish()` flushes the end of the playlist only.
+
+    Same format as `_aac_units` / `_LiveAacEncoder` (16 kHz stereo AAC-LC, hand-built ADTS)."""
+
+    def __init__(self, rate=16000, bit_rate=32000):
+        import av
+        self._av = av
+        self.rate = rate
+        self._enc = av.CodecContext.create('aac', 'w')
+        self._enc.sample_rate = rate
+        self._enc.layout = 'stereo'
+        self._enc.format = 'fltp'
+        self._enc.bit_rate = bit_rate
+        self._enc.open()
+        self._fifo = av.AudioFifo()
+        self._pts = 0
+        self.silent_unit = _LiveAacEncoder(rate=rate, bit_rate=bit_rate).silent_unit
+
+    def _units(self, fr):
+        fr.pts = self._pts
+        self._pts += fr.samples
+        return [_adts_header(len(bytes(p)), self.rate, 2) + bytes(p) for p in self._enc.encode(fr)]
+
+    def _drain(self):
+        while self._fifo.samples >= 1024:
+            yield from self._units(self._fifo.read(1024))
+
+    def track(self, path, format=None, options=None):
+        """Yield one track's ADTS frames as it decodes. Under 1024 samples of its end stay in
+        the FIFO and lead the next track (no padding, no gap)."""
+        resampler = self._av.AudioResampler(format='fltp', layout='stereo', rate=self.rate)
+        with self._av.open(path, format=format, options=options) as inp:
+            for frame in inp.decode(audio=0):
+                frame.pts = None
+                for rf in resampler.resample(frame):
+                    rf.pts = None
+                    self._fifo.write(rf)
+                yield from self._drain()
+        for rf in resampler.resample(None):              # the resampler's own tail
+            rf.pts = None
+            self._fifo.write(rf)
+        yield from self._drain()
+
+    def finish(self):
+        """The playlist's end: the last partial frame (zero-padded) and the encoder's delay."""
+        left = self._fifo.samples
+        if left:
+            pad = self._av.AudioFrame(format='fltp', layout='stereo', samples=1024 - left)
+            for plane in pad.planes:                     # a new frame is UNINITIALISED memory
+                plane.update(bytes(plane.buffer_size))
+            pad.sample_rate = self.rate
+            pad.pts = None
+            self._fifo.write(pad)
+            yield from self._drain()
+        for p in self._enc.encode(None):
+            yield _adts_header(len(bytes(p)), self.rate, 2) + bytes(p)
+
+
 def _talk_frameinfo(ts_sec, rate=16000):
     """24-B audio FRAMEINFO trailer mirroring the camera's downlink audio: codec_id 0x0088 @[0:2],
     sample_rate @[8:10], channels=1 @[10:12], ts_sec @[12:16]. The camera reads its length from the

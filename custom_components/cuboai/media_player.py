@@ -42,6 +42,12 @@ def _is_yt_content_error(message: str) -> bool:
     return any(marker in lowered for marker in _YT_CONTENT_ERROR_MARKERS)
 
 
+def _is_song(media_id: str) -> bool:
+    """A link or file the speaker queue streams itself; anything else is a lullaby name, which the
+    camera plays natively through the Lullaby entity."""
+    return media_id.startswith(("http", "/")) or any(k in media_id for k in ("youtube", "spotify", "ytsearch"))
+
+
 def _get_timer_minutes(hass, unique_id: str) -> int:
     """Read a CuboAI number-entity timer value (minutes) by its unique_id.
 
@@ -545,10 +551,166 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
 
         return media_id
 
-    async def _queue_loop(self):
+    def _next_song(self, session_tracks, refill, timer_min, expired):
+        """Pop the next queued item for the running playlist, refilling it from the session's
+        songs while a Play Time is set (as the queue loop does). None when nothing is queued."""
+        if not self._queue and refill["ok"] and _should_loop_playback(timer_min(), bool(session_tracks), expired()):
+            refill["ok"] = False
+            self._queue.extend(session_tracks)
+        return self._queue.pop(0) if self._queue else None
+
+    async def _play_song_run(self, first_id, session_tracks, refill, timer_min, expired) -> str:
+        """Play `first_id` and the songs queued after it in ONE talk session. Returns "stop" when
+        the whole queue must end (Play Time spent, speaker taken by a live talk), else "next".
+
+        It used to be one talk session per song: yt-dlp, then a new child that transcoded the
+        WHOLE song, connected, warmed up for 2.5 s, waited for the talk grant, and padded 3.5 s of
+        silence after the song before SPEAKERSTOP — seconds of silence between every two songs.
+        Now the child (`--playlist`) keeps one session open and decodes songs as a stream, and the
+        next song's URL is fetched and handed over while the current one plays, so it starts on
+        the next frame. The child reports, one line each: TRACK i (song i is now heard), SKIP i
+        (song i could not be played), IDLE (everything sent, waiting for a next URL), END.
+        A lullaby next in the queue ends the run; the queue loop then plays it natively.
+        """
         import asyncio
 
         from . import talk
+
+        try:
+            url = await self._extract_media_url(first_id)
+        except Exception:
+            _LOGGER.exception("Exception in _extract_media_url:")
+            return "next"
+
+        # One talker per camera speaker (talk.SpeakerArbiter): a live talk from the card may
+        # have started since this queue did.
+        arbiter = talk.get_arbiter(self.hass)
+        if not arbiter.try_claim(self._device_id, "player"):
+            _LOGGER.warning("Speaker is in use by a live talk — dropping the rest of the queue")
+            self._queue.clear()
+            return "stop"
+
+        result = "next"
+        proc = None
+        sent = [first_id]  # raw ids in the order written: the child's track numbers
+        resolved = -1  # highest track number the child has started or skipped
+        closed = False
+
+        async def _close():
+            nonlocal closed
+            if not closed:
+                closed = True
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+
+        async def _feed_next():
+            """Hand the child the next song, or end the run at a lullaby."""
+            while not closed:
+                nxt = self._next_song(session_tracks, refill, timer_min, expired)
+                if nxt is None:
+                    return  # nothing queued yet; IDLE ends the run if it stays that way
+                if not _is_song(nxt):
+                    self._queue.insert(0, nxt)  # a lullaby: played after this run, natively
+                    await _close()
+                    return
+                try:
+                    nxt_url = await self._extract_media_url(nxt)
+                except Exception:
+                    _LOGGER.exception("Exception in _extract_media_url:")
+                    continue
+                try:
+                    proc.stdin.write(nxt_url.encode() + b"\n")
+                    await proc.stdin.drain()
+                except (BrokenPipeError, ConnectionResetError):
+                    await _close()
+                    return
+                sent.append(nxt)
+                return
+
+        try:
+            # Credentials go in the child's environment only, never argv.
+            env = talk.build_backchannel_env(self._cam, self._options)
+            stderr_dest = await talk.open_debug_stderr(self.hass, self._options)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable or "python3",
+                    talk.BACKCHANNEL_SCRIPT,
+                    "--playlist",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=stderr_dest,
+                    env=env,
+                )
+            finally:
+                if hasattr(stderr_dest, "close"):
+                    stderr_dest.close()
+            self._backchannel_proc = proc
+            proc.stdin.write(url.encode() + b"\n")
+            await proc.stdin.drain()
+
+            while True:
+                # Short slices: a Play Time change mid-song (or reaching the session budget)
+                # stops playback within ~5 s instead of only between songs.
+                if expired():
+                    _LOGGER.info("Speaker play time expired — stopping playback")
+                    self._queue.clear()
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    result = "stop"
+                    break
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=5)
+                except TimeoutError:
+                    continue
+                if not line:
+                    break  # the child has ended
+                parts = line.decode("ascii", "replace").split()
+                if len(parts) < 2 or parts[0] != "@@TALK":
+                    continue
+                event = parts[1]
+                if event in ("TRACK", "SKIP") and len(parts) >= 3 and parts[2].isdigit():
+                    i = int(parts[2])
+                    if i >= len(sent):
+                        continue
+                    resolved = max(resolved, i)
+                    rid = sent[i]
+                    if event == "TRACK":
+                        refill["ok"] = True
+                        if rid not in session_tracks:
+                            session_tracks.append(rid)
+                        self._attr_state = MediaPlayerState.PLAYING
+                        self._attr_media_content_id = rid
+                        self._attr_media_title = rid
+                        self.async_write_ha_state()
+                        if self._attr_repeat == RepeatMode.ONE:
+                            self._queue.insert(0, rid)
+                        elif self._attr_repeat == RepeatMode.ALL:
+                            self._queue.append(rid)
+                    else:
+                        _LOGGER.warning("Could not play %s on the speaker — skipping it", rid)
+                    if resolved == len(sent) - 1:
+                        await _feed_next()  # the last song handed over has started: fetch the next
+                elif event == "IDLE":
+                    if resolved == len(sent) - 1:
+                        await _feed_next()  # something may have been queued since
+                    if resolved == len(sent) - 1:
+                        await _close()  # nothing more: the child plays out and ends
+                elif event == "ERROR":
+                    _LOGGER.warning("Speaker playback stopped: %s", " ".join(parts[2:]))
+            await proc.wait()
+        finally:
+            # Only once the child has actually exited — a terminated child is still sending
+            # SPEAKERSTOP — and also when this task is cancelled (a replaced song, a stop, a reload).
+            arbiter.release_after_exit(self._device_id, "player", proc)
+        self._backchannel_proc = None
+        return result
+
+    async def _queue_loop(self):
+        import asyncio
 
         current_task = asyncio.current_task()
         loop = asyncio.get_running_loop()
@@ -562,7 +724,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         # Tracks played this session (songs only) so Play Time can LOOP them:
         # "Play Time: 30 min" means play for 30 minutes, not "play once, max 30".
         session_tracks = []
-        played_ok_since_refill = True
+        refill = {"ok": True}  # a song really played since the last Play Time refill
 
         def _timer_min():
             return _get_timer_minutes(self.hass, f"cuboai_speaker_timer_{self._device_id}")
@@ -581,8 +743,8 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                     # Queue drained: while a Play Time is set, loop the session's
                     # songs until the budget is spent. The played_ok guard avoids
                     # a hot loop if every track fails to extract/play instantly.
-                    if _should_loop_playback(_timer_min(), bool(session_tracks), _expired()) and played_ok_since_refill:
-                        played_ok_since_refill = False
+                    if _should_loop_playback(_timer_min(), bool(session_tracks), _expired()) and refill["ok"]:
+                        refill["ok"] = False
                         self._queue.extend(session_tracks)
                         continue
                     break
@@ -594,13 +756,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 self._attr_media_title = raw_media_id
                 self.async_write_ha_state()
 
-                is_lullaby = (
-                    not raw_media_id.startswith("http")
-                    and "youtube" not in raw_media_id
-                    and "spotify" not in raw_media_id
-                    and "ytsearch" not in raw_media_id
-                    and not raw_media_id.startswith("/")
-                )
+                is_lullaby = not _is_song(raw_media_id)
 
                 if is_lullaby:
                     # It's a lullaby! Find the lullaby entity and trigger it natively
@@ -633,75 +789,10 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                         _LOGGER.error("Lullaby entity not found")
                     continue
 
-                # Standard audio stream processing
-                try:
-                    extracted_url = await self._extract_media_url(raw_media_id)
-                except Exception:
-                    _LOGGER.exception("Exception in _extract_media_url:")
-                    continue
-
-                # One talker per camera speaker (talk.SpeakerArbiter): a live
-                # talk from the card may have started since this queue did.
-                arbiter = talk.get_arbiter(self.hass)
-                if not arbiter.try_claim(self._device_id, "player"):
-                    _LOGGER.warning("Speaker is in use by a live talk — dropping the rest of the queue")
-                    self._queue.clear()
+                # Songs: this one and every song queued after it play in ONE talk session
+                # (gapless), until the queue runs out, reaches a lullaby, or stops.
+                if await self._play_song_run(raw_media_id, session_tracks, refill, _timer_min, _expired) == "stop":
                     break
-
-                proc = None
-                try:
-                    # Credentials go in the child's environment only, never argv.
-                    env = talk.build_backchannel_env(self._cam, self._options)
-                    stderr_dest = await talk.open_debug_stderr(self.hass, self._options)
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            sys.executable or "python3",
-                            talk.BACKCHANNEL_SCRIPT,
-                            extracted_url,
-                            stdout=asyncio.subprocess.DEVNULL,
-                            stderr=stderr_dest,
-                            env=env,
-                        )
-                    finally:
-                        if hasattr(stderr_dest, "close"):
-                            stderr_dest.close()
-                    self._backchannel_proc = proc
-
-                    # Remember this song so Play Time can loop the session, and note
-                    # that real playback happened (clears the hot-loop guard).
-                    played_ok_since_refill = True
-                    if raw_media_id not in session_tracks:
-                        session_tracks.append(raw_media_id)
-
-                    # Poll the track in short slices so a Play Time change mid-song
-                    # (or reaching the session budget) stops playback within ~5 s
-                    # instead of only between tracks.
-                    while True:
-                        if _expired():
-                            _LOGGER.info("Speaker play time expired — stopping playback")
-                            self._queue.clear()
-                            try:
-                                proc.terminate()
-                            except Exception:
-                                pass
-                            break
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=5)
-                            break  # track finished on its own
-                        except TimeoutError:
-                            continue  # re-check the budget and keep waiting
-                finally:
-                    # Only once the child has actually exited — a terminated child
-                    # is still sending SPEAKERSTOP — and also when this task is
-                    # cancelled (a replaced song, a stop, a reload).
-                    arbiter.release_after_exit(self._device_id, "player", proc)
-
-                self._backchannel_proc = None
-
-                if self._attr_repeat == RepeatMode.ONE:
-                    self._queue.insert(0, raw_media_id)
-                elif self._attr_repeat == RepeatMode.ALL:
-                    self._queue.append(raw_media_id)
 
             # Queue empty
             if self._queue_task == current_task:
