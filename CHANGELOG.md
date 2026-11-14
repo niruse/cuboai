@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.56]
+
+### Added
+- **Play all in the song collections.** A green *Play all* button under the style and language
+  buttons plays every song the view shows, one after another, on the camera's speaker. Shuffle
+  mixes the order; Repeat and Play time work as they do for a saved playlist.
+- **50 more songs** (135 in all): 49 Russian lullabies from Мир Томми и Молли (Russian sleep now has
+  56 songs) and "Синий трактор – По полям" in Russian baby songs. Every new link was opened and
+  checked like the first ones.
+
+### Docs
+- README: an example for the song collection options (choose languages and styles, or hide the
+  collections).
+
 ## [2.6.55]
 
 ### Fixed
