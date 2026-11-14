@@ -306,6 +306,32 @@ function cuboaiYoutubeUrl(id) {
   return `https://www.youtube.com/watch?v=${id}`;
 }
 
+// Where the speaker is in the playing song, in seconds, or null when it does not say (a
+// lullaby, a song whose length is unknown). HA's media_position is as of
+// media_position_updated_at, so the time since then is added while it plays.
+function cuboaiSpeakerPosition(attrs, nowMs) {
+  const a = attrs || {};
+  const pos = Number(a.media_position), dur = Number(a.media_duration);
+  if (a.media_position == null || a.media_duration == null || !isFinite(pos) || !(dur > 0)) return null;
+  const at = Date.parse(a.media_position_updated_at || '');
+  const live = isFinite(at) ? pos + Math.max(0, (nowMs - at) / 1000) : pos;
+  return Math.min(dur, Math.max(0, live));
+}
+
+// The point a -15 / +15 s press asks for: never before the start, never past 1 s before the
+// end (the song plays out and the next one follows). null when there is nothing to seek in.
+function cuboaiSeekTarget(attrs, nowMs, delta) {
+  const pos = cuboaiSpeakerPosition(attrs, nowMs);
+  if (pos == null) return null;
+  const dur = Number(attrs.media_duration);
+  return Math.round(Math.min(Math.max(0, dur - 1), Math.max(0, pos + delta)) * 10) / 10;
+}
+
+function cuboaiFmtTime(secs) {
+  const t = Math.max(0, Math.floor(Number(secs) || 0));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+}
+
 // The collection song's name for a playing URL (any YouTube form), for "Now Playing".
 function cuboaiCollectionSongName(url, list = CUBOAI_SONG_COLLECTIONS) {
   const m = String(url || '').match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([0-9A-Za-z_-]{11})/);
@@ -1750,6 +1776,7 @@ class CuboAICameraCard extends HTMLElement {
     if (this._dvrNudge) { clearTimeout(this._dvrNudge); this._dvrNudge = null; }
     if (this._dvrResize) { this._dvrResize.disconnect(); this._dvrResize = null; }
     if (this._tsClock) { clearInterval(this._tsClock); this._tsClock = null; }
+    if (this._seekTick) { clearInterval(this._seekTick); this._seekTick = null; }
     if (this._playerWait) { clearTimeout(this._playerWait); this._playerWait = null; }
     // Never leave the microphone open on a card nobody is looking at. Checked a
     // moment later, not now: a dashboard that re-flows its columns (masonry, on
@@ -3222,9 +3249,16 @@ class CuboAICameraCard extends HTMLElement {
 
             <div id="nowPlaying" class="cubo-row" style="display: none; background: rgba(3, 169, 244, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(3, 169, 244, 0.2); margin-bottom: 12px; align-items: center;">
               <ha-icon icon="mdi:volume-high" style="color: var(--primary-color, #03a9f4); margin-right: 8px;"></ha-icon>
-              <div style="display: flex; flex-direction: column; min-width: 0; gap: 2px;">
+              <div style="display: flex; flex-direction: column; min-width: 0; gap: 2px; flex: 1;">
                 <span id="nowPlayingText" style="font-weight: bold; font-size: 13px; color: var(--primary-color, #03a9f4);">Now Playing: ...</span>
                 <span id="nowPlayingFrom" dir="auto" style="display: none; font-size: 11px; color: var(--secondary-text-color, #727272);"></span>
+                <div id="nowSeek" dir="ltr" style="display: none; align-items: center; gap: 4px; width: 100%; margin-top: 2px;">
+                  <ha-icon-button id="seekBackBtn" label="-15 s" title="-15 s" style="--mdc-icon-button-size: 32px; --mdc-icon-size: 20px;"><ha-icon icon="mdi:rewind-15"></ha-icon></ha-icon-button>
+                  <span id="nowPos" style="font-size: 11px; font-variant-numeric: tabular-nums; color: var(--secondary-text-color, #727272); min-width: 32px; text-align: right;">0:00</span>
+                  <input id="seekBar" type="range" min="0" max="1" step="1" value="0" aria-label="Song position" style="flex: 1; min-width: 60px; margin: 0; accent-color: var(--primary-color, #03a9f4); cursor: pointer;">
+                  <span id="nowLeft" style="font-size: 11px; font-variant-numeric: tabular-nums; color: var(--secondary-text-color, #727272); min-width: 36px;">-0:00</span>
+                  <ha-icon-button id="seekFwdBtn" label="+15 s" title="+15 s" style="--mdc-icon-button-size: 32px; --mdc-icon-size: 20px;"><ha-icon icon="mdi:fast-forward-15"></ha-icon></ha-icon-button>
+                </div>
               </div>
             </div>
 
@@ -3962,6 +3996,40 @@ class CuboAICameraCard extends HTMLElement {
              }
           });
           
+          // -15 / +15 s inside the playing song: the speaker moves within its open talk
+          // session (no reconnect, no gap).
+          const seekBy = (delta) => {
+            const st = this._hass && this._hass.states[this._speakerEntityId];
+            const target = st ? cuboaiSeekTarget(st.attributes, Date.now(), delta) : null;
+            if (target == null) return;
+            this._hass.callService('media_player', 'media_seek', { entity_id: this._speakerEntityId, seek_position: target });
+          };
+          const seekBackBtn = this.musicBar.querySelector('#seekBackBtn');
+          const seekFwdBtn = this.musicBar.querySelector('#seekFwdBtn');
+          if (seekBackBtn) seekBackBtn.addEventListener('click', () => seekBy(-15));
+          if (seekFwdBtn) seekFwdBtn.addEventListener('click', () => seekBy(15));
+          const seekBar = this.musicBar.querySelector('#seekBar');
+          if (seekBar) {
+            // While the finger is down the bar is the user's: the 1 s tick must not pull it back.
+            seekBar.addEventListener('input', () => {
+              this._seekDragging = true;
+              const dur = Number(seekBar.max) || 0;
+              const v = Number(seekBar.value) || 0;
+              const posEl = this.musicBar.querySelector('#nowPos');
+              const leftEl = this.musicBar.querySelector('#nowLeft');
+              if (posEl) posEl.textContent = cuboaiFmtTime(v);
+              if (leftEl) leftEl.textContent = '-' + cuboaiFmtTime(Math.max(0, dur - v));
+            });
+            seekBar.addEventListener('change', () => {
+              this._seekDragging = false;
+              const dur = Number(seekBar.max) || 0;
+              const target = Math.min(Math.max(0, dur - 1), Math.max(0, Number(seekBar.value) || 0));
+              if (this._hass && dur > 0) {
+                this._hass.callService('media_player', 'media_seek', { entity_id: this._speakerEntityId, seek_position: target });
+              }
+            });
+          }
+
           stopBtn.addEventListener('click', () => {
              if (this._hass) {
                  this._hass.callService('media_player', 'media_stop', {
@@ -4924,8 +4992,10 @@ class CuboAICameraCard extends HTMLElement {
           nowPlayingFrom.textContent = fromText;
           nowPlayingFrom.style.display = fromText ? 'block' : 'none';
         }
+        this._updateSeekControls(isLullabyPlaying ? null : speakerState);
       } else {
         nowPlayingDiv.style.display = 'none';
+        this._updateSeekControls(null);
         
         // Reset playlist button if not playing anymore
         if (this._playlistActive && !this._isAdvancing) {
@@ -4957,6 +5027,40 @@ class CuboAICameraCard extends HTMLElement {
         this._isAdvancing = false;
       }, 2000);
     }
+  }
+
+  // The song bar under Now Playing, like any player: time played, a bar to drag, time left,
+  // and -15/+15 s. Shown only while the speaker streams a song whose length it knows. A 1 s tick
+  // keeps it moving between state updates.
+  _updateSeekControls(speakerState) {
+    const box = this.musicBar && this.musicBar.querySelector('#nowSeek');
+    const posEl = this.musicBar && this.musicBar.querySelector('#nowPos');
+    if (!box || !posEl) return;
+    const paint = () => {
+      const st = this._hass && this._hass.states[this._speakerEntityId];
+      const attrs = st && st.state === 'playing' ? st.attributes : null;
+      const pos = attrs ? cuboaiSpeakerPosition(attrs, Date.now()) : null;
+      if (pos == null) {
+        box.style.display = 'none';
+        if (this._seekTick) { clearInterval(this._seekTick); this._seekTick = null; }
+        return false;
+      }
+      box.style.display = 'flex';
+      if (this._seekDragging) return true;               // the user is holding the bar
+      const dur = Number(attrs.media_duration);
+      posEl.textContent = cuboaiFmtTime(pos);
+      const leftEl = this.musicBar.querySelector('#nowLeft');
+      if (leftEl) leftEl.textContent = '-' + cuboaiFmtTime(Math.max(0, dur - pos));
+      const bar = this.musicBar.querySelector('#seekBar');
+      if (bar) {
+        bar.max = String(Math.max(1, Math.floor(dur)));
+        bar.value = String(Math.floor(pos));
+      }
+      return true;
+    };
+    const shown = speakerState ? paint() : (box.style.display = 'none', false);
+    if (shown && !this._seekTick) this._seekTick = setInterval(paint, 1000);
+    if (!shown && this._seekTick) { clearInterval(this._seekTick); this._seekTick = null; }
   }
 
   getCardSize() {

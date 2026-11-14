@@ -40,7 +40,8 @@ If you found this project helpful, you can [buy me a coffee](https://coff.ee/nir
   status, Wi-Fi and more. [Entities](#entities)
 - **Controls** — night light and brightness, night vision, lullabies with a timer, sleep mode,
   status LED, flip, baby presence.
-- **Lullabies and music** — the camera's own lullabies, or YouTube / Spotify links, with playlists.
+- **Lullabies and music** — the camera's own lullabies, or YouTube / Spotify links, with playlists,
+  gapless song-to-song playback and a seek bar.
 - **Sleep timeline** — every sensor on one shared time axis. [Timeline card](#timeline-card-and-sleep-figures)
 - **Record to an NVR** — Frigate, Synology, Hikvision/HiLook, Blue Iris… over RTSP.
   [RTSP](#rtsp--recording-to-an-nvr)
@@ -183,7 +184,7 @@ camera directly (most of them) exist once the camera's local connection details 
 | Night Light Brightness | number | 1–100 % |
 | Night Vision | select | Auto / On / Off |
 | Lullaby | media player | The camera's 34 built-in lullabies, white noise and nature sounds |
-| Speaker | media player | Plays text-to-speech, media and YouTube/Spotify links on the camera's speaker |
+| Speaker | media player | Plays text-to-speech, media and YouTube/Spotify links on the camera's speaker; queued songs play back to back, with seek, position and length |
 | Lullaby Timer | number | 0 / 30 / 60 minutes (0 = repeat) |
 | Speaker Play Time | number | 0–120 minutes, for the card's music |
 | Sleep Mode | switch | Camera privacy/sleep mode |
@@ -297,6 +298,13 @@ default_song_language: ru
   shuffle, repeat and a play-time limit.
 - The library, playlists and shuffle/repeat settings are stored in Home Assistant, so every phone
   and tablet sees the same ones.
+- **Songs follow each other without a gap.** A queue (Play all, a playlist, or songs added while
+  one plays) streams through one open connection to the speaker, and the next song is fetched while
+  the current one plays, so it starts the moment the last one ends.
+- **A song bar like any player** under Now Playing: time played, a bar to drag to any point, time
+  left, and -15 s / +15 s buttons. Moving in the song is instant (no reconnect, no silence). The
+  Speaker entity supports seeking too, so Home Assistant's own media controls and automations
+  (`media_player.media_seek`) can use it. Lullabies the camera plays itself have no bar.
 - With the song cache on, a song downloaded once replays instantly.
 - **Song collections**: ready-made YouTube songs in five styles: sleep, morning & play, baby songs,
   calm music and white noise. The sung styles come in Hebrew, English and Russian. **Play all** queues
