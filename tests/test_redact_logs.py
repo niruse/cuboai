@@ -132,6 +132,11 @@ def test_install_is_idempotent():
     assert logging.getLogRecordFactory() is factory
 
 
+def test_records_without_logger_names_are_ignored():
+    redact.install()
+    assert logging.makeLogRecord({}).name is None
+
+
 def test_go2rtc_output_is_cleaned_on_its_way_to_the_log(tmp_path):
     read_fd, write_fd = os.pipe()
     with os.fdopen(write_fd, "wb") as go2rtc:

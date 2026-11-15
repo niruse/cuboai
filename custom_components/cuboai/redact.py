@@ -102,7 +102,9 @@ def install() -> None:
 
     def factory(*args, **kwargs):
         record = previous(*args, **kwargs)
-        if record.name == LOGGER_PREFIX or record.name.startswith(LOGGER_PREFIX + "."):
+        if isinstance(record.name, str) and (
+            record.name == LOGGER_PREFIX or record.name.startswith(LOGGER_PREFIX + ".")
+        ):
             _clean_record(record)
         return record
 
