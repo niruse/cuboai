@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.64]
+
+### Fixed
+- **Other integrations no longer fail to load because of CuboAI's log cleaning** (#133). The log
+  cleaning added in 2.6.59 runs on every log line in Home Assistant and assumed each one has a
+  logger name. A line without one (Python's `logging.makeLogRecord({})` makes these) made it
+  crash, which broke other integrations that log that way, such as the InfluxDB client. Lines
+  without a name are now passed through untouched. Thanks @brott8!
+
 ## [2.6.63]
 
 ### Added
