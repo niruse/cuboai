@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Opening the dashboard should no longer make the picture jump, flash black or say
+  *Reconnecting…*.** Opening the card (most visibly in the iPhone app) showed the snapshot, one
+  black frame, then a smaller picture with black bars and *Reconnecting…* over it, and only then
+  the live picture at full size, with everything under the picture moving up and down. The card
+  now remembers each camera's shape, so after the first time a camera has been opened on a device
+  the picture is meant to keep one size from the moment the card opens; the snapshot or the last
+  picture is kept on screen until the live picture is showing (on a cold start, from the moment
+  the snapshot has loaded, and for at most 25 seconds); and *Reconnecting…* is kept for a real
+  reconnect, such as moving between Wi-Fi and mobile data. If opening takes more than 4 seconds
+  the card says *Connecting…*. Checked against a model of the player, not yet on an iPhone.
+
 ## [2.6.65]
 
 ### Added
