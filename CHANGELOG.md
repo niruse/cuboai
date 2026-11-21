@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **The floating-window button no longer stops working.** On an iPhone, pressing it before the
+  video had its first picture opened the floating window for a moment and closed it, and after
+  that the button did nothing until the app was restarted. The button is now dimmed, and ignores
+  a press, until the video has a picture.
+- **The floating video window no longer stays black.** With the video in a floating window
+  (Picture-in-Picture) and the app in the background, a stream that dropped was not reconnected
+  until the app was opened again, because the card leaves pages in the background alone. It now
+  reconnects while a floating window is showing. And on an iPhone the floating window went black
+  the moment you moved to another dashboard view: an iPhone draws nothing for a video that is no
+  longer in the page. The player now stays in the page, hidden, for as long as its floating
+  window is open, and keeps playing there when Home Assistant rebuilds the card.
 - **Opening the dashboard should no longer make the picture jump, flash black or say
   *Reconnecting…*.** Opening the card (most visibly in the iPhone app) showed the snapshot, one
   black frame, then a smaller picture with black bars and *Reconnecting…* over it, and only then

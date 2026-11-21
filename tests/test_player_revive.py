@@ -138,9 +138,10 @@ console.log(JSON.stringify({ early, dials: c.player.dials }));
 def test_the_card_runs_the_revive_on_its_tick():
     """Kill: the revive not called from the card's attach interval."""
     src = _src()
-    tick = src[src.index("this.attachInterval = setInterval(() => {") :][:400]
+    tick = src[src.index("this.attachInterval = setInterval(() => {") :][:900]
     assert "cuboaiRevivePlayer(this, Date.now())" in tick
     assert "cuboaiStopReplaced(this, Date.now())" in tick
+    assert "cuboaiParkFloating(this" in tick
     cls = src.index("class CuboAICameraCard extends HTMLElement {")
     set_config = src[src.index("  setConfig(config) {", cls) :][:120]
     assert "cuboaiRegisterCard(this);" in set_config
@@ -206,6 +207,181 @@ console.log(JSON.stringify(out));
     assert got["back"] == ["stuck:MSE", "restarted:MSE"], "HA back: the overdue restart should run at once"
     assert got["hidden"] == 0 and got["visibleAgain"] == 0, "time in the background counted as stuck"
     assert got["offPage"] == 0 and got["recording"] == 0
+
+
+def test_a_floating_window_is_revived_although_the_page_is_in_the_background(tmp_path):
+    """Reported 2026-11-21 (iPhone app): with the video in a floating window and the app in
+    the background, the picture went black after a while and stayed black until the app was
+    opened. The revive skipped every page in the background; the floating window is exactly
+    where the user is looking then.
+
+    Kill: skip the revive whenever the page is hidden, or revive every hidden page."""
+    got = _node(
+        """
+const out = {};
+doc.hidden = true;
+let c = makeCard(); c.video.webkitPresentationMode = 'picture-in-picture';
+out.iphone = tick(c, 0, 4000).length; out.iphoneDials = c.player.dials;
+c = makeCard(); doc.pictureInPictureElement = c.video;
+out.chrome = tick(c, 0, 4000).length;
+c = makeCard(); c.video._pipVideo = {}; doc.pictureInPictureElement = c.video._pipVideo;
+out.canvas = tick(c, 0, 4000).length;
+c = makeCard(); doc.pictureInPictureElement = {};          // some other video's window
+out.other = tick(c, 0, 4000).length;
+doc.pictureInPictureElement = null;
+c = makeCard(); c.video.webkitPresentationMode = 'inline';
+out.inline = tick(c, 0, 4000).length;
+c = makeCard(); c.video.webkitPresentationMode = 'picture-in-picture'; c.player.ws = {};
+out.stuck = tick(c, 0, 10500).filter(d => String(d[1]).startsWith('stuck')).length;
+console.log(JSON.stringify(out));
+""",
+        tmp_path,
+    )
+    assert got["iphone"] == 1 and got["iphoneDials"] == 1, "a dead stream in an iPhone floating window was not dialled"
+    assert got["chrome"] == 1 and got["canvas"] == 1, "a floating window on Chrome was not recognised"
+    assert got["other"] == 0 and got["inline"] == 0, "a page in the background with no floating window was revived"
+    assert got["stuck"] == 1, "a hung connection behind a floating window was never restarted"
+
+
+def test_a_replaced_card_keeps_playing_while_its_video_is_floating(tmp_path):
+    """Back in the app, Home Assistant builds a new card. The old card's video is the one in the
+    floating window, so stopping it as "replaced" would blank the window the user is watching.
+    It plays on until the window is closed, and is stopped then.
+
+    Kill: stop a replaced card whose video is floating, or never stop it after the window closes."""
+    got = _node(
+        """
+const out = {};
+doc.hidden = false; doc.pictureInPictureElement = null;
+const old = makeCard(), fresh = makeCard();
+old._liveDeviceId = fresh._liveDeviceId = 'CAM1';
+[old, fresh].forEach(cuboaiRegisterCard);
+old.video.webkitPresentationMode = 'picture-in-picture';
+old.isConnected = false; cuboaiStopReplaced(old, 0);
+out.floating = cuboaiStopReplaced(old, 20000); out.stopsFloating = old.player.stops;
+old.video.webkitPresentationMode = 'inline';
+out.closed = cuboaiStopReplaced(old, 20500); out.stops = old.player.stops;
+console.log(JSON.stringify(out));
+""",
+        tmp_path,
+    )
+    assert got["floating"] is False and got["stopsFloating"] == 0, "a card watched in a floating window was stopped"
+    assert got["closed"] is True and got["stops"] == 1, "the replaced card was not stopped once its window closed"
+
+
+def test_a_floating_video_is_kept_in_the_page_when_its_card_leaves(tmp_path):
+    """Measured 2026-11-21 on an iPhone with the card's diagnostics: moving to another dashboard
+    view took the card off the page, and the floating window went black although the video was
+    still connected, playing and counting time. An iPhone draws nothing for a video that is not
+    in the page, so the player is parked in a holder on <body> until the card is back or the
+    window is closed, and then put back exactly where it was. The holder is a full-size opaque
+    box behind the page: a 2 px transparent one was measured to leave the window black.
+
+    Kill: leave the player in the detached card; park a card that is on the page, not floating,
+    or playing a recording; hide the holder with display:none; or put the player back in the
+    wrong place / never."""
+    got = _node(
+        """
+const out = {};
+const mk = () => {
+  const c = makeCard();
+  const body = { kids: [], appendChild(n) { this.kids.push(n); n.parentNode = this; } };
+  doc.body = body;
+  doc.createElement = () => ({ style: {}, kids: [], appendChild(n) { this.kids.push(n); n.parentNode = this; },
+    remove() { body.kids = body.kids.filter(k => k !== this); this.removed = true; } });
+  c.moves = [];
+  const after = { parentNode: c };
+  c.player.nextSibling = after; c.after = after;
+  c.insertBefore = (n, ref) => { c.moves.push(ref === after ? 'before-next' : 'before-?'); n.parentNode = c; };
+  c.appendChild = (n) => { c.moves.push('append'); n.parentNode = c; };
+  c.video.webkitPresentationMode = 'picture-in-picture';
+  return { c, body };
+};
+let { c, body } = mk();
+out.onPage = cuboaiParkFloating(c);                       // the card is on the page: nothing to do
+c.isConnected = false;
+out.parked = cuboaiParkFloating(c);
+out.holderCss = body.kids[0].style.cssText;
+out.inHolder = c.player.parentNode === body.kids[0];
+out.again = cuboaiParkFloating(c);                         // already parked, still floating
+c.isConnected = true;
+out.back = cuboaiParkFloating(c); out.moves = c.moves; out.holderGone = body.kids.length === 0;
+
+({ c, body } = mk()); c.isConnected = false; cuboaiParkFloating(c);
+c.video.webkitPresentationMode = 'inline';                 // the window was closed, the card still away
+out.closed = cuboaiParkFloating(c); out.closedMoves = c.moves;
+
+({ c, body } = mk()); c.isConnected = false; c.video.webkitPresentationMode = 'inline';
+out.notFloating = cuboaiParkFloating(c);
+({ c, body } = mk()); c.isConnected = false; c._dvrPlaying = true;
+out.recording = cuboaiParkFloating(c);
+({ c, body } = mk()); c.isConnected = false; c.after.parentNode = null;   // its old neighbour is gone
+cuboaiParkFloating(c); c.isConnected = true; cuboaiParkFloating(c); out.noNeighbour = c.moves;
+out.empty = cuboaiParkFloating({});
+console.log(JSON.stringify(out));
+""",
+        tmp_path,
+    )
+    assert got["onPage"] is None, "a card that is on the page was parked"
+    assert got["parked"] == "parked" and got["inHolder"], "the floating video's player was left in the detached card"
+    css = got["holderCss"]
+    assert "display" not in css and "opacity" not in css, "the holder hides the video in a way that blanks the window"
+    assert "width: 160px" in css and "height: 90px" in css and "z-index: -1" in css, (
+        "not a full-size box behind the page"
+    )
+    assert got["again"] is None, "a parked player was moved again"
+    assert got["back"] == "unparked" and got["moves"] == ["before-next"] and got["holderGone"], (
+        "the player did not go back where it was"
+    )
+    assert got["closed"] == "unparked" and got["closedMoves"] == ["before-next"], (
+        "a closed window left the player parked"
+    )
+    assert got["notFloating"] is None and got["recording"] is None, "parked a player that is not a live floating window"
+    assert got["noNeighbour"] == ["append"], "the player was not put back when its old neighbour was gone"
+    assert got["empty"] is None
+
+
+def test_the_floating_window_button_waits_for_a_picture(tmp_path):
+    """Measured 2026-11-21 on an iPhone, three times: the floating-window button pressed while
+    the video had no frame yet opened the window and closed it 40 ms later, and after that no
+    press worked until the page was reloaded. The card shows a remembered picture at once, so
+    the button looked ready. A press before the first frame is swallowed before the player
+    sees it, and the button is dimmed until then.
+
+    Kill: let an early press through; swallow a press once there is a picture; leave the button
+    dimmed; or add the listener again on every tick."""
+    got = _node(
+        """
+const out = {};
+const c = makeCard();
+const btn = { style: {}, added: 0, addEventListener(name, fn, capture) { this.added += 1; this.fn = fn; this.capture = capture; } };
+c.player.querySelector = (s) => (s === '.pictureinpicture' ? btn : null);
+const press = () => { const e = { stopped: false, prevented: false,
+  stopImmediatePropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } }; btn.fn(e); return [e.stopped, e.prevented]; };
+c.video.readyState = 1; c.video.videoWidth = 0;
+out.early = cuboaiGuardPipButton(c); out.dim = btn.style.opacity; out.capture = btn.capture;
+out.earlyPress = press();
+c.video.readyState = 4; c.video.videoWidth = 0;            // sound before picture: still no frame
+cuboaiGuardPipButton(c); out.soundOnlyPress = press();
+c.video.videoWidth = 1920;
+out.ready = cuboaiGuardPipButton(c); out.lit = btn.style.opacity; out.readyPress = press();
+cuboaiGuardPipButton(c); out.added = btn.added;
+c.video.readyState = 0; c.video.videoWidth = 0;            // the player is switching source
+cuboaiGuardPipButton(c); out.dimAgain = btn.style.opacity;
+const none = makeCard(); out.noButton = cuboaiGuardPipButton(none); out.empty = cuboaiGuardPipButton({});
+console.log(JSON.stringify(out));
+""",
+        tmp_path,
+    )
+    assert got["early"] is False and got["dim"] == "0.35" and got["capture"] is True
+    assert got["earlyPress"] == [True, True], "a press before the first frame reached the player"
+    assert got["soundOnlyPress"] == [True, True], "a press with sound but no picture reached the player"
+    assert got["ready"] is True and got["lit"] == "" and got["readyPress"] == [False, False], (
+        "a press with a picture was swallowed"
+    )
+    assert got["added"] == 1, "the listener was added again"
+    assert got["dimAgain"] == "0.35", "the button stayed lit while the player had no picture"
+    assert got["noButton"] is None and got["empty"] is None
 
 
 def test_a_restart_is_not_repeated_before_the_new_stream_had_its_chance(tmp_path):

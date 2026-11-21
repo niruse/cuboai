@@ -1233,11 +1233,101 @@ function cuboaiDressVideo(card) {
 // (disconnect, then dial once the old connection is gone). Both wait for Home
 // Assistant's connection and leave alone a card that is not on screen, a page
 // in the background, the card's own recording playback and a video that is
-// paused with a picture (the user's pause). Returns what it did (for
-// diagnostics), else null.
+// paused with a picture (the user's pause). A page in the background whose
+// video is in a floating window (Picture-in-Picture) is NOT left alone: the
+// window is all the user sees then, and a stream that ended stayed black in it
+// until the app was opened again. Returns what it did (for diagnostics), else
+// null.
 const CUBOAI_REVIVE_AFTER_MS = 3000;
 const CUBOAI_REVIVE_EVERY_MS = 3000;
 const CUBOAI_STUCK_MS = 10000;
+
+// Is this <video> shown in a floating window? iPhone/Safari say so on the
+// element; Chrome names the element on the document, and for the card's own
+// canvas window (desktop Chrome) that element is the hidden copy.
+function cuboaiInPip(video) {
+  if (!video) return false;
+  if (video.webkitPresentationMode === 'picture-in-picture') return true;
+  const doc = video.ownerDocument;
+  const el = doc && doc.pictureInPictureElement;
+  return !!el && (el === video || el === video._pipVideo);
+}
+
+// The player's floating-window button must not be pressed before the video has
+// a picture. Measured 2026-11-21 on an iPhone with the card's diagnostics, three
+// times: a press while the video had no frame yet (readyState 1, no size)
+// opened the floating window and closed it 40 ms later, and from then on every
+// press did nothing until the page was reloaded. Since the card shows a
+// remembered picture the moment it opens, the button looks ready before the
+// video is. Until there is a frame the press is swallowed (capture phase, so
+// the player never sees it) and the button is dimmed. Returns whether the
+// button is ready, or null when the player has none.
+function cuboaiPipReady(video) {
+  return !!video && video.readyState >= 2 && video.videoWidth > 0;
+}
+
+function cuboaiGuardPipButton(card) {
+  const root = card && card.content && (card.content.shadowRoot || card.content);
+  const btn = root && typeof root.querySelector === 'function' ? root.querySelector('.pictureinpicture') : null;
+  if (!btn) return null;
+  const videoNow = () => { try { return card._cuboMedia().video; } catch (e) { return null; } };
+  if (!btn.__cuboPipGuard) {
+    btn.__cuboPipGuard = true;
+    btn.addEventListener('click', (e) => {
+      if (cuboaiPipReady(videoNow())) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (typeof cuboaiPipDiag === 'function') cuboaiPipDiag(card, 'pipblocked');   // TEMPORARY diagnostics
+    }, true);
+  }
+  const ready = cuboaiPipReady(videoNow());
+  const want = ready ? '' : '0.35';
+  if (btn.style && btn.style.opacity !== want) btn.style.opacity = want;
+  return ready;
+}
+
+// An iPhone draws nothing in a floating window whose <video> is not in the page.
+// Measured 2026-11-21 with the card's diagnostics: the user moved to another
+// dashboard view, the card left the page, and the floating window went black
+// while the video was still connected, playing and counting time. So while a
+// card that is off the page has its video in a floating window, its player is
+// kept in the page, in a holder on <body>. The holder must be a real, full-size
+// box: measured the same day, a 2 px almost transparent holder left the window
+// black, while a 160x90 opaque one kept the picture -- also when it sits behind
+// the page (z-index -1), where nobody sees it. So: full size, opaque, behind.
+// The player goes back into the card, where it was, when the card is on the
+// page again or the window is closed. Only where the element itself says it is
+// floating (iPhone, Safari). Returns 'parked' / 'unparked' when it moved the
+// player, else null.
+const CUBOAI_PARK_CSS = 'position: fixed; left: 8px; bottom: 8px; width: 160px; height: 90px; overflow: hidden; z-index: -1; pointer-events: none;';
+
+function cuboaiParkFloating(card) {
+  const p = card && card.content;
+  if (!p) return null;
+  let video = null;
+  try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
+  const floating = !!video && video.webkitPresentationMode === 'picture-in-picture';
+  if (!card._parked) {
+    if (card.isConnected || !floating || card._dvrPlaying) return null;
+    const doc = video.ownerDocument;
+    if (!doc || !doc.body || typeof doc.createElement !== 'function') return null;
+    const holder = doc.createElement('div');
+    holder.style.cssText = CUBOAI_PARK_CSS;
+    card._parked = { holder, next: p.nextSibling };
+    doc.body.appendChild(holder);
+    holder.appendChild(p);
+    return 'parked';
+  }
+  if (!card.isConnected && floating) return null;        // still the only place it is shown
+  const { holder, next } = card._parked;
+  card._parked = null;
+  try {
+    if (next && next.parentNode === card) card.insertBefore(p, next);
+    else card.appendChild(p);
+  } catch (e) { /* the card is gone: the holder goes, and the player with it */ }
+  try { holder.remove(); } catch (e) { /* already gone */ }
+  return 'unparked';
+}
 
 function cuboaiPlayerMode(p) {
   const modeEl = p && typeof p.querySelector === 'function' ? p.querySelector('.mode') : null;
@@ -1252,7 +1342,7 @@ function cuboaiRevivePlayer(card, t) {
   const p = card && card.content;
   const video = card && typeof card._cuboMedia === 'function' ? card._cuboMedia().video : null;
   const doc = video && video.ownerDocument;
-  if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden)) {
+  if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden && !cuboaiInPip(video))) {
     card._deadSince = null;
     card._progressAt = null;
     card._restartAt = null;
@@ -1300,6 +1390,114 @@ function cuboaiRevivePlayer(card, t) {
   return null;
 }
 
+// TEMPORARY -- floating-window diagnostics, NOT for a release. The floating
+// window going black on an iPhone (app in the background, phone locked) cannot
+// be reproduced on a desk, so the card records what the phone does and sends
+// it to Home Assistant's log (system_log.write, logger
+// custom_components.cuboai.pipdiag), where it is read with `ha core logs`.
+// Records are kept in the page while Home Assistant's connection is down (a
+// frozen or background page) and sent when it is back; each carries its own
+// clock. Capped per page, and every failure is swallowed: it must never touch
+// playback. Remove this block, its call in the tick and CUBOAI_PIPDIAG_* when
+// the floating window is fixed.
+const CUBOAI_PIPDIAG_MAX = 400;
+
+const cuboaiPipDiagQueue = [];
+let cuboaiPipDiagCount = 0;
+
+function cuboaiPipDiagState(card) {
+  const p = card && card.content;
+  let video = null;
+  try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
+  let mode = null;
+  try { mode = String((p.shadowRoot || p).querySelector('.mode').innerText || ''); } catch (e) { /* no label */ }
+  return {
+    hid: typeof document !== 'undefined' ? !!document.hidden : null,
+    pm: video ? (video.webkitPresentationMode || null) : null,
+    pip: !!(video && cuboaiInPip(video)),
+    paused: video ? !!video.paused : null,
+    rs: video ? video.readyState : null,
+    vw: video ? video.videoWidth : null,
+    ws: p && p.ws ? p.ws.readyState : null,
+    pc: p && p.pc ? (p.pc.connectionState || 'pc') : null,
+    mode,
+    on: !!(card && card.isConnected),
+  };
+}
+
+function cuboaiPipDiag(card, ev, extra) {
+  try {
+    if (cuboaiPipDiagCount >= CUBOAI_PIPDIAG_MAX) return;
+    cuboaiPipDiagCount += 1;
+    let video = null;
+    try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
+    const rec = Object.assign({ ev, n: cuboaiPipDiagCount, at: new Date().toISOString().slice(11, 23),
+      ct: video ? Math.round(video.currentTime * 10) / 10 : null }, cuboaiPipDiagState(card), extra || {});
+    cuboaiPipDiagQueue.push(JSON.stringify(rec));
+  } catch (e) { /* never break playback */ }
+}
+
+function cuboaiPipDiagFlush(card) {
+  try {
+    const hass = card && card._hass;
+    if (!cuboaiPipDiagQueue.length || !hass || typeof hass.callService !== 'function') return;
+    if (hass.connection && hass.connection.connected === false) return;
+    const batch = cuboaiPipDiagQueue.splice(0, 8);
+    const sent = hass.callService('system_log', 'write', {
+      logger: 'custom_components.cuboai.pipdiag', level: 'warning', message: 'PIPDIAG ' + batch.join(' || '),
+    });
+    if (sent && typeof sent.catch === 'function') sent.catch(() => { cuboaiPipDiagQueue.unshift(...batch); });
+  } catch (e) { /* never break playback */ }
+}
+
+// Once per 500 ms tick: a gap between ticks (the page was frozen), any change of
+// the state above, what the revive and the replaced-card stop did, and a
+// heartbeat every 5 s while the video is in a floating window or the page is
+// hidden. Listeners for the events a tick can miss are added once.
+function cuboaiPipDiagTick(card, t, revived, replaced) {
+  try {
+    const prev = card._pipDiagAt;
+    card._pipDiagAt = t;
+    if (prev != null && t - prev >= 3000) cuboaiPipDiag(card, 'gap', { ms: Math.round(t - prev) });
+    if (revived) cuboaiPipDiag(card, 'revive', { r: String(revived) });
+    if (replaced) cuboaiPipDiag(card, 'replaced');
+    const st = cuboaiPipDiagState(card);
+    const key = JSON.stringify(st);
+    if (key !== card._pipDiagKey) {
+      card._pipDiagKey = key;
+      cuboaiPipDiag(card, 'chg');
+    } else if ((st.pip || st.hid) && (card._pipDiagBeat == null || t - card._pipDiagBeat >= 5000)) {
+      card._pipDiagBeat = t;
+      cuboaiPipDiag(card, 'beat');
+    }
+    if (!card._pipDiagDoc && typeof document !== 'undefined') {
+      card._pipDiagDoc = true;
+      document.addEventListener('visibilitychange', () => cuboaiPipDiag(card, 'vis'));
+      window.addEventListener('pageshow', () => cuboaiPipDiag(card, 'pageshow'));
+      window.addEventListener('pagehide', () => cuboaiPipDiag(card, 'pagehide'));
+    }
+    let video = null;
+    try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
+    if (video && !video.__cuboPipDiag) {
+      video.__cuboPipDiag = true;
+      ['webkitpresentationmodechanged', 'enterpictureinpicture', 'leavepictureinpicture', 'pause', 'play',
+        'ended', 'emptied', 'stalled', 'waiting', 'error'].forEach((name) => {
+        video.addEventListener(name, () => cuboaiPipDiag(card, 'v:' + name));
+      });
+    }
+    const root = card.content && (card.content.shadowRoot || card.content);
+    const btn = root && typeof root.querySelector === 'function' ? root.querySelector('.pictureinpicture') : null;
+    if (btn && !btn.__cuboPipDiag) {
+      btn.__cuboPipDiag = true;
+      btn.addEventListener('click', () => {
+        cuboaiPipDiag(card, 'pipclick');
+        setTimeout(() => cuboaiPipDiag(card, 'pipclick+1s'), 1000);
+      }, true);
+    }
+    cuboaiPipDiagFlush(card);
+  } catch (e) { /* never break playback */ }
+}
+
 // Home Assistant sometimes replaces a dashboard's cards with new ones (seen on
 // the iPhone app about 8 s after a page load). With `background: true` the old
 // card's player keeps its stream up although nobody can see it: a second
@@ -1307,6 +1505,9 @@ function cuboaiRevivePlayer(card, t) {
 // page for CUBOAI_REPLACED_MS while another card shows the same camera stops
 // its player; put back on the page, webrtc-camera dials again by itself. A
 // card merely off screen (another dashboard view) keeps playing, as before.
+// A replaced card whose video is in a floating window is left playing (its
+// player is kept in the page, see cuboaiParkFloating): the window is where the
+// user is watching. It is stopped as soon as the window is closed.
 const CUBOAI_REPLACED_MS = 10000;
 const cuboaiCardRefs = [];
 
@@ -1337,6 +1538,9 @@ function cuboaiStopReplaced(card, t) {
       continue;
     }
     if (other !== card && other.isConnected && other._liveDeviceId === id) {
+      let floating = false;
+      try { floating = cuboaiInPip(card._cuboMedia().video); } catch (e) { /* no player */ }
+      if (floating) return false;                        // still watched, in its floating window
       card._stoppedAsReplaced = true;
       try { p.ondisconnect(); } catch (e) { /* already stopped */ }
       return true;
@@ -2142,6 +2346,10 @@ class CuboAICameraCard extends HTMLElement {
     // rotating the phone) takes the card out and puts it straight back, which
     // must not end a talk. A card really gone is still stopped, one task later.
     if (this._mic) setTimeout(() => { if (!this.isConnected && this._mic) this._cuboStopMic('card_removed'); }, 0);
+    // A floating window must not wait for the next tick: an iPhone blanks it the
+    // moment its video is off the page. One task later, for the same reason as
+    // the microphone above (a re-flow takes the card out and puts it back).
+    setTimeout(() => { try { if (cuboaiParkFloating(this)) cuboaiPipDiag(this, 'parked'); } catch (e) { /* the tick tries again */ } }, 0);
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
 
@@ -4701,8 +4909,12 @@ class CuboAICameraCard extends HTMLElement {
         // Use an interval to ensure the button stays attached even if the child re-renders
         if (!this.attachInterval) {
           this.attachInterval = setInterval(() => {
-            cuboaiStopReplaced(this, Date.now());
-            cuboaiRevivePlayer(this, Date.now());
+            cuboaiGuardPipButton(this);
+            const parkedNow = cuboaiParkFloating(this);
+            if (parkedNow) cuboaiPipDiag(this, parkedNow);   // TEMPORARY diagnostics
+            const replacedNow = cuboaiStopReplaced(this, Date.now());
+            const revivedNow = cuboaiRevivePlayer(this, Date.now());
+            cuboaiPipDiagTick(this, Date.now(), revivedNow, replacedNow);   // TEMPORARY diagnostics
             // Penetrate Shadow DOM if it exists
             const root = this.content.shadowRoot || this.content;
             const player = root.querySelector('.player') || root.querySelector('.card') || root;
