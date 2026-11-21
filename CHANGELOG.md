@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.65]
+
+### Added
+- **A volume slider for music, under Now Playing.** Music reaches the camera in two ways, and the
+  one slider controls whichever is playing: a lullaby the camera plays itself (the camera's own
+  lullaby volume), or a song streamed to the speaker (YouTube, Spotify, text-to-speech, any
+  `play_media`). A label next to the slider says which of the two it is moving.
+- **The Speaker entity's volume now changes the sound.** `media_player.volume_set` on the Speaker
+  used to store a number that nothing used. The camera has no working speaker-volume command, so
+  the volume is applied to the song before it is sent. Changing it while a song plays takes effect
+  within about a second, with no reconnect. 100% is the sound as it was before this version, and
+  lower values turn it down. This works from any Home Assistant media control or automation, not
+  only from the card. Live talk through the microphone is not affected.
+
+### Changed
+- **The Speaker's volume starts at 100% after this update**, whatever it showed before (usually
+  50%), because the old number never changed the sound. Set the level you want once; it is kept
+  across restarts from then on.
+
+### Fixed
+- **Lullaby volume no longer lands one step low or jumps back.** Setting 29% sent 28 to the camera,
+  and the entity kept showing the old level until the next poll.
+- **A lullaby no longer flips back after a command.** Reading the camera's state takes about 13
+  seconds, and a read that began before a command finished after it and overwrote it: a lullaby
+  you stopped showed as playing again, one you started showed as idle (and was then stopped by
+  the Speaker's queue), and the volume jumped to the old level. For 30 seconds after a command the
+  Lullaby entity now shows what was commanded.
+
 ## [2.6.64]
 
 ### Fixed

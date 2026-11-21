@@ -309,6 +309,12 @@ default_song_language: ru
   left, and -15 s / +15 s buttons. Moving in the song is instant (no reconnect, no silence). The
   Speaker entity supports seeking too, so Home Assistant's own media controls and automations
   (`media_player.media_seek`) can use it. Lullabies the camera plays itself have no bar.
+- **One volume slider** under Now Playing, for whichever is playing: a lullaby the camera plays
+  itself (the camera's own lullaby volume, on the Lullaby entity) or a song streamed to the speaker
+  (on the Speaker entity). The camera has no speaker-volume command of its own, so a streamed
+  song's volume is applied before it is sent: 100% is the unchanged sound and lower values turn it
+  down. A change while a song plays is heard within about a second. Both also work with
+  `media_player.volume_set` from automations and Home Assistant's own media controls.
 - With the song cache on, a song downloaded once replays instantly.
 - **Song collections**: ready-made YouTube songs in five styles: sleep, morning & play, baby songs,
   calm music and white noise. The sung styles come in Hebrew, English and Russian. **Play all** queues

@@ -1715,13 +1715,21 @@ class _TrackAacEncoder:
     it decodes, and the encoder, its FIFO and its pts run on across tracks, so the next song
     starts on the very next 64 ms frame. `finish()` flushes the end of the playlist only.
 
-    Same format as `_aac_units` / `_LiveAacEncoder` (16 kHz stereo AAC-LC, hand-built ADTS)."""
+    Same format as `_aac_units` / `_LiveAacEncoder` (16 kHz stereo AAC-LC, hand-built ADTS).
 
-    def __init__(self, rate=16000, bit_rate=32000):
+    `gain` is the speaker's music volume: a linear amplitude multiplier from 0.0 to 1.0 (1.0 =
+    unchanged), applied with libav's `volume` filter before encoding, as in `_aac_units`. The
+    camera has no working speaker-level command, so this is the only volume there is. A track
+    reads it when it starts decoding; to change it mid-song the caller decodes the song again
+    from where it is (`_PlaylistFeed`'s VOL line)."""
+
+    def __init__(self, rate=16000, bit_rate=32000, gain=1.0):
         import av
         self._av = av
         self.rate = rate
         self._bit_rate = bit_rate
+        self.gain = 1.0
+        self.set_gain(gain)
         self._enc = self._new_encoder()
         self._fifo = av.AudioFifo()
         self._pts = 0
@@ -1735,6 +1743,45 @@ class _TrackAacEncoder:
         enc.bit_rate = self._bit_rate
         enc.open()
         return enc
+
+    def set_gain(self, gain):
+        """Volume for the tracks decoded from now on, clamped to 0.0-1.0 (no amplification: it
+        clips). Anything that is not a number leaves the volume as it was."""
+        try:
+            gain = float(gain)
+        except (TypeError, ValueError):
+            return
+        if gain != gain:                                 # NaN
+            return
+        self.gain = min(1.0, max(0.0, gain))
+
+    def _gain_graph(self):
+        """libav's volume filter for the current gain; None at full volume (frames untouched)."""
+        if self.gain == 1.0:
+            return None
+        graph = self._av.filter.Graph()
+        src = graph.add_abuffer(format='fltp', sample_rate=self.rate, layout='stereo')
+        vol = graph.add('volume', volume=f"{self.gain:.4f}")
+        snk = graph.add('abuffersink')
+        src.link_to(vol)
+        vol.link_to(snk)
+        graph.configure()
+        return graph
+
+    def _write(self, rf, graph):
+        """One resampled frame into the FIFO, through the volume filter when there is one."""
+        if graph is None:
+            rf.pts = None
+            self._fifo.write(rf)
+            return
+        graph.push(rf)
+        while True:
+            try:
+                gf = graph.pull()
+            except (self._av.error.BlockingIOError, self._av.error.EOFError):
+                break
+            gf.pts = None
+            self._fifo.write(gf)
 
     def _units(self, fr):
         fr.pts = self._pts
@@ -1756,6 +1803,7 @@ class _TrackAacEncoder:
         """Yield one track's ADTS frames as it decodes, from `start` seconds in. Under 1024
         samples of its end stay in the FIFO and lead the next track (no padding, no gap)."""
         resampler = self._av.AudioResampler(format='fltp', layout='stereo', rate=self.rate)
+        graph = self._gain_graph()
         with self._av.open(path, format=format, options=options) as inp:
             if start > 0:
                 # Lands on the packet at or before `start`; the frames before it are skipped below.
@@ -1765,12 +1813,10 @@ class _TrackAacEncoder:
                     continue
                 frame.pts = None
                 for rf in resampler.resample(frame):
-                    rf.pts = None
-                    self._fifo.write(rf)
+                    self._write(rf, graph)
                 yield from self._drain()
         for rf in resampler.resample(None):              # the resampler's own tail
-            rf.pts = None
-            self._fifo.write(rf)
+            self._write(rf, graph)
         yield from self._drain()
 
     def finish(self):

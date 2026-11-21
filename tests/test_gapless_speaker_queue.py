@@ -26,6 +26,7 @@ class _Child:
         self.argv = argv
         self.written = []
         self.seeks = []  # SEEK lines received
+        self.vols = []  # VOL lines received
         self.stdin_closed = False
         self.gone = {}  # url -> how many more times it is skipped (a deleted cache file)
         self.terminated = False
@@ -49,6 +50,8 @@ class _Child:
                     elif line.startswith("SEEK "):
                         child.seeks.append(float(line.split()[1]))
                         child._emit(f"SEEKED {child._started - 1} {line.split()[1]}")
+                    elif line.startswith("VOL "):
+                        child.vols.append(float(line.split()[1]))
                     else:
                         child._got(line)
 
@@ -151,6 +154,8 @@ def rig(monkeypatch):
     mp._options = {}
     mp._queue = []
     mp._attr_repeat = RepeatMode.OFF
+    mp._attr_volume_level = 1.0
+    mp._attr_media_title = None
     mp._attr_state = MediaPlayerState.IDLE
     mp._backchannel_proc = None
     mp.async_write_ha_state = lambda: titles.append(mp._attr_media_title)
@@ -357,6 +362,79 @@ async def test_the_last_song_ends_with_end_not_eof(rig):
     await rig.mp.async_media_seek(5)
     await task
     assert rig.children[0].seeks == [5.0]
+
+
+def _gain_arg(child):
+    return float(child.argv[child.argv.index("--gain") + 1])
+
+
+async def test_the_child_starts_at_the_speakers_volume(rig):
+    """The stored volume is the gain the session starts at: 50% is a quarter of the amplitude
+    (squared, so the slider feels even), 100% is the unchanged sound.
+
+    Kill: do not pass --gain, or pass the volume unsquared."""
+    rig.mp._attr_volume_level = 0.5
+    await _run(rig, "https://youtu.be/a")
+    assert _gain_arg(rig.children[0]) == 0.25
+    rig.mp._attr_volume_level = 1.0
+    await _run(rig, "https://youtu.be/b")
+    assert _gain_arg(rig.children[1]) == 1.0
+
+
+async def test_volume_set_while_a_song_plays_reaches_the_child(rig):
+    """volume_set used to only store a number. Now the running child gets VOL <gain> and
+    re-encodes the song from where it is.
+
+    Kill: store the level and send nothing."""
+    task = asyncio.ensure_future(_run(rig, "https://youtu.be/a"))
+    for _ in range(200):
+        await asyncio.sleep(0.001)
+        if rig.titles:
+            break
+    await rig.mp.async_set_volume_level(0.3)
+    await asyncio.sleep(0.01)
+    assert rig.children[0].vols == [0.09]
+    assert rig.mp._attr_volume_level == 0.3
+    assert rig.children[0].written == ["u:https://youtu.be/a"]  # not mistaken for a song
+    await task
+
+
+async def test_volume_set_with_nothing_streaming_is_kept_for_the_next_play(rig):
+    """Idle, or a lullaby the camera plays itself: nothing to write to, the level is stored.
+
+    Kill: write to a missing pipe / raise."""
+    rig.mp._playlist_stdin = None
+    await rig.mp.async_set_volume_level(0.6)
+    assert rig.children == []
+    assert rig.mp._attr_volume_level == 0.6
+    await rig.mp.async_set_volume_level(7)
+    assert rig.mp._attr_volume_level == 1.0  # never above full volume
+
+
+async def test_a_level_saved_before_volume_worked_is_not_restored(rig, monkeypatch):
+    """Older versions stored volume_level (0.5 by default) without it changing the sound.
+    Restoring that after the update would turn the music down by itself. Only a level saved by
+    a version that applied it (volume_applied) comes back.
+
+    Kill: restore volume_level whatever version wrote it."""
+
+    async def _noop(self):
+        return None
+
+    monkeypatch.setattr(media_player.RestoreEntity, "async_added_to_hass", _noop, raising=False)
+
+    async def _restore(attrs):
+        async def _last():
+            return SimpleNamespace(attributes=attrs)
+
+        rig.mp._attr_volume_level = 1.0
+        rig.mp.async_get_last_state = _last
+        await rig.mp.async_added_to_hass()
+        return rig.mp._attr_volume_level
+
+    assert await _restore({"volume_level": 0.5, "repeat": "off"}) == 1.0
+    assert await _restore({"volume_level": 0.5, "volume_applied": True}) == 0.5
+    assert rig.mp.extra_state_attributes["volume_applied"] is True
 
 
 def test_the_speaker_advertises_seek():

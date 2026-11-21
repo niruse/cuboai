@@ -1133,8 +1133,9 @@ async def test_the_speaker_child_holds_the_speaker_until_it_exits(rig):
     await asyncio.wait_for(entity._queue_loop(), 3)
     assert owner_at_spawn == ["player"]
     spawn = rig.spawned[0]
-    # One --playlist child for the queue (gapless songs); the URL goes in on its stdin.
-    assert spawn.argv == [sys.executable, talk.BACKCHANNEL_SCRIPT, "--playlist"]
+    # One --playlist child for the queue (gapless songs); the URL goes in on its stdin. It
+    # starts at the speaker's volume (full, for an entity that has none set).
+    assert spawn.argv == [sys.executable, talk.BACKCHANNEL_SCRIPT, "--playlist", "--gain", "1.0000"]
     assert bytes(spawn.proc.stdin.data) == b"http://127.0.0.1:8123/api/tts_proxy/hello.mp3\n"
     assert spawn.kwargs["env"]["CUBOAI_PASSWORD"] == CREDS["password"]
     assert rig.arbiter.owner(DEVICE) is None

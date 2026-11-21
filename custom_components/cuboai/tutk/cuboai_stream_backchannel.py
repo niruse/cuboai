@@ -387,6 +387,11 @@ class _PlaylistFeed:
                     the new audio goes out on the next frame
       END           no more songs: play out what is queued, then end (EOF does the same; END
                     keeps stdin open for a SEEK on the last song)
+      VOL <gain>    the music volume, 0.0-1.0 (the encoder's gain). The decoder runs ~10 s ahead
+                    of the camera, so what is queued was encoded at the old volume: it is dropped
+                    and the song being heard is decoded again from where it is (a SEEK to the
+                    heard position), so the change is heard on the next frames. `gain` is the
+                    volume the session starts at.
     Progress goes to Home Assistant through `emit`:
       DUR i <secs>   song i is <secs> long (when known), as soon as it is opened
       TRACK i        the first frame of song i (0-based, in stdin order) went to the camera
@@ -398,12 +403,14 @@ class _PlaylistFeed:
     talk loop reads it as "nothing more will ever come", so it must not be true while songs are
     still queued (a short playlist decoded before the camera's grant would otherwise never play)."""
 
-    def __init__(self, stream, encoder=None, emit=None, ahead=156, open_track=_open_track):
+    def __init__(self, stream, encoder=None, emit=None, ahead=156, open_track=_open_track, gain=1.0):
         import collections
 
         if encoder is None:
             from cuboai_pure import _TrackAacEncoder
-            encoder = _TrackAacEncoder()
+            encoder = _TrackAacEncoder(gain=gain)
+        elif gain != 1.0:
+            encoder.set_gain(gain)
         self._enc = encoder
         self.silent_unit = encoder.silent_unit
         self._emit = emit or (lambda line: None)
@@ -416,7 +423,12 @@ class _PlaylistFeed:
         self._next = 0                                   # the next song to decode
         self._busy = False                               # the decoder is inside a song
         self._playing = -1                               # the song being heard (its TRACK went out)
-        self._seek = None                                # (generation, secs) asked for, not yet served
+        # (generation, secs, song, seeking) asked for, not yet served. seeking is False only for
+        # a VOL before anything was heard: song 0 is then decoded again as a first play.
+        self._seek = None
+        self._heard_base = 0.0                           # where the song being heard started from
+        self._heard_frames = 0                           # ... and its frames taken since
+        self._seek_unheard = None                        # a served seek's target, until it is heard
         self._gen = 0                                    # bumped by every SEEK
         self._idle_sent = False
         self._finished = False                           # playlist ended, every frame queued
@@ -460,9 +472,37 @@ class _PlaylistFeed:
                     with self._cond:
                         if self._playing >= 0:
                             self._gen += 1
-                            self._seek = (self._gen, secs)
+                            self._seek = (self._gen, secs, self._playing, True)
                             self._queue.clear()          # what was queued is not played
                             self._cond.notify_all()
+                elif text.startswith("VOL "):
+                    try:
+                        gain = float(text.split()[1])
+                    except (IndexError, ValueError):
+                        continue
+                    with self._cond:
+                        before = getattr(self._enc, "gain", None)
+                        self._enc.set_gain(gain)
+                        if getattr(self._enc, "gain", None) == before:
+                            continue                     # nothing changed: nothing to decode again
+                        if self._playing >= 0:
+                            # A SEEK asked for but not heard yet (pending, or decoding) keeps
+                            # its target; else stay where we are.
+                            if self._seek is not None:
+                                secs = self._seek[1]
+                            elif self._seek_unheard is not None:
+                                secs = self._seek_unheard
+                            else:
+                                secs = self._heard_pos()
+                            job = (secs, self._playing, True)
+                        elif self._urls:
+                            job = (0.0, 0, False)        # decoded ahead, nothing heard yet
+                        else:
+                            continue
+                        self._gen += 1
+                        self._seek = (self._gen, *job)
+                        self._queue.clear()              # encoded at the old volume
+                        self._cond.notify_all()
                 else:
                     with self._cond:
                         if not self._ended:
@@ -502,12 +542,12 @@ class _PlaylistFeed:
                         self._cond.wait(0.5)
                     job = "song"
                     if self._seek is not None:
-                        gen, start = self._seek
+                        gen, start, i, seeking = self._seek
                         self._seek = None
-                        i = self._playing
+                        self._seek_unheard = start if seeking else None
                         self._next = i + 1               # the songs after it are decoded again
                         self._enc.reset()
-                        seeking, flushed = True, False
+                        flushed = False
                     elif self._next < len(self._urls):
                         gen, start, i, seeking = self._gen, 0.0, self._next, False
                         self._next += 1
@@ -588,6 +628,10 @@ class _PlaylistFeed:
     def _dbg(self, text):
         print(f"DEBUG: playlist +{time.monotonic() - self._t0:.1f}s {text}", file=sys.stderr, flush=True)
 
+    def _heard_pos(self):
+        """Seconds into the song being heard (call with the lock held): a frame is 1024 samples."""
+        return self._heard_base + self._heard_frames * 1024 / getattr(self._enc, "rate", 16000)
+
     # ── the talk loop's side ──
 
     @property
@@ -607,12 +651,17 @@ class _PlaylistFeed:
                     old = [t for k, t in self._tmp.items() if k < marker[1]]
                     self._tmp = {k: t for k, t in self._tmp.items() if k >= marker[1]}
                     self._playing = marker[1]
+                    self._heard_base, self._heard_frames = 0.0, 0
+                    self._seek_unheard = None
                     lines.append(f"TRACK {marker[1]}")
                 else:
+                    self._heard_base, self._heard_frames = marker[2], 0
+                    self._seek_unheard = None
                     lines.append(f"SEEKED {marker[1]} {marker[2]:.1f}")
                 self._dbg(f"{lines[-1]} at pull {self.pulls}, {self.silence} silence frames so far")
             if self._queue:
                 unit = self._queue.popleft()
+                self._heard_frames += 1
                 self._cond.notify_all()
             elif self._urls and not self._finished:
                 self.silence += 1                        # a gap the listener hears
@@ -631,7 +680,7 @@ def _handle_playlist(args, proto):
     """--playlist: stdin URLs -> ONE talk session (or --dry-run: no camera). Returns the exit code."""
     talk = _LiveTalk(proto)
     try:
-        talk.feed = _PlaylistFeed(_stdin_raw_lines(), emit=proto.emit)
+        talk.feed = _PlaylistFeed(_stdin_raw_lines(), emit=proto.emit, gain=getattr(args, "gain", 1.0))
         if args.dry_run:
             print("DEBUG: playlist DRY RUN - no camera, nothing plays", file=sys.stderr, flush=True)
             proto.emit("READY")
@@ -858,7 +907,14 @@ def main() -> None:
 
     if len(sys.argv) >= 2 and sys.argv[1] == "--playlist":
         import types
-        args = types.SimpleNamespace(dry_run="--dry-run" in sys.argv[2:])
+        rest = sys.argv[2:]
+        gain = 1.0                                       # --gain G: the volume the session starts at
+        if "--gain" in rest[:-1]:
+            try:
+                gain = float(rest[rest.index("--gain") + 1])
+            except ValueError:
+                pass
+        args = types.SimpleNamespace(dry_run="--dry-run" in rest, gain=gain)
         sys.exit(_handle_playlist(args, _Proto.claim_stdout()))
 
     if len(sys.argv) >= 2 and sys.argv[1].startswith("--"):

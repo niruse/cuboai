@@ -332,6 +332,22 @@ function cuboaiFmtTime(secs) {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
+// Which volume the slider under Now Playing moves. Music reaches the camera two ways, each with
+// its own volume: a lullaby the camera plays itself (the Lullaby entity: the camera's own
+// level), or a song streamed through the talk channel (the Speaker entity: a gain applied when
+// the song is encoded). A playing lullaby wins, as it does for the Now Playing title. percent
+// is null when the entity does not report a level. null when there is nothing to control.
+function cuboaiVolumeTarget(speakerId, speakerState, lullabyId, lullabyState) {
+  const lullaby = !!(lullabyId && lullabyState && lullabyState.state === 'playing');
+  const entityId = lullaby ? lullabyId : speakerId;
+  const st = lullaby ? lullabyState : speakerState;
+  if (!entityId || !st) return null;
+  const raw = (st.attributes || {}).volume_level;
+  const v = Number(raw);
+  const percent = raw == null || !isFinite(v) ? null : Math.round(Math.min(1, Math.max(0, v)) * 100);
+  return { entity_id: entityId, kind: lullaby ? 'lullaby' : 'stream', percent };
+}
+
 // The collection song's name for a playing URL (any YouTube form), for "Now Playing".
 function cuboaiCollectionSongName(url, list = CUBOAI_SONG_COLLECTIONS) {
   const m = String(url || '').match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([0-9A-Za-z_-]{11})/);
@@ -2491,7 +2507,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.64';
+        const CARD_VERSION = 'v2.6.65';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -3306,6 +3322,13 @@ class CuboAICameraCard extends HTMLElement {
                   <span id="nowLeft" style="font-size: 11px; font-variant-numeric: tabular-nums; color: var(--secondary-text-color, #727272); min-width: 36px;">-0:00</span>
                   <ha-icon-button id="seekFwdBtn" label="+15 s" title="+15 s" style="--mdc-icon-button-size: 32px; --mdc-icon-size: 20px;"><ha-icon icon="mdi:fast-forward-15"></ha-icon></ha-icon-button>
                 </div>
+                <div id="nowVol" dir="ltr" style="display: none; align-items: center; gap: 4px; width: 100%; margin-top: 2px;">
+                  <ha-icon id="nowVolIcon" icon="mdi:volume-medium" style="--mdc-icon-size: 20px; width: 32px; display: flex; justify-content: center; color: var(--secondary-text-color, #727272);"></ha-icon>
+                  <span id="nowVolKind" style="font-size: 11px; color: var(--secondary-text-color, #727272); min-width: 32px; text-align: right;"></span>
+                  <input id="volBar" type="range" min="0" max="100" step="1" value="100" aria-label="Volume" style="flex: 1; min-width: 60px; margin: 0; accent-color: var(--primary-color, #03a9f4); cursor: pointer;">
+                  <span id="nowVolPct" style="font-size: 11px; font-variant-numeric: tabular-nums; color: var(--secondary-text-color, #727272); min-width: 36px;">100%</span>
+                  <span style="width: 32px;"></span>
+                </div>
               </div>
             </div>
 
@@ -4082,6 +4105,26 @@ class CuboAICameraCard extends HTMLElement {
               if (this._hass && dur > 0) {
                 this._hass.callService('media_player', 'media_seek', { entity_id: this._speakerEntityId, seek_position: target });
               }
+            });
+          }
+
+          // One volume slider for both ways music plays: it moves whichever entity is playing
+          // now (cuboaiVolumeTarget). Sent on release only: for a streamed song each change
+          // re-encodes it from where it is.
+          const volBar = this.musicBar.querySelector('#volBar');
+          if (volBar) {
+            volBar.addEventListener('input', () => {
+              this._volDragging = true;
+              const pctEl = this.musicBar.querySelector('#nowVolPct');
+              if (pctEl) pctEl.textContent = `${Number(volBar.value) || 0}%`;
+            });
+            volBar.addEventListener('change', () => {
+              this._volDragging = false;
+              const hs = this._hass && this._hass.states;
+              const target = hs ? cuboaiVolumeTarget(this._speakerEntityId, hs[this._speakerEntityId], this._lullabyEntityId, hs[this._lullabyEntityId]) : null;
+              if (!target) return;
+              const level = Math.min(100, Math.max(0, Number(volBar.value) || 0)) / 100;
+              this._hass.callService('media_player', 'volume_set', { entity_id: target.entity_id, volume_level: level });
             });
           }
 
@@ -5113,9 +5156,11 @@ class CuboAICameraCard extends HTMLElement {
           nowPlayingFrom.style.display = fromText ? 'block' : 'none';
         }
         this._updateSeekControls(isLullabyPlaying ? null : speakerState);
+        this._updateVolumeControl(true);
       } else {
         nowPlayingDiv.style.display = 'none';
         this._updateSeekControls(null);
+        this._updateVolumeControl(false);
         
         // Reset playlist button if not playing anymore
         if (this._playlistActive && !this._isAdvancing) {
@@ -5181,6 +5226,31 @@ class CuboAICameraCard extends HTMLElement {
     const shown = speakerState ? paint() : (box.style.display = 'none', false);
     if (shown && !this._seekTick) this._seekTick = setInterval(paint, 1000);
     if (!shown && this._seekTick) { clearInterval(this._seekTick); this._seekTick = null; }
+  }
+
+  // The volume row under Now Playing: shows the level of whichever entity is playing (the
+  // camera's lullaby, or the streamed song) and says which one it is.
+  _updateVolumeControl(show) {
+    const box = this.musicBar && this.musicBar.querySelector('#nowVol');
+    if (!box) return;
+    const hs = this._hass && this._hass.states;
+    const target = show && hs ? cuboaiVolumeTarget(this._speakerEntityId, hs[this._speakerEntityId], this._lullabyEntityId, hs[this._lullabyEntityId]) : null;
+    if (!target) { box.style.display = 'none'; return; }
+    box.style.display = 'flex';
+    const lullaby = target.kind === 'lullaby';
+    const kindEl = this.musicBar.querySelector('#nowVolKind');
+    const label = lullaby ? 'Lullaby' : 'Song';
+    if (kindEl && kindEl.textContent !== label) kindEl.textContent = label;
+    box.title = lullaby ? 'Lullaby volume (the camera\'s own level)' : 'Song volume (streamed to the speaker)';
+    if (this._volDragging) return;                       // the user is holding the slider
+    if (target.percent == null) return;
+    const bar = this.musicBar.querySelector('#volBar');
+    const pctEl = this.musicBar.querySelector('#nowVolPct');
+    const iconEl = this.musicBar.querySelector('#nowVolIcon');
+    if (bar && bar.value !== String(target.percent)) bar.value = String(target.percent);
+    if (pctEl) pctEl.textContent = `${target.percent}%`;
+    const icon = target.percent === 0 ? 'mdi:volume-off' : target.percent < 35 ? 'mdi:volume-low' : target.percent < 70 ? 'mdi:volume-medium' : 'mdi:volume-high';
+    if (iconEl && iconEl.icon !== icon) iconEl.icon = icon;
   }
 
   getCardSize() {

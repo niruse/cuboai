@@ -225,6 +225,16 @@ def _execute_lullaby_cmd(uid, account, password, camera_ip, cmd_type: str, song_
         raise
 
 
+def _volume_to_gain(volume) -> float:
+    """The speaker's volume (0.0-1.0) as the encoder's linear gain. Squared, so the slider feels
+    even to the ear; 100% is the unchanged sound and nothing is ever amplified."""
+    try:
+        v = min(1.0, max(0.0, float(volume)))
+    except (TypeError, ValueError):
+        return 1.0
+    return round(v * v, 4)
+
+
 class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
     """Media Player entity to send audio to the CuboAI camera."""
 
@@ -250,7 +260,7 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         self._attr_state = MediaPlayerState.IDLE
         self._queue = []
         self._queue_task = None
-        self._attr_volume_level = 0.5
+        self._attr_volume_level = 1.0
         self._attr_repeat = RepeatMode.OFF
 
     @property
@@ -263,7 +273,8 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"device_id": self._device_id, "uid": self._cam.get("uid", "")}
+        # volume_applied: this version's volume_level really changes the sound (see the restore).
+        return {"device_id": self._device_id, "uid": self._cam.get("uid", ""), "volume_applied": True}
 
     @property
     def device_info(self):
@@ -288,8 +299,16 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                 rep = last.attributes.get("repeat")
                 if rep in ("off", "all", "one"):
                     self._attr_repeat = RepeatMode(rep)
+                # Before the volume reached the sound, volume_level was a stored number nobody
+                # heard (0.5 by default). Restoring that now would turn the music down by itself
+                # after the update, so only a level saved by a version that applied it counts.
                 vol = last.attributes.get("volume_level")
-                if isinstance(vol, (int, float)) and 0 <= vol <= 1:
+                if (
+                    last.attributes.get("volume_applied") is True
+                    and isinstance(vol, (int, float))
+                    and not isinstance(vol, bool)
+                    and 0 <= vol <= 1
+                ):
                     self._attr_volume_level = float(vol)
         except Exception:
             _LOGGER.debug("Could not restore speaker repeat/volume", exc_info=True)
@@ -298,13 +317,23 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
         await self.async_media_stop()
 
     async def async_set_volume_level(self, volume: float) -> None:
-        """Store the speaker volume (applied to the next queued track).
+        """Set the volume of the songs streamed to the speaker.
 
-        The entity advertises VOLUME_SET; without this override the base class
-        raises NotImplementedError and the UI shows an 'unknown error' toast.
+        The camera has no working speaker-level command, so the volume is a gain applied when
+        the song is encoded (`_volume_to_gain`). A playing song is re-encoded from where it is
+        by the child (VOL), in the open talk session; otherwise the level is kept for the next
+        play. Lullabies the camera plays itself have their own volume, on the Lullaby entity.
         """
-        self._attr_volume_level = volume
+        self._attr_volume_level = min(1.0, max(0.0, float(volume)))
         self.async_write_ha_state()
+        stdin = getattr(self, "_playlist_stdin", None)
+        if stdin is None:
+            return
+        try:
+            stdin.write(f"VOL {_volume_to_gain(self._attr_volume_level):.4f}\n".encode())
+            await stdin.drain()
+        except Exception:
+            _LOGGER.debug("Speaker volume not delivered", exc_info=True)
 
     async def async_set_repeat(self, repeat: RepeatMode) -> None:
         self._attr_repeat = repeat
@@ -701,6 +730,8 @@ class CuboAIMediaPlayer(RestoreEntity, MediaPlayerEntity):
                     sys.executable or "python3",
                     talk.BACKCHANNEL_SCRIPT,
                     "--playlist",
+                    "--gain",
+                    f"{_volume_to_gain(getattr(self, '_attr_volume_level', None)):.4f}",
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=stderr_dest,
@@ -971,10 +1002,38 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._catalog = LULLABY_CATALOG
         self._attr_source_list = sorted([v[1] for v in LULLABY_CATALOG.values()])
 
+    # What a command just set wins over what a poll says, for LULLABY_HOLD_S.
+    # A poll of the camera takes about 13 s. One that began before a command
+    # ends after it, with the camera's state from before the command, and used
+    # to overwrite it: the volume slider jumped back to the old level, a stopped
+    # lullaby showed as playing again, and a lullaby just started showed as
+    # idle (which made the Speaker's queue stop it). The poll cannot be told
+    # apart from a fresh one, so for this long after a command the entity shows
+    # what was commanded; after that, the camera's word.
+    LULLABY_HOLD_S = 30.0
+
+    def _hold(self, key, value):
+        import time
+
+        held = self.__dict__.setdefault("_held_values", {})
+        held[key] = (value, time.monotonic())
+
+    def _held(self, key, camera_value):
+        import time
+
+        held = self.__dict__.get("_held_values")
+        if not held or key not in held:
+            return camera_value
+        value, at = held[key]
+        if time.monotonic() - at > self.LULLABY_HOLD_S:
+            del held[key]
+            return camera_value
+        return value
+
     @property
     def state(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        playing = cam.get("local", {}).get("lullaby_playing")
+        playing = self._held("playing", cam.get("local", {}).get("lullaby_playing"))
         if playing is True:
             return MediaPlayerState.PLAYING
         elif playing is False:
@@ -984,7 +1043,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     @property
     def source(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        song_uuid = cam.get("local", {}).get("lullaby_song")
+        song_uuid = self._held("song", cam.get("local", {}).get("lullaby_song"))
         if song_uuid and song_uuid.upper() in self._catalog:
             return self._catalog[song_uuid.upper()][1]
         return None
@@ -992,7 +1051,7 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     @property
     def volume_level(self):
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        vol = cam.get("local", {}).get("lullaby_volume")
+        vol = self._held("volume", cam.get("local", {}).get("lullaby_volume"))
         if vol is not None:
             return float(vol) / 100.0
         return 0.5  # Default 50% — returning None causes HA validation errors
@@ -1115,11 +1174,13 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
             cam = self.coordinator.data["cameras"].get(self._device_id, {})
             if "local" in cam:
                 cam["local"]["lullaby_playing"] = True
+        self._hold("playing", True)
         self.async_write_ha_state()
 
         await self.hass.async_add_executor_job(
             _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "play", None, None, timer
         )
+        self._hold("playing", True)
         try:
             await self.coordinator.async_request_refresh()
         except Exception:
@@ -1128,18 +1189,21 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_media_stop(self):
         self._cancel_scheduled_stop()
         cam = self.coordinator.data.get("cameras", {}).get(self._device_id, {})
-        current_uuid = cam.get("local", {}).get("lullaby_song")
+        # The song just started here, if a stale poll has put the one before it back.
+        current_uuid = self._held("song", cam.get("local", {}).get("lullaby_song"))
 
         # Optimistic update
         if self.coordinator.data and "cameras" in self.coordinator.data:
             cam_data = self.coordinator.data["cameras"].get(self._device_id, {})
             if "local" in cam_data:
                 cam_data["local"]["lullaby_playing"] = False
+        self._hold("playing", False)
         self.async_write_ha_state()
 
         await self.hass.async_add_executor_job(
             _execute_lullaby_cmd, self._uid, self._account, self._password, self._camera_ip, "stop", current_uuid
         )
+        self._hold("playing", False)
         try:
             await self.coordinator.async_request_refresh()
         except Exception:
@@ -1159,6 +1223,8 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 if "local" in cam:
                     cam["local"]["lullaby_song"] = uuid
                     cam["local"]["lullaby_playing"] = True
+            self._hold("song", uuid)
+            self._hold("playing", True)
             self.async_write_ha_state()
 
             # Camera plays in repeat-forever mode; HA enforces the timer.
@@ -1173,6 +1239,8 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
                 None,
                 None,
             )
+            self._hold("song", uuid)
+            self._hold("playing", True)
             self._schedule_stop(timer, uuid)
             try:
                 await self.coordinator.async_request_refresh()
@@ -1205,19 +1273,46 @@ class CuboLullabyPlayer(CoordinatorEntity, MediaPlayerEntity):
         # HA volume is 0.0 to 1.0, API is 0 to 100. Preserve the running
         # session's timer semantics: card sessions stay repeat-forever
         # (HA stops them), native sessions keep the camera-side Lullaby Timer.
-        vol_int = int(volume * 100)
-        if getattr(self, "_stop_timer_task", None):
-            timer = None
-        else:
-            timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
-        await self.hass.async_add_executor_job(
-            _execute_lullaby_cmd,
-            self._uid,
-            self._account,
-            self._password,
-            self._camera_ip,
-            "volume",
-            None,
-            vol_int,
-            timer,
-        )
+        vol_int = min(100, max(0, round(volume * 100)))
+
+        # Shown at once and held (see _hold): the camera's level is only read
+        # back by a poll, and a poll under way would bring the old level back.
+        if self.coordinator.data and "cameras" in self.coordinator.data:
+            cam = self.coordinator.data["cameras"].get(self._device_id, {})
+            if "local" in cam:
+                cam["local"]["lullaby_volume"] = vol_int
+        self._hold("volume", vol_int)
+        self.async_write_ha_state()
+
+        # One write to the camera at a time, and only the latest level: each
+        # write opens its own connection to the camera and takes seconds, so
+        # the levels of a slider moved several times would otherwise race each
+        # other there. No poll is asked for afterwards: it takes ~13 s on the
+        # camera and would tell us only what we just set.
+        self._volume_wanted = vol_int
+        if getattr(self, "_volume_writing", False):
+            return
+        self._volume_writing = True
+        try:
+            while True:
+                want = self._volume_wanted
+                if getattr(self, "_stop_timer_task", None):
+                    timer = None
+                else:
+                    timer = _get_timer_minutes(self.hass, f"cuboai_lullaby_timer_{self._device_id}")
+                await self.hass.async_add_executor_job(
+                    _execute_lullaby_cmd,
+                    self._uid,
+                    self._account,
+                    self._password,
+                    self._camera_ip,
+                    "volume",
+                    None,
+                    want,
+                    timer,
+                )
+                if self._volume_wanted == want:
+                    break
+        finally:
+            self._volume_writing = False
+        self._hold("volume", self._volume_wanted)
