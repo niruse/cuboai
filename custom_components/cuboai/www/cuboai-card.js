@@ -1313,18 +1313,31 @@ function cuboaiParkFloating(card) {
     if (!doc || !doc.body || typeof doc.createElement !== 'function') return null;
     const holder = doc.createElement('div');
     holder.style.cssText = CUBOAI_PARK_CSS;
-    card._parked = { holder, next: p.nextSibling };
+    // A marker keeps the player's place in the card. Its neighbours cannot: the
+    // card moves its overlays into the player every tick, so the element that
+    // followed the player when it left is somewhere else by the time it comes
+    // back (seen 2026-11-21: the picture came back at the bottom of the card).
+    let mark = null;
+    try {
+      if (p.parentNode === card && typeof doc.createComment === 'function') {
+        mark = doc.createComment('cuboai-player');
+        card.insertBefore(mark, p);
+      }
+    } catch (e) { mark = null; }
+    card._parked = { holder, mark };
     doc.body.appendChild(holder);
     holder.appendChild(p);
     return 'parked';
   }
   if (!card.isConnected && floating) return null;        // still the only place it is shown
-  const { holder, next } = card._parked;
+  const { holder, mark } = card._parked;
   card._parked = null;
   try {
-    if (next && next.parentNode === card) card.insertBefore(p, next);
+    if (mark && mark.parentNode === card) card.insertBefore(p, mark);
+    else if (card.firstChild) card.insertBefore(p, card.firstChild);
     else card.appendChild(p);
   } catch (e) { /* the card is gone: the holder goes, and the player with it */ }
+  try { if (mark) mark.remove(); } catch (e) { /* already gone */ }
   try { holder.remove(); } catch (e) { /* already gone */ }
   return 'unparked';
 }
@@ -1515,6 +1528,38 @@ function cuboaiRegisterCard(card) {
   if (card.__cuboRegistered || typeof WeakRef !== 'function') return;
   card.__cuboRegistered = true;
   cuboaiCardRefs.push(new WeakRef(card));
+}
+
+// Back on the dashboard with the floating window still open, Home Assistant
+// builds a NEW card. It used to start a second stream of its own: the picture
+// showed twice (in the card and in the window), and the new stream sat for
+// about 8 s without a frame before the watchdog restarted it (both measured
+// 2026-11-21). The old card, with its player parked for the floating window, is
+// still alive and complete -- player, overlays, music bar, every listener. So
+// the new card starts nothing: it takes the old card in as its only child and
+// passes Home Assistant's updates on to it (card._proxy). The old card is on
+// the page again, its player goes back into it, and the video the user is
+// watching is the one the card shows. Only a card with the very same
+// configuration is taken in. Returns that card, else null.
+function cuboaiFloatingHost(card) {
+  if (!card || card.content || card._proxy) return null;
+  let cfg;
+  try { cfg = JSON.stringify(card._config || null); } catch (e) { return null; }
+  for (let i = cuboaiCardRefs.length - 1; i >= 0; i -= 1) {
+    const other = cuboaiCardRefs[i].deref();
+    if (!other) {
+      cuboaiCardRefs.splice(i, 1);
+      continue;
+    }
+    if (other === card || other.isConnected || !other._parked || !other.content) continue;
+    let video = null;
+    try { video = other._cuboMedia().video; } catch (e) { /* no player */ }
+    if (!video || video.webkitPresentationMode !== 'picture-in-picture') continue;
+    let theirs;
+    try { theirs = JSON.stringify(other._config || null); } catch (e) { continue; }
+    if (theirs === cfg) return other;
+  }
+  return null;
 }
 
 function cuboaiStopReplaced(card, t) {
@@ -2884,6 +2929,22 @@ class CuboAICameraCard extends HTMLElement {
       if (!hass || !hass.states) return;
       this._hass = hass;
       
+      // This card only hosts the card whose video is in a floating window
+      // (cuboaiFloatingHost): that one does all the work.
+      if (this._proxy) { this._proxy.hass = hass; return; }
+      if (!this.content) {
+        const host = cuboaiFloatingHost(this);
+        if (host) {
+          this._proxy = host;
+          this.style.display = 'block';
+          this.appendChild(host);
+          const moved = cuboaiParkFloating(host);          // its player back into it, at once
+          cuboaiPipDiag(host, 'adopted', { moved });       // TEMPORARY diagnostics
+          host.hass = hass;
+          return;
+        }
+      }
+
       let deviceId = this._config?.device_id;
       this._speakerEntityId = null;
       this._lullabyEntityId = null;
@@ -5348,8 +5409,11 @@ class CuboAICameraCard extends HTMLElement {
         this.content.hass = this._hass;
       }
       // Built once, so a re-render that detached the bar would lose it
-      // permanently; put it back instead.
-      if (this.dvrBar && !this.dvrBar.isConnected) this.appendChild(this.dvrBar);
+      // permanently; put it back instead. "Detached" means no longer this
+      // card's child, not "off the page": a whole card that is off the page for
+      // a moment (it is taken in by a new card, cuboaiFloatingHost) still has
+      // its bar in place, and appending it again moved it below the music.
+      if (this.dvrBar && this.dvrBar.parentNode !== this) this.appendChild(this.dvrBar);
     }
 
       let tempState = null;
@@ -5493,6 +5557,11 @@ class CuboAICameraCard extends HTMLElement {
     try {
       if (!config) {
         throw new Error("Invalid configuration (config is undefined)");
+      }
+      if (this._proxy) {                                   // hosting another card: it gets the change
+        this._config = config;
+        this._proxy.setConfig(config);
+        return;
       }
       this._config = config;
       if (this._userFilter === undefined) {

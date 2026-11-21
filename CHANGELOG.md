@@ -15,7 +15,9 @@ All notable changes to this project will be documented in this file.
   reconnects while a floating window is showing. And on an iPhone the floating window went black
   the moment you moved to another dashboard view: an iPhone draws nothing for a video that is no
   longer in the page. The player now stays in the page, hidden, for as long as its floating
-  window is open, and keeps playing there when Home Assistant rebuilds the card.
+  window is open. Back on the dashboard with the window still open, the card no longer starts a
+  second stream next to it (the picture showed twice, and the new one took about 8 seconds to
+  appear): it carries on with the one you are watching.
 - **Opening the dashboard should no longer make the picture jump, flash black or say
   *Reconnecting…*.** Opening the card (most visibly in the iPhone app) showed the snapshot, one
   black frame, then a smaller picture with black bars and *Reconnecting…* over it, and only then
