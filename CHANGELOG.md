@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **iPhone: black picture and no sound after unlocking the phone.** iOS freezes the Home Assistant
+  app while the phone is locked: it pauses the video and the stream connection dies, and the card
+  did not notice. A paused video looked like your own pause and was never started again, and a
+  frozen one waited out the 10-second watchdog. Now, when you come back after 3 seconds or more,
+  the card presses play on the video iOS paused (muted if the phone refuses sound without a tap;
+  the speaker button turns it back on) and restarts a picture that has not moved within 3 seconds.
+  Known: sound cannot keep playing *while* the phone is locked inside the Home Assistant app; iOS
+  suspends the app's web page, and no card code can prevent that.
+
 ## [2.6.65]
 
 ### Added

@@ -942,6 +942,30 @@ function cuboaiBridgeGap(video, deviceId) {
 const CUBOAI_REVIVE_AFTER_MS = 3000;
 const CUBOAI_REVIVE_EVERY_MS = 3000;
 const CUBOAI_STUCK_MS = 10000;
+// Back from a locked phone. iOS freezes the Home Assistant app while the phone
+// is locked: timers stop, the video is paused, the WebRTC connection dies --
+// and nothing told the player, so it came back to a black picture with no
+// sound and waited out the 10 s watchdog (longer if iOS left the video paused,
+// which looked like the user's own pause and was never touched). A page hidden,
+// or a tick gap (timers frozen) of CUBOAI_RESUME_AFTER_MS or more, counts as a
+// resume: for the next CUBOAI_STUCK_MS a paused video is pressed play (muted if
+// the phone refuses sound without a tap) and a picture that does not move for
+// CUBOAI_RESUME_STUCK_MS is restarted at once.
+const CUBOAI_RESUME_AFTER_MS = 3000;
+const CUBOAI_RESUME_STUCK_MS = 3000;
+
+function cuboaiResumePlay(video) {
+  if (!video || !video.paused || typeof video.play !== 'function') return false;
+  let p;
+  try { p = video.play(); } catch (e) { p = Promise.reject(e); }
+  Promise.resolve(p).catch((e) => {
+    if (e && e.name === 'NotAllowedError' && !video.muted) {
+      video.muted = true;
+      try { Promise.resolve(video.play()).catch(() => {}); } catch (e2) { /* nothing more to try */ }
+    }
+  });
+  return true;
+}
 
 function cuboaiPlayerMode(p) {
   const modeEl = p && typeof p.querySelector === 'function' ? p.querySelector('.mode') : null;
@@ -956,15 +980,31 @@ function cuboaiRevivePlayer(card, t) {
   const p = card && card.content;
   const video = card && typeof card._cuboMedia === 'function' ? card._cuboMedia().video : null;
   const doc = video && video.ownerDocument;
+  const gap = card._tickAt != null ? t - card._tickAt : 0;
+  card._tickAt = t;
+  if (doc && doc.hidden) {
+    if (card._hiddenAt == null) card._hiddenAt = t;
+  } else if ((card._hiddenAt != null && t - card._hiddenAt >= CUBOAI_RESUME_AFTER_MS) || gap >= CUBOAI_RESUME_AFTER_MS) {
+    card._hiddenAt = null;
+    card._resumedAt = t;
+    card._progressAt = null;   // a frozen clock is no measure of the picture
+  } else {
+    card._hiddenAt = null;
+  }
   if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden)) {
     card._deadSince = null;
     card._progressAt = null;
     card._restartAt = null;
     return null;
   }
-  // Progress: the picture moving, or paused with a picture (the user's pause).
+  const resuming = card._resumedAt != null && t - card._resumedAt < CUBOAI_STUCK_MS;
+  if (!resuming) card._resumedAt = null;
+  // Just back from a lock: iOS paused the video, the user did not.
+  if (resuming && cuboaiResumePlay(video)) card._resumePlays = (card._resumePlays || 0) + 1;
+  // Progress: the picture moving, or paused with a picture (the user's pause --
+  // never right after a resume, when the pause is the phone's).
   const ct = video ? video.currentTime : null;
-  if (card._progressAt == null || ct !== card._progressCt || (video && video.paused && video.readyState >= 3)) {
+  if (card._progressAt == null || ct !== card._progressCt || (!resuming && video && video.paused && video.readyState >= 3)) {
     card._progressAt = t;
     card._progressCt = ct;
   }
@@ -994,7 +1034,9 @@ function cuboaiRevivePlayer(card, t) {
     try { p.onconnect(); } catch (e) { return 'threw'; }
     return mode;
   }
-  if (t - card._progressAt >= CUBOAI_STUCK_MS && typeof p.ondisconnect === 'function') {
+  const stuckMs = resuming ? CUBOAI_RESUME_STUCK_MS : CUBOAI_STUCK_MS;
+  if (t - card._progressAt >= stuckMs && typeof p.ondisconnect === 'function') {
+    card._resumedAt = null;   // one fast restart per resume; the normal watchdog after that
     card._progressAt = t;
     card._restartAt = t;
     const mode = cuboaiPlayerMode(p);

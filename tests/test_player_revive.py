@@ -187,15 +187,16 @@ console.log(JSON.stringify({ moving, paused }));
 
 def test_the_watchdog_leaves_alone_what_it_cannot_help(tmp_path):
     """Kill: restarting while HA is offline, while the page is in the
-    background (on return it counts afresh), a card off the page, or during
-    the card's own recording playback."""
+    background (the hidden time never counts), a card off the page, or during
+    the card's own recording playback. Back from the background a picture that
+    does not move gets the short resume window, not zero and not the full 10 s."""
     got = _node(
         """
 const out = {};
 let c = makeCard({ connected: false }); c.player.ws = {}; out.offline = tick(c, 0, 15000).length;
 c._hass.connection.connected = true; out.back = tick(c, 15500, 16000).map((d) => d[1]);
 doc.hidden = true; c = makeCard(); c.player.ws = {}; out.hidden = tick(c, 0, 20000).length;
-doc.hidden = false; out.visibleAgain = tick(c, 20500, 29500).length;
+doc.hidden = false; out.visibleAgain = tick(c, 20500, 29500).map((d) => d[0]);
 c = makeCard(); c.player.ws = {}; c.player.isConnected = false; out.offPage = tick(c, 0, 20000).length;
 c = makeCard(); c.player.ws = {}; c._dvrPlaying = true; out.recording = tick(c, 0, 20000).length;
 console.log(JSON.stringify(out));
@@ -204,7 +205,8 @@ console.log(JSON.stringify(out));
     )
     assert got["offline"] == 0
     assert got["back"] == ["stuck:MSE", "restarted:MSE"], "HA back: the overdue restart should run at once"
-    assert got["hidden"] == 0 and got["visibleAgain"] == 0, "time in the background counted as stuck"
+    assert got["hidden"] == 0, "time in the background counted as stuck"
+    assert got["visibleAgain"][0] == 23500, got["visibleAgain"]
     assert got["offPage"] == 0 and got["recording"] == 0
 
 
@@ -253,3 +255,81 @@ console.log(JSON.stringify(out));
     assert got["again"] is False, "stopped twice"
     assert got["reset"] is False
     assert got["lone"] is False, "a card on another view lost its background stream"
+
+
+# =============================================================================
+# Back from a locked iPhone: black picture, no sound
+# =============================================================================
+
+
+def test_a_phone_back_from_lock_presses_play_on_the_video_ios_paused(tmp_path):
+    """Reported 2026-11-22: lock the iPhone, unlock -- black, no sound. iOS
+    froze the app (no ticks at all) and paused the video; a paused video with a
+    picture used to pass for the user's pause and was never touched. Kill: no
+    resume on a tick gap, no play() on resume, play() also without a resume."""
+    got = _node(
+        """
+const c = makeCard(); c.player.pc = {};
+c.video.paused = true; c.video.readyState = 4; c.video.plays = 0;
+c.video.play = function () { this.plays += 1; return Promise.resolve(); };
+tick(c, 0, 5000);                       // the user's own pause: left alone
+const before = c.video.plays;
+tick(c, 65000, 65000);                  // first tick after a 60 s freeze
+console.log(JSON.stringify({ before, after: c.video.plays }));
+""",
+        tmp_path,
+    )
+    assert got["before"] == 0, "the user's pause was overridden"
+    assert got["after"] == 1, "the video iOS paused was not played again"
+
+
+def test_a_refused_play_after_lock_retries_muted(tmp_path):
+    """iOS refuses sound without a tap: play muted so the picture moves (the
+    speaker button brings the sound back). Kill: no muted retry."""
+    got = _node(
+        """
+const c = makeCard(); c.player.pc = {};
+c.video.paused = true; c.video.readyState = 4; c.video.muted = false; c.video.calls = [];
+c.video.play = function () { this.calls.push(this.muted);
+  return this.muted ? Promise.resolve() : Promise.reject({ name: 'NotAllowedError' }); };
+tick(c, 0, 0); tick(c, 60000, 60000);
+setTimeout(() => console.log(JSON.stringify({ calls: c.video.calls, muted: c.video.muted })), 0);
+""",
+        tmp_path,
+    )
+    assert got == {"calls": [False, True], "muted": True}
+
+
+def test_a_frozen_picture_after_lock_is_restarted_quickly(tmp_path):
+    """The WebRTC connection died during the lock but the player still holds
+    it: restart after 3 s, not the 10 s watchdog -- and only once per resume.
+    Kill: no fast path, the fast path repeating, the fast path without a resume."""
+    got = _node(
+        """
+const c = makeCard({ played: false }); c.player.pc = {};
+c.player.onconnect = function () { this.dials += 1; this.pc = { again: true }; };
+let n = 0; tick(c, 0, 2000, () => { c.video.currentTime = ++n; });   // playing before the lock
+const did = tick(c, 60000, 80000).filter((d) => d[1].startsWith('stuck')).map((d) => d[0]);
+console.log(JSON.stringify({ did }));
+""",
+        tmp_path,
+    )
+    assert got["did"] == [63000, 73000], got["did"]
+
+
+def test_a_page_hidden_and_shown_counts_as_a_resume(tmp_path):
+    """Where timers keep running while hidden (no tick gap), the hidden spell
+    alone marks the resume. A blink (under 3 s) does not. Kill: hidden time
+    ignored, every blink treated as a lock."""
+    got = _node(
+        """
+const mk = () => { const c = makeCard(); c.player.pc = {}; c.video.paused = true; c.video.readyState = 4; c.video.plays = 0;
+  c.video.play = function () { this.plays += 1; return Promise.resolve(); }; return c; };
+let c = mk(); tick(c, 0, 1000); doc.hidden = true; tick(c, 1500, 6000); doc.hidden = false; tick(c, 6500, 6500);
+const long = c.video.plays;
+c = mk(); tick(c, 0, 1000); doc.hidden = true; tick(c, 1500, 2000); doc.hidden = false; tick(c, 2500, 2500);
+console.log(JSON.stringify({ long, blink: c.video.plays }));
+""",
+        tmp_path,
+    )
+    assert got == {"long": 1, "blink": 0}
