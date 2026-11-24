@@ -250,7 +250,11 @@ WebRTC with an MSE/HLS fallback, including away from home over Home Assistant Cl
 player has to change stream (your phone moves between Wi-Fi and mobile data; switching to a
 recording is the exception), the last picture stays on screen with *Reconnecting…* until the new
 stream's picture is showing, instead of a few seconds of black, and a player left stuck by the
-network change is dialled again by itself. (On an iPhone, moving from Wi-Fi to mobile data can
+network change is dialled again by itself. Opening the dashboard is not a reconnect: once a
+camera has been opened on a device the card remembers its shape and keeps the picture at one size
+while the stream starts, the camera's snapshot (or the last picture) is kept on screen until the
+live picture is showing, and only an opening that takes more than 4 seconds is labelled, with
+*Connecting…*. (On an iPhone, moving from Wi-Fi to mobile data can
 still show a short black moment; mobile data to Wi-Fi is seamless.)
 
 **Visual editor:** camera picker, initial audio state, default song and playlist filters, which
