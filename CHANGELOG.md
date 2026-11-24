@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.66]
+
+### Fixed
+- **The floating-window button no longer stops working.** On an iPhone, pressing it before the
+  video had its first picture opened the floating window for a moment and closed it, and after
+  that the button did nothing until the app was restarted. The button is now dimmed, and ignores
+  a press, until the video has a picture.
+- **The floating video window no longer stays black.** With the video in a floating window
+  (Picture-in-Picture) and the app in the background, a stream that dropped was not reconnected
+  until the app was opened again, because the card leaves pages in the background alone. It now
+  reconnects while a floating window is showing. And on an iPhone the floating window went black
+  the moment you moved to another dashboard view: an iPhone draws nothing for a video that is no
+  longer in the page. The player now stays in the page, hidden, for as long as its floating
+  window is open. Back on the dashboard with the window still open, the card no longer starts a
+  second stream next to it (the picture showed twice, and the new one took about 8 seconds to
+  appear): it carries on with the one you are watching.
+- **Opening the dashboard should no longer make the picture jump, flash black or say
+  *Reconnecting…*.** Opening the card (most visibly in the iPhone app) showed the snapshot, one
+  black frame, then a smaller picture with black bars and *Reconnecting…* over it, and only then
+  the live picture at full size, with everything under the picture moving up and down. The card
+  now remembers each camera's shape, so after the first time a camera has been opened on a device
+  the picture is meant to keep one size from the moment the card opens; the snapshot or the last
+  picture is kept on screen until the live picture is showing (on a cold start, from the moment
+  the snapshot has loaded, and for at most 25 seconds); and *Reconnecting…* is kept for a real
+  reconnect, such as moving between Wi-Fi and mobile data. If opening takes more than 4 seconds
+  the card says *Connecting…*. Checked against a model of the player, not yet on an iPhone.
+
 ## [2.6.65]
 
 ### Added

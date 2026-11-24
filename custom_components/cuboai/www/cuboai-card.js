@@ -548,23 +548,125 @@ function cuboaiStartMuted(wantUnmuted, vendor) {
 // - On an iPhone a new WebRTC stream reports its first frame before it is on
 //   screen, so the hide waits for the picture to settle.
 // - The card's own switches to and from a recording are not bridged (quiet).
+// - A card that is opening (the dashboard was just opened, Home Assistant
+//   rebuilt the card, the app came back from the background) is not a
+//   reconnect. Its video is covered from the start -- by the picture another
+//   card of this camera showed a moment ago, else by the camera's snapshot --
+//   inside a box pinned to the camera's shape, so nothing jumps while the
+//   player goes from poster to MSE to WebRTC. It says nothing for
+//   CUBOAI_BRIDGE_OPEN_LABEL_MS, then "Connecting…". "Reconnecting…" is only
+//   for a card whose own picture was on screen. The snapshot cover has one
+//   deadline (CUBOAI_BRIDGE_WAIT_MS) that the player's re-dials cannot extend.
+// - The player replacing a working source directly with another (MSE first,
+//   then WebRTC takes over) is its own upgrade, not a lost stream: held like
+//   an opening. A lost stream ends its track or is cleared by the player first.
 // Hooks only this element's own src/srcObject; the WebRTC Camera files are
 // untouched.
 const CUBOAI_BRIDGE_MAX_MS = 8000;         // after the new source is attached
 const CUBOAI_BRIDGE_WAIT_MS = 25000;       // until the player attaches one
 const CUBOAI_BRIDGE_STALE_MS = 60000;      // an older copy is not shown
 const CUBOAI_BRIDGE_LABEL_MS = 600;        // a swap faster than this shows no label
+const CUBOAI_BRIDGE_OPEN_LABEL_MS = 4000;  // an opening card says "Connecting…" only after this
 const CUBOAI_BRIDGE_SNAP_MS = 1000;        // how often the last good picture is copied
 const CUBOAI_BRIDGE_PARK_MS = 60000;       // a detached player's timer stops after this
 const CUBOAI_BRIDGE_SETTLE_RTC_MS = 800;   // WebRTC: decoded is not yet on screen (iOS)
 const CUBOAI_BRIDGE_SETTLE_MSE_MS = 200;
 const CUBOAI_BRIDGE_COPY_W = 960;          // the copy is at most this wide
+// A rebuilt card carries on as "reconnecting" only if the old card had been
+// live this long, was on the page this recently, and the page did not wake
+// this recently (all three: see the handover in cuboaiBridgeGap).
+const CUBOAI_BRIDGE_CONT_LIVE_MS = 5000;
+const CUBOAI_BRIDGE_CONT_SEEN_MS = 2500;
+const CUBOAI_BRIDGE_CONT_WAKE_MS = 10000;
 // The last good picture of each camera, kept for the page rather than inside
 // one card: after a network change Home Assistant rebuilds a YAML dashboard's
 // cards (seen at a Wi-Fi -> 5G switch: a new card, a new empty <video>, black
 // while its stream starts). A new card for the same camera starts from the old
-// card's picture. Keyed by device id: { canvas, at }.
+// card's picture. Keyed by device id: { canvas, at, wall, st }.
 const cuboaiLastPictures = new Map();
+// The shape of each camera's picture, so a new card can size its video before
+// the first frame. Keyed by device id: { w, h, from: 'video' | 'poster' }.
+const cuboaiAspects = new Map();
+// How many times the page came back to life (returned from the background, or
+// its timers stood still). A card's picture counts as "live" only if it was
+// seen since the last wake: the same card resuming after the phone slept is
+// opening again, not reconnecting.
+let cuboaiPageWakes = 0;
+let cuboaiWokeWall = 0;   // when it last woke, by the wall clock
+function cuboaiPageWoke() {
+  cuboaiPageWakes += 1;
+  cuboaiWokeWall = Date.now();
+}
+// Heard on the window, on the way down to the document (capture), which works
+// whether or not the browser lets the event bubble. Nothing is added to the
+// document itself: its visibility listeners belong to the microphone, which
+// adds and removes its own.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('visibilitychange', () => {
+    if (typeof document === 'undefined' || !document.hidden) cuboaiPageWoke();
+  }, true);
+  window.addEventListener('pageshow', cuboaiPageWoke);
+}
+
+// Pin the video's box to the camera's shape. The player gives its <video> no
+// size of its own, so the box follows whatever the video has at the moment:
+// the poster's shape, then 300x150 (an MSE source with no frame yet), then the
+// stream's -- the picture shrinks and grows and everything under it jumps.
+// With a plain `aspect-ratio` (not `auto W / H`, which would still follow the
+// frameless video) the box has one shape from the start. The shape is
+// remembered per camera, in the page and in localStorage; with nothing
+// remembered there is no pin (no guess) until the snapshot's size is known.
+// The player's own inline width and height are left alone, so a layout with a
+// fixed height (fullscreen, panel view) is not affected.
+function cuboaiPinPictureBox(video, deviceId, opts) {
+  if (!video || !video.style || video.__cuboBox) return;
+  const box = video.__cuboBox = { from: null };
+  const key = deviceId ? 'cuboai_aspect_' + deviceId : '';
+  const ok = (w, h) => w >= 16 && h >= 16 && w / h >= 0.3 && w / h <= 4;
+  const apply = (w, h, from) => {
+    if (!ok(w, h)) return false;
+    const r = w + ' / ' + h;
+    if (video.style.aspectRatio !== r) video.style.aspectRatio = r;
+    box.from = from;
+    return true;
+  };
+  const known = deviceId ? cuboaiAspects.get(deviceId) : null;
+  if (known) {
+    apply(known.w, known.h, known.from);
+  } else if (key) {
+    // Only two plain numbers are taken from storage: its text never reaches
+    // the style.
+    try {
+      const m = /^(\d{2,5})x(\d{2,5})$/.exec(String(localStorage.getItem(key) || ''));
+      if (m && apply(Number(m[1]), Number(m[2]), 'video')) {
+        cuboaiAspects.set(deviceId, { w: Number(m[1]), h: Number(m[2]), from: 'video' });
+      }
+    } catch (e) { /* no storage: the shape is learned again */ }
+  }
+  // The camera chosen in the card editor re-points this same video: a shape is
+  // remembered only while the card still shows the camera the pin was made for.
+  const sameCamera = () => !(opts && typeof opts.id === 'function') || opts.id() === deviceId;
+  // The stream's own size is the truth. A recording being played is shown at
+  // its shape but not remembered as the camera's.
+  const onVideo = () => {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!apply(w, h, 'video')) return;
+    if (!deviceId || !sameCamera() || (opts && typeof opts.live === 'function' && opts.live() === false)) return;
+    cuboaiAspects.set(deviceId, { w, h, from: 'video' });
+    try { localStorage.setItem(key, w + 'x' + h); } catch (e) { /* remembered for this page only */ }
+  };
+  video.addEventListener('resize', onVideo);
+  video.addEventListener('loadedmetadata', onVideo);
+  onVideo();
+  // The snapshot's size, used only until the stream's is known, and never
+  // written to storage.
+  box.fromPoster = (w, h) => {
+    const m = deviceId && cuboaiAspects.get(deviceId);
+    if (box.from === 'video' || (m && m.from === 'video')) return;
+    if (apply(w, h, 'poster') && deviceId && sameCamera()) cuboaiAspects.set(deviceId, { w, h, from: 'poster' });
+  };
+}
 
 function cuboaiBridgeGap(video, deviceId) {
   if (!video || video.__cuboBridge) return;
@@ -588,9 +690,26 @@ function cuboaiBridgeGap(video, deviceId) {
     snapAt: -Infinity, hasPicture: false, played: false, lastCt: null, poll: 0, idleMs: 0,
     loopPending: false, loopGen: 0, quietUntil: 0, firstAt: 0, newFrames: 0, hideGen: 0, gapAt: 0, blackSeen: false,
     snaps: 0, empty: 0, tu: 0, frames: 0, polls: 0, drawErr: null, onDiag: null,
+    liveWake: -1, liveSince: 0, seenWall: 0, pollWall: 0, opening: false, upgrade: false, coverUntil: 0,
   };
   video.__cuboBridge = st;
   const now = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+  // "Live": this card's own picture has been seen on screen since the page
+  // last woke. Only such a card can be reconnecting; any other is opening.
+  const isLive = () => st.liveWake === cuboaiPageWakes;
+  const markLive = () => {
+    if (st.liveWake !== cuboaiPageWakes) st.liveSince = now();
+    st.liveWake = cuboaiPageWakes;
+  };
+  st.isLive = isLive;
+  // A gap of a live card is a reconnect, unless it is the player's own
+  // upgrade from one working source to another with the last picture held
+  // over it. With nothing held the label comes as ever: it explains the black.
+  const reconnecting = () => isLive() && !(st.upgrade && st.showing);
+  // An attached source. The attribute, where there is one: after `src = ''`
+  // the property reads back as the page's own address.
+  const hasSource = () => !!(video.srcObject
+    || (typeof video.getAttribute === 'function' ? video.getAttribute('src') : video.src));
   const diag = (ev, extra) => {
     if (typeof st.onDiag !== 'function') return;
     try { st.onDiag(Object.assign({ ev }, extra || {})); } catch (e) { /* never break playback */ }
@@ -605,7 +724,10 @@ function cuboaiBridgeGap(video, deviceId) {
     st.labelTimer = 0;
     st.settle = 0;
     st.armed = false;
+    st.coverUntil = 0;
     if (!st.gap) return;
+    st.opening = false;
+    st.upgrade = false;
     diag('hide', { why: why || 'frame', held: st.showing, rs: video.readyState, paused: !!video.paused,
       nf: st.newFrames, ms: Math.round(now() - st.gapAt) });
     // A picture let go by the cap is not shown again: only a fresh copy is.
@@ -616,9 +738,13 @@ function cuboaiBridgeGap(video, deviceId) {
     label.style.display = 'none';
   };
   st.hide = hide;
+  // The snapshot cover's own deadline is never extended: a player that
+  // re-dials for ever without a picture would otherwise keep an old still up.
   const capIt = (ms) => {
     clearTimeout(st.cap);
-    st.cap = setTimeout(() => hide('cap'), ms || CUBOAI_BRIDGE_MAX_MS);
+    let wait = ms || CUBOAI_BRIDGE_MAX_MS;
+    if (st.coverUntil) wait = Math.max(0, Math.min(wait, st.coverUntil - now()));
+    st.cap = setTimeout(() => hide('cap'), wait);
   };
   // A WebRTC stream whose video track has ended or stopped delivering shows
   // black on an iPhone: never copy it.
@@ -642,7 +768,10 @@ function cuboaiBridgeGap(video, deviceId) {
     }
   };
   // Copy the picture on screen: into `work`, checked, then onto the canvas.
-  const snap = () => {
+  // A copy taken while the video plays also proves the card is live. One taken
+  // at a swap does not: a stream that died while the phone slept still hands
+  // back its last frame.
+  const snap = (atSwap) => {
     if (st.gap || !(video.readyState >= 2) || !video.videoWidth || !video.videoHeight || !streamLive()) return false;
     if (doc.hidden) return false;
     const w = Math.min(CUBOAI_BRIDGE_COPY_W, video.videoWidth);
@@ -666,8 +795,9 @@ function cuboaiBridgeGap(video, deviceId) {
     st.snapAt = now();
     st.hasPicture = true;
     st.played = true;
+    if (!atSwap) markLive();
     st.snaps += 1;
-    if (deviceId) cuboaiLastPictures.set(deviceId, { canvas, at: st.snapAt });
+    if (deviceId) cuboaiLastPictures.set(deviceId, { canvas, at: st.snapAt, wall: Date.now(), st });
     return true;
   };
   const maybeSnap = () => { if (now() - st.snapAt >= CUBOAI_BRIDGE_SNAP_MS) snap(); };
@@ -695,18 +825,31 @@ function cuboaiBridgeGap(video, deviceId) {
   const startPoll = () => {
     if (st.poll) return;
     st.idleMs = 0;
+    st.pollWall = 0;   // a parked timer is no sign that the page slept
     st.poll = setInterval(() => {
+      // This timer ticks every second. A much longer silence means the page
+      // stood still (the app was in the background) and has just woken, even
+      // where the browser sent no event for it.
+      const wall = Date.now();
+      if (st.pollWall && wall - st.pollWall > CUBOAI_BRIDGE_SNAP_MS + 5000) cuboaiPageWoke();
+      st.pollWall = wall;
       if (!video.isConnected) {
         st.idleMs += CUBOAI_BRIDGE_SNAP_MS;
         if (st.idleMs >= CUBOAI_BRIDGE_PARK_MS) { clearInterval(st.poll); st.poll = 0; }
         return;
       }
       st.idleMs = 0;
+      st.seenWall = wall;   // on the page, and the page's timers run
       const ct = video.currentTime;
       if (ct === st.lastCt) return;
       st.lastCt = ct;
       st.polls += 1;
       if (video.readyState >= 2) st.played = true;
+      // Sound alone is not a picture: an iPhone's MSE stream plays, with its
+      // size known, before its first keyframe (black). So the frame is looked
+      // at -- only until the card is live, and never during a gap, where the
+      // hide does the looking.
+      if (!isLive() && !st.gap && video.readyState >= 2 && video.videoWidth && onScreen()) markLive();
       maybeSnap();
     }, CUBOAI_BRIDGE_SNAP_MS);
   };
@@ -715,14 +858,40 @@ function cuboaiBridgeGap(video, deviceId) {
   video.addEventListener('timeupdate', () => { st.tu += 1; maybeSnap(); startPoll(); });
   video.addEventListener('play', () => startPoll());
   startPoll();
+  // The label, if the gap outlasts a blink. A card that was live is
+  // reconnecting and says so. A card that is opening says nothing at first --
+  // opening takes a second or two and needs no explaining -- and "Connecting…"
+  // if it takes long, so a still picture is never left unexplained. Decided
+  // when the timer fires, not when the gap starts: a wake noticed a moment
+  // after the source was cleared still counts.
+  const armLabel = () => {
+    clearTimeout(st.labelTimer);
+    st.labelTimer = setTimeout(() => {
+      // Only while no new picture has arrived: a new one that is just settling
+      // (WebRTC at home, within a second) is no reconnect to announce.
+      if (!st.gap || st.firstAt) return;
+      if (reconnecting()) {
+        label.textContent = 'Reconnecting…';
+        label.style.display = 'block';
+        return;
+      }
+      st.opening = true;
+      st.labelTimer = setTimeout(() => {
+        if (!st.gap || st.firstAt) return;
+        label.textContent = reconnecting() ? 'Reconnecting…' : 'Connecting…';
+        label.style.display = 'block';
+      }, CUBOAI_BRIDGE_OPEN_LABEL_MS - CUBOAI_BRIDGE_LABEL_MS);
+    }, CUBOAI_BRIDGE_LABEL_MS);
+  };
   // Start bridging a gap: the last picture if there is a fresh one, and the
-  // label if the gap outlasts a blink. Only once something has played -- the
-  // first load of the card is not a reconnect -- and never for the card's own
-  // switch to or from a recording.
+  // label (see armLabel). Only once something has played or a picture was
+  // handed over -- a card with nothing to hold is covered by the snapshot
+  // instead (coverWith) -- and never for the card's own switch to or from a
+  // recording.
   const startGap = () => {
     if (st.gap) return true;
     if (now() < st.quietUntil) return false;
-    if (!st.hasPicture) snap();
+    if (!st.hasPicture) snap(true);
     if (!st.played) return false;
     st.gap = true;
     st.gapAt = now();
@@ -732,9 +901,7 @@ function cuboaiBridgeGap(video, deviceId) {
       st.showing = true;
       canvas.style.display = 'block';
     }
-    // Only while no new picture has arrived: a new one that is just settling
-    // (WebRTC at home, within a second) is no reconnect to announce.
-    st.labelTimer = setTimeout(() => { if (st.gap && !st.firstAt) label.style.display = 'block'; }, CUBOAI_BRIDGE_LABEL_MS);
+    armLabel();
     return true;
   };
   // The card's own switch to or from a recording: no bridge until the next
@@ -755,11 +922,23 @@ function cuboaiBridgeGap(video, deviceId) {
       return 'err';
     }
   };
+  // The video's box on screen, for diagnostics only: one recording from a
+  // phone shows whether the pinned shape was honoured.
+  const boxSize = () => {
+    if (typeof st.onDiag !== 'function' || typeof video.getBoundingClientRect !== 'function') return null;
+    try {
+      const r = video.getBoundingClientRect();
+      return [Math.round(r.width), Math.round(r.height)];
+    } catch (e) {
+      return null;
+    }
+  };
   const state = (extra) => Object.assign({
     rs: video.readyState, vw: video.videoWidth, paused: !!video.paused, live: streamLive(), has: st.hasPicture,
     played: st.played, age: st.hasPicture ? Math.round(now() - st.snapAt) : null, snaps: st.snaps, empty: st.empty,
     tu: st.tu, frames: st.frames, polls: st.polls, rvfc: typeof video.requestVideoFrameCallback === 'function',
     err: st.drawErr, lum: typeof st.onDiag === 'function' ? brightness() : null,
+    open: st.opening, shown: isLive(), up: st.upgrade, box: boxSize(),
   }, extra || {});
   // Hide once the new source's picture is really on screen: playing, a frame
   // decoded, and settled -- longer for WebRTC, whose first decoded frames an
@@ -826,6 +1005,7 @@ function cuboaiBridgeGap(video, deviceId) {
       }
       return false;
     }
+    markLive();
     hide(why);
     return true;
   };
@@ -845,7 +1025,11 @@ function cuboaiBridgeGap(video, deviceId) {
       try { video.requestVideoFrameCallback(onFrame); } catch (e) { /* not for this source */ }
     }
   };
-  const armHide = (capMs) => {
+  // `pollNow`: start looking at once instead of waiting for the video's next
+  // event. The snapshot cover can start after 'loadeddata' and 'playing' have
+  // already fired; without this a browser without frame callbacks would hold
+  // the cover over a live picture until the cap.
+  const armHide = (capMs, pollNow) => {
     capIt(capMs);
     st.armed = true;
     armFrames();
@@ -855,6 +1039,50 @@ function cuboaiBridgeGap(video, deviceId) {
     };
     video.addEventListener('loadeddata', poll, { once: true });
     video.addEventListener('playing', poll, { once: true });
+    if (pollNow) {
+      clearTimeout(st.settle);
+      st.settle = setTimeout(poll, 100);
+    }
+  };
+  // Cold start: no card showed this camera a moment ago, so there is no last
+  // picture, and the player drops its poster to black as soon as it attaches
+  // a source. Cover the video with the camera's snapshot (the same picture the
+  // poster showed) until the stream's own picture is on screen. The snapshot is
+  // not a "last picture": it is never kept for a later gap or handed to
+  // another card, and the card does not count as having played.
+  st.coverWith = (img) => {
+    if (st.gap || st.hasPicture || now() < st.quietUntil) return false;
+    // Not over a picture that is really showing. A source that has its size
+    // but shows black (MSE before its first keyframe) is what the cover is for.
+    if (video.readyState >= 2 && video.videoWidth && onScreen()) return false;
+    if (!img || !(img.naturalWidth > 0 && img.naturalHeight > 0)) return false;
+    try {
+      const w = Math.min(CUBOAI_BRIDGE_COPY_W, img.naturalWidth);
+      const h = Math.max(1, Math.round((img.naturalHeight * w) / img.naturalWidth));
+      if (work.width !== w) work.width = w;
+      if (work.height !== h) work.height = h;
+      const wctx = work.getContext('2d');
+      wctx.drawImage(img, 0, 0, w, h);
+      if (!looksLikeAPicture(wctx, w, h)) return false;
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      canvas.getContext('2d').drawImage(work, 0, 0);
+    } catch (e) {
+      return false;
+    }
+    st.gap = true;
+    st.gapAt = now();
+    st.blackSeen = false;
+    st.firstAt = 0;
+    st.showing = true;
+    st.opening = true;
+    st.upgrade = false;
+    st.coverUntil = now() + CUBOAI_BRIDGE_WAIT_MS;
+    canvas.style.display = 'block';
+    armLabel();
+    armHide(hasSource() ? CUBOAI_BRIDGE_MAX_MS : CUBOAI_BRIDGE_WAIT_MS, true);
+    diag('cover');
+    return true;
   };
   // A WebRTC stream that ends (the player closes it on a network change) goes
   // black or freezes before the next stream is even requested: bridge from that
@@ -866,7 +1094,13 @@ function cuboaiBridgeGap(video, deviceId) {
       t.addEventListener('ended', () => {
         if (video.srcObject !== so) return;
         diag('ended', state());
-        if (startGap()) armHide(CUBOAI_BRIDGE_WAIT_MS);
+        // A stream lost in the middle of the player's own upgrade is a loss.
+        const wasUpgrade = st.upgrade;
+        st.upgrade = false;
+        if (startGap()) {
+          if (wasUpgrade) armLabel();
+          armHide(CUBOAI_BRIDGE_WAIT_MS);
+        }
       });
     }
   };
@@ -875,8 +1109,17 @@ function cuboaiBridgeGap(video, deviceId) {
   // A new card whose player has no picture yet, for a camera another card of
   // this page showed a moment ago: start from that picture (the handover after
   // Home Assistant rebuilt the dashboard), until this player's own is shown.
+  // Fresh by the wall clock too: the page's own clock may stand still while
+  // the app is in the background, and a picture from before that is not fresh.
+  // The new card is opening, unless this is a reconnect going on, and then it
+  // says so: the old card was itself already bridging a lost stream, or it had
+  // been live for a while and was on the page a moment ago with no page wake
+  // in between -- Home Assistant rebuilding the cards at a network change
+  // before the old player noticed its frozen stream. A dashboard opened, a
+  // view navigated back to, an app back from the background are none of these.
   const prior = deviceId ? cuboaiLastPictures.get(deviceId) : null;
-  if (prior && prior.canvas !== canvas && !(video.readyState >= 2) && now() - prior.at <= CUBOAI_BRIDGE_STALE_MS) {
+  if (prior && prior.canvas !== canvas && !(video.readyState >= 2) && now() - prior.at <= CUBOAI_BRIDGE_STALE_MS
+      && (prior.wall == null || Date.now() - prior.wall <= CUBOAI_BRIDGE_STALE_MS)) {
     try {
       canvas.width = prior.canvas.width;
       canvas.height = prior.canvas.height;
@@ -885,6 +1128,11 @@ function cuboaiBridgeGap(video, deviceId) {
       st.played = true;
       st.snapAt = prior.at;
       diag('handover', { age: Math.round(now() - prior.at) });
+      const was = prior.st;
+      if (was && typeof was.isLive === 'function' && was.isLive() && ((was.gap && !was.upgrade)
+          || (now() - was.liveSince >= CUBOAI_BRIDGE_CONT_LIVE_MS
+            && Date.now() - was.seenWall <= CUBOAI_BRIDGE_CONT_SEEN_MS
+            && Date.now() - cuboaiWokeWall > CUBOAI_BRIDGE_CONT_WAKE_MS))) markLive();
       if (startGap()) armHide(CUBOAI_BRIDGE_WAIT_MS);
     } catch (e) {
       /* no picture to hand over: this card starts like a fresh one */
@@ -906,10 +1154,21 @@ function cuboaiBridgeGap(video, deviceId) {
       set(v) {
         // The freshest picture if the one on screen is still good, else the
         // last copy; then the swap.
-        if (!st.gap && now() - st.snapAt >= 250) snap();
+        if (!st.gap && now() - st.snapAt >= 250) snap(true);
         const to = v ? ((v.constructor && v.constructor.name) || typeof v) : String(v);
         diag('swap', state({ prop, to, gap: st.gap }));
+        // A working source (attached, decoding, its track alive) replaced
+        // directly by another is the player's own upgrade: MSE first, WebRTC
+        // takes over. A lost stream has stalled, ended or is cleared first,
+        // and clearing one in mid-upgrade makes it a loss.
+        if (!st.gap) {
+          st.upgrade = !!v && hasSource() && video.readyState >= 2 && streamLive();
+        } else if (!v && st.upgrade) {
+          st.upgrade = false;
+          armLabel();
+        }
         const held = startGap();
+        if (!held) st.upgrade = false;
         desc.set.call(this, v);
         if (prop === 'srcObject') watchStream(v);
         armLoop(true);
@@ -921,6 +1180,43 @@ function cuboaiBridgeGap(video, deviceId) {
       },
     });
   }
+}
+
+// Everything the card does to the player's <video>, done once per video and
+// as early as possible: right after the player is put on the page, not on the
+// card's first half-second tick -- the player drops its poster to black within
+// that time. Pins the box, fits the whole frame in it, installs the bridge,
+// and asks for the camera's snapshot when it is needed: as the cover of a cold
+// start, or for the box's shape when none is remembered. One request serves
+// both, and none is made when a handed-over picture and a remembered shape
+// are already there. Returns false while the player has no <video> yet.
+function cuboaiDressVideo(card) {
+  const c = card && card.content;
+  if (!c) return false;
+  const root = c.shadowRoot || c;
+  const video = typeof root.querySelector === 'function' ? root.querySelector('video') : null;
+  if (!video) return false;
+  if (video.__cuboDressed) return true;
+  video.__cuboDressed = true;
+  cuboaiPinPictureBox(video, card._liveDeviceId, { live: () => !card._dvrPlaying, id: () => card._liveDeviceId });
+  try { video.style.setProperty('object-fit', 'contain', 'important'); } catch (e) { /* the tick sets it again */ }
+  cuboaiBridgeGap(video, card._liveDeviceId);
+  const url = card._cuboPosterUrl;
+  const st = video.__cuboBridge;
+  const box = video.__cuboBox;
+  const doc = video.ownerDocument;
+  if (url && typeof url === 'string' && url.indexOf('data:') !== 0 && !card._dvrPlaying && doc && doc.createElement
+      && ((st && !st.gap) || (box && !box.from))) {
+    try {
+      const img = doc.createElement('img');
+      img.addEventListener('load', () => {
+        if (box && box.fromPoster) box.fromPoster(img.naturalWidth, img.naturalHeight);
+        if (st && st.coverWith && !card._dvrPlaying) st.coverWith(img);
+      });
+      img.src = url;
+    } catch (e) { /* no snapshot: the card opens as it did before */ }
+  }
+  return true;
 }
 
 // Revive a player left stuck by a network change. Two ways it gets stuck:
@@ -937,11 +1233,113 @@ function cuboaiBridgeGap(video, deviceId) {
 // (disconnect, then dial once the old connection is gone). Both wait for Home
 // Assistant's connection and leave alone a card that is not on screen, a page
 // in the background, the card's own recording playback and a video that is
-// paused with a picture (the user's pause). Returns what it did (for
-// diagnostics), else null.
+// paused with a picture (the user's pause). A page in the background whose
+// video is in a floating window (Picture-in-Picture) is NOT left alone: the
+// window is all the user sees then, and a stream that ended stayed black in it
+// until the app was opened again. Returns what it did (for diagnostics), else
+// null.
 const CUBOAI_REVIVE_AFTER_MS = 3000;
 const CUBOAI_REVIVE_EVERY_MS = 3000;
 const CUBOAI_STUCK_MS = 10000;
+
+// Is this <video> shown in a floating window? iPhone/Safari say so on the
+// element; Chrome names the element on the document, and for the card's own
+// canvas window (desktop Chrome) that element is the hidden copy.
+function cuboaiInPip(video) {
+  if (!video) return false;
+  if (video.webkitPresentationMode === 'picture-in-picture') return true;
+  const doc = video.ownerDocument;
+  const el = doc && doc.pictureInPictureElement;
+  return !!el && (el === video || el === video._pipVideo);
+}
+
+// The player's floating-window button must not be pressed before the video has
+// a picture. Measured 2026-11-21 on an iPhone with the card's diagnostics, three
+// times: a press while the video had no frame yet (readyState 1, no size)
+// opened the floating window and closed it 40 ms later, and from then on every
+// press did nothing until the page was reloaded. Since the card shows a
+// remembered picture the moment it opens, the button looks ready before the
+// video is. Until there is a frame the press is swallowed (capture phase, so
+// the player never sees it) and the button is dimmed. Returns whether the
+// button is ready, or null when the player has none.
+function cuboaiPipReady(video) {
+  return !!video && video.readyState >= 2 && video.videoWidth > 0;
+}
+
+function cuboaiGuardPipButton(card) {
+  const root = card && card.content && (card.content.shadowRoot || card.content);
+  const btn = root && typeof root.querySelector === 'function' ? root.querySelector('.pictureinpicture') : null;
+  if (!btn) return null;
+  const videoNow = () => { try { return card._cuboMedia().video; } catch (e) { return null; } };
+  if (!btn.__cuboPipGuard) {
+    btn.__cuboPipGuard = true;
+    btn.addEventListener('click', (e) => {
+      if (cuboaiPipReady(videoNow())) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }, true);
+  }
+  const ready = cuboaiPipReady(videoNow());
+  const want = ready ? '' : '0.35';
+  if (btn.style && btn.style.opacity !== want) btn.style.opacity = want;
+  return ready;
+}
+
+// An iPhone draws nothing in a floating window whose <video> is not in the page.
+// Measured 2026-11-21 with the card's diagnostics: the user moved to another
+// dashboard view, the card left the page, and the floating window went black
+// while the video was still connected, playing and counting time. So while a
+// card that is off the page has its video in a floating window, its player is
+// kept in the page, in a holder on <body>. The holder must be a real, full-size
+// box: measured the same day, a 2 px almost transparent holder left the window
+// black, while a 160x90 opaque one kept the picture -- also when it sits behind
+// the page (z-index -1), where nobody sees it. So: full size, opaque, behind.
+// The player goes back into the card, where it was, when the card is on the
+// page again or the window is closed. Only where the element itself says it is
+// floating (iPhone, Safari). Returns 'parked' / 'unparked' when it moved the
+// player, else null.
+const CUBOAI_PARK_CSS = 'position: fixed; left: 8px; bottom: 8px; width: 160px; height: 90px; overflow: hidden; z-index: -1; pointer-events: none;';
+
+function cuboaiParkFloating(card) {
+  const p = card && card.content;
+  if (!p) return null;
+  let video = null;
+  try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
+  const floating = !!video && video.webkitPresentationMode === 'picture-in-picture';
+  if (!card._parked) {
+    if (card.isConnected || !floating || card._dvrPlaying) return null;
+    const doc = video.ownerDocument;
+    if (!doc || !doc.body || typeof doc.createElement !== 'function') return null;
+    const holder = doc.createElement('div');
+    holder.style.cssText = CUBOAI_PARK_CSS;
+    // A marker keeps the player's place in the card. Its neighbours cannot: the
+    // card moves its overlays into the player every tick, so the element that
+    // followed the player when it left is somewhere else by the time it comes
+    // back (seen 2026-11-21: the picture came back at the bottom of the card).
+    let mark = null;
+    try {
+      if (p.parentNode === card && typeof doc.createComment === 'function') {
+        mark = doc.createComment('cuboai-player');
+        card.insertBefore(mark, p);
+      }
+    } catch (e) { mark = null; }
+    card._parked = { holder, mark };
+    doc.body.appendChild(holder);
+    holder.appendChild(p);
+    return 'parked';
+  }
+  if (!card.isConnected && floating) return null;        // still the only place it is shown
+  const { holder, mark } = card._parked;
+  card._parked = null;
+  try {
+    if (mark && mark.parentNode === card) card.insertBefore(p, mark);
+    else if (card.firstChild) card.insertBefore(p, card.firstChild);
+    else card.appendChild(p);
+  } catch (e) { /* the card is gone: the holder goes, and the player with it */ }
+  try { if (mark) mark.remove(); } catch (e) { /* already gone */ }
+  try { holder.remove(); } catch (e) { /* already gone */ }
+  return 'unparked';
+}
 
 function cuboaiPlayerMode(p) {
   const modeEl = p && typeof p.querySelector === 'function' ? p.querySelector('.mode') : null;
@@ -956,7 +1354,7 @@ function cuboaiRevivePlayer(card, t) {
   const p = card && card.content;
   const video = card && typeof card._cuboMedia === 'function' ? card._cuboMedia().video : null;
   const doc = video && video.ownerDocument;
-  if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden)) {
+  if (!p || typeof p.onconnect !== 'function' || !p.isConnected || card._dvrRedial || card._dvrPlaying || (doc && doc.hidden && !cuboaiInPip(video))) {
     card._deadSince = null;
     card._progressAt = null;
     card._restartAt = null;
@@ -1011,6 +1409,9 @@ function cuboaiRevivePlayer(card, t) {
 // page for CUBOAI_REPLACED_MS while another card shows the same camera stops
 // its player; put back on the page, webrtc-camera dials again by itself. A
 // card merely off screen (another dashboard view) keeps playing, as before.
+// A replaced card whose video is in a floating window is left playing (its
+// player is kept in the page, see cuboaiParkFloating): the window is where the
+// user is watching. It is stopped as soon as the window is closed.
 const CUBOAI_REPLACED_MS = 10000;
 const cuboaiCardRefs = [];
 
@@ -1018,6 +1419,38 @@ function cuboaiRegisterCard(card) {
   if (card.__cuboRegistered || typeof WeakRef !== 'function') return;
   card.__cuboRegistered = true;
   cuboaiCardRefs.push(new WeakRef(card));
+}
+
+// Back on the dashboard with the floating window still open, Home Assistant
+// builds a NEW card. It used to start a second stream of its own: the picture
+// showed twice (in the card and in the window), and the new stream sat for
+// about 8 s without a frame before the watchdog restarted it (both measured
+// 2026-11-21). The old card, with its player parked for the floating window, is
+// still alive and complete -- player, overlays, music bar, every listener. So
+// the new card starts nothing: it takes the old card in as its only child and
+// passes Home Assistant's updates on to it (card._proxy). The old card is on
+// the page again, its player goes back into it, and the video the user is
+// watching is the one the card shows. Only a card with the very same
+// configuration is taken in. Returns that card, else null.
+function cuboaiFloatingHost(card) {
+  if (!card || card.content || card._proxy) return null;
+  let cfg;
+  try { cfg = JSON.stringify(card._config || null); } catch (e) { return null; }
+  for (let i = cuboaiCardRefs.length - 1; i >= 0; i -= 1) {
+    const other = cuboaiCardRefs[i].deref();
+    if (!other) {
+      cuboaiCardRefs.splice(i, 1);
+      continue;
+    }
+    if (other === card || other.isConnected || !other._parked || !other.content) continue;
+    let video = null;
+    try { video = other._cuboMedia().video; } catch (e) { /* no player */ }
+    if (!video || video.webkitPresentationMode !== 'picture-in-picture') continue;
+    let theirs;
+    try { theirs = JSON.stringify(other._config || null); } catch (e) { continue; }
+    if (theirs === cfg) return other;
+  }
+  return null;
 }
 
 function cuboaiStopReplaced(card, t) {
@@ -1041,6 +1474,9 @@ function cuboaiStopReplaced(card, t) {
       continue;
     }
     if (other !== card && other.isConnected && other._liveDeviceId === id) {
+      let floating = false;
+      try { floating = cuboaiInPip(card._cuboMedia().video); } catch (e) { /* no player */ }
+      if (floating) return false;                        // still watched, in its floating window
       card._stoppedAsReplaced = true;
       try { p.ondisconnect(); } catch (e) { /* already stopped */ }
       return true;
@@ -1846,6 +2282,10 @@ class CuboAICameraCard extends HTMLElement {
     // rotating the phone) takes the card out and puts it straight back, which
     // must not end a talk. A card really gone is still stopped, one task later.
     if (this._mic) setTimeout(() => { if (!this.isConnected && this._mic) this._cuboStopMic('card_removed'); }, 0);
+    // A floating window must not wait for the next tick: an iPhone blanks it the
+    // moment its video is off the page. One task later, for the same reason as
+    // the microphone above (a re-flow takes the card out and puts it back).
+    setTimeout(() => { try { cuboaiParkFloating(this); } catch (e) { /* the tick tries again */ } }, 0);
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
 
@@ -2380,6 +2820,21 @@ class CuboAICameraCard extends HTMLElement {
       if (!hass || !hass.states) return;
       this._hass = hass;
       
+      // This card only hosts the card whose video is in a floating window
+      // (cuboaiFloatingHost): that one does all the work.
+      if (this._proxy) { this._proxy.hass = hass; return; }
+      if (!this.content) {
+        const host = cuboaiFloatingHost(this);
+        if (host) {
+          this._proxy = host;
+          this.style.display = 'block';
+          this.appendChild(host);
+          cuboaiParkFloating(host);                        // its player back into it, at once
+          host.hass = hass;
+          return;
+        }
+      }
+
       let deviceId = this._config?.device_id;
       this._speakerEntityId = null;
       this._lullabyEntityId = null;
@@ -2507,7 +2962,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.65';
+        const CARD_VERSION = 'v2.6.66';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -3126,9 +3581,21 @@ class CuboAICameraCard extends HTMLElement {
             // bar says is on screen, not live.
             if (this._dvrPlaying && this._dvrEntity) webrtcConfig.entity = this._dvrEntity;
             this.content.setConfig(webrtcConfig);
+            this._cuboPosterUrl = webrtcConfig.poster;
           }
           this.content.hass = this._hass;
           this.appendChild(this.content);
+          // The player has built its <video> by now: cover and size it at once
+          // (cuboaiDressVideo). A player that builds it later is caught by a
+          // few quick retries, and by the attach tick after those.
+          if (!cuboaiDressVideo(this)) {
+            let n = 0;
+            const again = () => {
+              if (!this.content || cuboaiDressVideo(this) || ++n >= 10) return;
+              setTimeout(again, 50);
+            };
+            setTimeout(again, 50);
+          }
           // Note: mobile browsers block UNMUTED autoplay by policy, so a card
           // configured to open with sound still starts muted on mobile until the
           // user taps webrtc-camera's own volume button. We intentionally do NOT
@@ -4393,6 +4860,8 @@ class CuboAICameraCard extends HTMLElement {
         // Use an interval to ensure the button stays attached even if the child re-renders
         if (!this.attachInterval) {
           this.attachInterval = setInterval(() => {
+            cuboaiGuardPipButton(this);
+            cuboaiParkFloating(this);
             cuboaiStopReplaced(this, Date.now());
             cuboaiRevivePlayer(this, Date.now());
             // Penetrate Shadow DOM if it exists
@@ -4401,6 +4870,7 @@ class CuboAICameraCard extends HTMLElement {
             const video = root.querySelector('video');
             const audio = root.querySelector('audio');
             const volumeIcon = root.querySelector('.volume');
+            cuboaiDressVideo(this);
 
             // Speaker button visibility. webrtc-camera creates it display:none
             // and only reveals it after audio is detected on each (re)connect —
@@ -4827,8 +5297,11 @@ class CuboAICameraCard extends HTMLElement {
         this.content.hass = this._hass;
       }
       // Built once, so a re-render that detached the bar would lose it
-      // permanently; put it back instead.
-      if (this.dvrBar && !this.dvrBar.isConnected) this.appendChild(this.dvrBar);
+      // permanently; put it back instead. "Detached" means no longer this
+      // card's child, not "off the page": a whole card that is off the page for
+      // a moment (it is taken in by a new card, cuboaiFloatingHost) still has
+      // its bar in place, and appending it again moved it below the music.
+      if (this.dvrBar && this.dvrBar.parentNode !== this) this.appendChild(this.dvrBar);
     }
 
       let tempState = null;
@@ -4973,6 +5446,11 @@ class CuboAICameraCard extends HTMLElement {
       if (!config) {
         throw new Error("Invalid configuration (config is undefined)");
       }
+      if (this._proxy) {                                   // hosting another card: it gets the change
+        this._config = config;
+        this._proxy.setConfig(config);
+        return;
+      }
       this._config = config;
       if (this._userFilter === undefined) {
         this._userFilter = config.default_song_filter || 'all';
@@ -4989,7 +5467,10 @@ class CuboAICameraCard extends HTMLElement {
              customElements.whenDefined('webrtc-camera').then(() => {
                // Not while a recording is playing: this fires on any config
                // touch and would drop the user back to live mid-scrub.
-               if (!this._dvrPlaying) this.content.setConfig(webrtcConfig);
+               if (!this._dvrPlaying) {
+                 this.content.setConfig(webrtcConfig);
+                 this._liveDeviceId = cuboaiCameraDeviceId(found);   // what is remembered follows the picture
+               }
              });
            }
          } else if (this.content && !config.device_id) {
