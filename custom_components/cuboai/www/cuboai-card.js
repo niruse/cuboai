@@ -1277,7 +1277,6 @@ function cuboaiGuardPipButton(card) {
       if (cuboaiPipReady(videoNow())) return;
       e.stopImmediatePropagation();
       e.preventDefault();
-      if (typeof cuboaiPipDiag === 'function') cuboaiPipDiag(card, 'pipblocked');   // TEMPORARY diagnostics
     }, true);
   }
   const ready = cuboaiPipReady(videoNow());
@@ -1401,114 +1400,6 @@ function cuboaiRevivePlayer(card, t) {
     return 'stuck:' + mode;
   }
   return null;
-}
-
-// TEMPORARY -- floating-window diagnostics, NOT for a release. The floating
-// window going black on an iPhone (app in the background, phone locked) cannot
-// be reproduced on a desk, so the card records what the phone does and sends
-// it to Home Assistant's log (system_log.write, logger
-// custom_components.cuboai.pipdiag), where it is read with `ha core logs`.
-// Records are kept in the page while Home Assistant's connection is down (a
-// frozen or background page) and sent when it is back; each carries its own
-// clock. Capped per page, and every failure is swallowed: it must never touch
-// playback. Remove this block, its call in the tick and CUBOAI_PIPDIAG_* when
-// the floating window is fixed.
-const CUBOAI_PIPDIAG_MAX = 400;
-
-const cuboaiPipDiagQueue = [];
-let cuboaiPipDiagCount = 0;
-
-function cuboaiPipDiagState(card) {
-  const p = card && card.content;
-  let video = null;
-  try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
-  let mode = null;
-  try { mode = String((p.shadowRoot || p).querySelector('.mode').innerText || ''); } catch (e) { /* no label */ }
-  return {
-    hid: typeof document !== 'undefined' ? !!document.hidden : null,
-    pm: video ? (video.webkitPresentationMode || null) : null,
-    pip: !!(video && cuboaiInPip(video)),
-    paused: video ? !!video.paused : null,
-    rs: video ? video.readyState : null,
-    vw: video ? video.videoWidth : null,
-    ws: p && p.ws ? p.ws.readyState : null,
-    pc: p && p.pc ? (p.pc.connectionState || 'pc') : null,
-    mode,
-    on: !!(card && card.isConnected),
-  };
-}
-
-function cuboaiPipDiag(card, ev, extra) {
-  try {
-    if (cuboaiPipDiagCount >= CUBOAI_PIPDIAG_MAX) return;
-    cuboaiPipDiagCount += 1;
-    let video = null;
-    try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
-    const rec = Object.assign({ ev, n: cuboaiPipDiagCount, at: new Date().toISOString().slice(11, 23),
-      ct: video ? Math.round(video.currentTime * 10) / 10 : null }, cuboaiPipDiagState(card), extra || {});
-    cuboaiPipDiagQueue.push(JSON.stringify(rec));
-  } catch (e) { /* never break playback */ }
-}
-
-function cuboaiPipDiagFlush(card) {
-  try {
-    const hass = card && card._hass;
-    if (!cuboaiPipDiagQueue.length || !hass || typeof hass.callService !== 'function') return;
-    if (hass.connection && hass.connection.connected === false) return;
-    const batch = cuboaiPipDiagQueue.splice(0, 8);
-    const sent = hass.callService('system_log', 'write', {
-      logger: 'custom_components.cuboai.pipdiag', level: 'warning', message: 'PIPDIAG ' + batch.join(' || '),
-    });
-    if (sent && typeof sent.catch === 'function') sent.catch(() => { cuboaiPipDiagQueue.unshift(...batch); });
-  } catch (e) { /* never break playback */ }
-}
-
-// Once per 500 ms tick: a gap between ticks (the page was frozen), any change of
-// the state above, what the revive and the replaced-card stop did, and a
-// heartbeat every 5 s while the video is in a floating window or the page is
-// hidden. Listeners for the events a tick can miss are added once.
-function cuboaiPipDiagTick(card, t, revived, replaced) {
-  try {
-    const prev = card._pipDiagAt;
-    card._pipDiagAt = t;
-    if (prev != null && t - prev >= 3000) cuboaiPipDiag(card, 'gap', { ms: Math.round(t - prev) });
-    if (revived) cuboaiPipDiag(card, 'revive', { r: String(revived) });
-    if (replaced) cuboaiPipDiag(card, 'replaced');
-    const st = cuboaiPipDiagState(card);
-    const key = JSON.stringify(st);
-    if (key !== card._pipDiagKey) {
-      card._pipDiagKey = key;
-      cuboaiPipDiag(card, 'chg');
-    } else if ((st.pip || st.hid) && (card._pipDiagBeat == null || t - card._pipDiagBeat >= 5000)) {
-      card._pipDiagBeat = t;
-      cuboaiPipDiag(card, 'beat');
-    }
-    if (!card._pipDiagDoc && typeof document !== 'undefined') {
-      card._pipDiagDoc = true;
-      document.addEventListener('visibilitychange', () => cuboaiPipDiag(card, 'vis'));
-      window.addEventListener('pageshow', () => cuboaiPipDiag(card, 'pageshow'));
-      window.addEventListener('pagehide', () => cuboaiPipDiag(card, 'pagehide'));
-    }
-    let video = null;
-    try { video = card._cuboMedia().video; } catch (e) { /* no player yet */ }
-    if (video && !video.__cuboPipDiag) {
-      video.__cuboPipDiag = true;
-      ['webkitpresentationmodechanged', 'enterpictureinpicture', 'leavepictureinpicture', 'pause', 'play',
-        'ended', 'emptied', 'stalled', 'waiting', 'error'].forEach((name) => {
-        video.addEventListener(name, () => cuboaiPipDiag(card, 'v:' + name));
-      });
-    }
-    const root = card.content && (card.content.shadowRoot || card.content);
-    const btn = root && typeof root.querySelector === 'function' ? root.querySelector('.pictureinpicture') : null;
-    if (btn && !btn.__cuboPipDiag) {
-      btn.__cuboPipDiag = true;
-      btn.addEventListener('click', () => {
-        cuboaiPipDiag(card, 'pipclick');
-        setTimeout(() => cuboaiPipDiag(card, 'pipclick+1s'), 1000);
-      }, true);
-    }
-    cuboaiPipDiagFlush(card);
-  } catch (e) { /* never break playback */ }
 }
 
 // Home Assistant sometimes replaces a dashboard's cards with new ones (seen on
@@ -2394,7 +2285,7 @@ class CuboAICameraCard extends HTMLElement {
     // A floating window must not wait for the next tick: an iPhone blanks it the
     // moment its video is off the page. One task later, for the same reason as
     // the microphone above (a re-flow takes the card out and puts it back).
-    setTimeout(() => { try { if (cuboaiParkFloating(this)) cuboaiPipDiag(this, 'parked'); } catch (e) { /* the tick tries again */ } }, 0);
+    setTimeout(() => { try { cuboaiParkFloating(this); } catch (e) { /* the tick tries again */ } }, 0);
     if (super.disconnectedCallback) super.disconnectedCallback();
   }
 
@@ -2938,8 +2829,7 @@ class CuboAICameraCard extends HTMLElement {
           this._proxy = host;
           this.style.display = 'block';
           this.appendChild(host);
-          const moved = cuboaiParkFloating(host);          // its player back into it, at once
-          cuboaiPipDiag(host, 'adopted', { moved });       // TEMPORARY diagnostics
+          cuboaiParkFloating(host);                        // its player back into it, at once
           host.hass = hass;
           return;
         }
@@ -3072,7 +2962,7 @@ class CuboAICameraCard extends HTMLElement {
         // Painted faintly on the ruler so a phone screenshot settles "which
         // card build is this client actually running" — hours of cache-forensics
         // this session were exactly that question. Keep in sync with manifest.
-        const CARD_VERSION = 'v2.6.65';
+        const CARD_VERSION = 'v2.6.66';
 
         const bar = document.createElement('div');
         bar.className = 'cuboai-dvr';
@@ -4971,11 +4861,9 @@ class CuboAICameraCard extends HTMLElement {
         if (!this.attachInterval) {
           this.attachInterval = setInterval(() => {
             cuboaiGuardPipButton(this);
-            const parkedNow = cuboaiParkFloating(this);
-            if (parkedNow) cuboaiPipDiag(this, parkedNow);   // TEMPORARY diagnostics
-            const replacedNow = cuboaiStopReplaced(this, Date.now());
-            const revivedNow = cuboaiRevivePlayer(this, Date.now());
-            cuboaiPipDiagTick(this, Date.now(), revivedNow, replacedNow);   // TEMPORARY diagnostics
+            cuboaiParkFloating(this);
+            cuboaiStopReplaced(this, Date.now());
+            cuboaiRevivePlayer(this, Date.now());
             // Penetrate Shadow DOM if it exists
             const root = this.content.shadowRoot || this.content;
             const player = root.querySelector('.player') || root.querySelector('.card') || root;

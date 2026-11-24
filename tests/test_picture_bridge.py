@@ -522,7 +522,7 @@ def test_every_player_video_gets_the_bridge_and_recordings_quiet_it():
     config = src[src.index("function cuboaiWebrtcConfig(") :]
     config = config[: config.index("\n}\n")]
     assert "style:" not in config and "mode: 'webrtc,mse'" in config
-    assert "const CARD_VERSION = 'v2.6.65';" in src
+    assert "const CARD_VERSION = 'v2.6.66';" in src
 
 
 # =============================================================================

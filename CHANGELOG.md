@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.6.66]
 
 ### Fixed
 - **The floating-window button no longer stops working.** On an iPhone, pressing it before the
