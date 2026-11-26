@@ -326,6 +326,19 @@ class TestCameraGating:
 # =============================================================================
 
 
+def _a_local_non_loopback_ip():
+    """An address this machine owns that is not loopback (skip if offline)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("203.0.113.1", 9))  # no packet is sent for UDP connect
+            ip = s.getsockname()[0]
+        except OSError:
+            ip = ""
+    if not ip or ip.startswith("127."):
+        pytest.skip("no non-loopback IPv4 address on this machine")
+    return ip
+
+
 class TestWebRTCIntegrationUrlFollowsThePort:
     """A port hop broke ONLY the custom card, and took hours to spot.
 
@@ -354,6 +367,34 @@ class TestWebRTCIntegrationUrlFollowsThePort:
         asyncio.run(mgr._sync_webrtc_integration_url(1986))
         args, kwargs = mgr.hass.config_entries.async_update_entry.call_args
         assert kwargs["data"]["url"] == "http://192.168.1.50:1986"
+
+    def test_a_url_naming_this_host_moves_to_loopback(self):
+        """The API listens on 127.0.0.1 only, so a URL that names this host by
+        a LAN address or name no longer connects, even from HA itself. That is
+        what broke the card when the API was first made loopback-only. Kill:
+        the host kept as-is, or the rewrite skipped when the port is correct."""
+        local_ip = _a_local_non_loopback_ip()
+        for url, want in (
+            (f"http://{local_ip}:1986", "http://127.0.0.1:1986"),
+            (f"http://{local_ip}:1985", "http://127.0.0.1:1986"),
+            ("http://localhost:1985", "http://127.0.0.1:1986"),
+            (f"http://user:pw@{local_ip}:1986", "http://user:pw@127.0.0.1:1986"),
+        ):
+            mgr, _ = self._mgr_with_entry(url)
+            asyncio.run(mgr._sync_webrtc_integration_url(1986))
+            args, kwargs = mgr.hass.config_entries.async_update_entry.call_args
+            assert kwargs["data"]["url"] == want, url
+
+    def test_a_loopback_url_on_the_right_port_is_left_alone(self):
+        mgr, _ = self._mgr_with_entry("http://127.0.0.1:1986")
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        mgr.hass.config_entries.async_update_entry.assert_not_called()
+
+    def test_another_machine_keeps_its_host(self):
+        """TEST-NET-3 is never assigned to a local interface."""
+        mgr, _ = self._mgr_with_entry("http://203.0.113.7:1986")
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        mgr.hass.config_entries.async_update_entry.assert_not_called()
 
     def test_a_correct_url_is_left_alone(self):
         mgr, _ = self._mgr_with_entry("http://192.168.1.50:1986")

@@ -257,6 +257,40 @@ def _humanize_uptime(seconds: float) -> str:
     return f"{seconds / 3600:.1f} hours"
 
 
+async def _is_this_host(hostname: str) -> bool:
+    """Whether `hostname` names this machine (any of its own addresses).
+
+    An address is ours exactly when a socket can bind to it, so no interface
+    list is needed. Names are resolved without blocking the event loop.
+    """
+    if not hostname:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    import asyncio
+    import ipaddress
+
+    try:
+        addrs = [ipaddress.ip_address(hostname.strip("[]"))]
+    except ValueError:
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(hostname, None)
+        except OSError:
+            return False
+        addrs = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
+    for addr in addrs:
+        if addr.is_loopback:
+            return True
+        family = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.bind((str(addr), 0))
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def _port_bindable(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -903,16 +937,24 @@ class Go2RTCManager:
                 continue
             if port is None or not (DESIRED_API_PORT <= port <= DESIRED_API_PORT + 100):
                 continue  # not a port we manage: someone else's server
-            if port == api_port:
+            # Our API listens on loopback only, so a URL naming this host by
+            # its LAN address or name (http://192.168.x.x:1985) can no longer
+            # connect, even from Home Assistant itself. WebRTC Camera runs in
+            # this same process, so loopback reaches us. A URL naming another
+            # machine keeps its host: that is not us.
+            host = parsed.hostname or ""
+            if await _is_this_host(host):
+                host = "127.0.0.1"
+            if port == api_port and host == parsed.hostname:
                 continue  # already correct
-            new_netloc = f"{parsed.hostname}:{api_port}"
+            new_netloc = f"{host}:{api_port}"
             if parsed.username:
                 cred = parsed.username + (f":{parsed.password}" if parsed.password else "")
                 new_netloc = f"{cred}@{new_netloc}"
             new_url = urlunparse(parsed._replace(netloc=new_netloc))
             _LOGGER.warning(
-                "WebRTC Camera integration points at %s but our go2rtc API self-healed to "
-                "port %s — updating it to %s so the card keeps working.",
+                "WebRTC Camera integration points at %s, but our go2rtc API is on "
+                "127.0.0.1 port %s — updating it to %s so the card keeps working.",
                 url,
                 api_port,
                 new_url,
@@ -927,10 +969,17 @@ class Go2RTCManager:
         api_port = getattr(self, "_api_port", DESIRED_API_PORT)
         config = {
             "api": {
-                # All interfaces: the frontend card / webrtc integration reach this
-                # API via the HA host's LAN IP, so it cannot be localhost-only.
+                # Loopback only. go2rtc's API has no authentication: on all
+                # interfaces anyone on the LAN could read this config (camera
+                # TUTK credentials, the NVR password), pull snapshots and
+                # live A/V, and use the talk-back stream. Every consumer is
+                # in-process and already uses 127.0.0.1 (camera entities, the
+                # ONVIF/Protect bridge, the published go2rtc_server attribute).
+                # The card's player, AlexxIT's WebRTC Camera, runs inside HA too;
+                # a stored URL naming this host by LAN IP is moved to 127.0.0.1
+                # by _sync_webrtc_integration_url (what broke the first attempt).
                 # Alternate port avoids conflict with the HA go2rtc add-on.
-                "listen": f":{api_port}",
+                "listen": f"127.0.0.1:{api_port}",
             },
             "rtsp": {
                 "listen": f":{rtsp_port}",

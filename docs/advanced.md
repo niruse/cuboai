@@ -10,7 +10,7 @@ ports on start, so nothing needs configuring:
 | Port | Purpose | If already in use |
 |---|---|---|
 | RTSP, `rtsp_port` option (8555 → usually `8557`) | Camera streams for NVRs, HomeKit, UniFi Protect | Moves to the next free port. Home Assistant's own go2rtc normally holds 8555, so 8557 is the expected result, not an error. |
-| API `1985` | Card, snapshots, WebRTC signalling | Moves to the next free port (`1986`…) |
+| API `1985` (localhost only) | Card, snapshots, WebRTC signalling. Listens on `127.0.0.1` only — it has no password, so it is not reachable from the LAN. | Moves to the next free port (`1986`…) |
 | WebRTC `8556` | Media for the card | Moves to the next free port |
 | ONVIF `8899`, `8900`, … | UniFi Protect, one per camera shown there (only when turned on) | **Never moves** — Protect remembers the address; a notification says the port is taken |
 
