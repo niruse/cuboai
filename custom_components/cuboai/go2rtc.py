@@ -257,11 +257,17 @@ def _humanize_uptime(seconds: float) -> str:
     return f"{seconds / 3600:.1f} hours"
 
 
+#: Seconds to wait for a WebRTC Camera URL's host name to resolve. The check
+#: runs before go2rtc is spawned, so a hung resolver must not delay the start.
+_RESOLVE_TIMEOUT = 2.0
+
+
 async def _is_this_host(hostname: str) -> bool:
     """Whether `hostname` names this machine (any of its own addresses).
 
     An address is ours exactly when a socket can bind to it, so no interface
-    list is needed. Names are resolved without blocking the event loop.
+    list is needed. Names are resolved without blocking the event loop, and
+    give up after _RESOLVE_TIMEOUT (TimeoutError is an OSError).
     """
     if not hostname:
         return False
@@ -274,7 +280,7 @@ async def _is_this_host(hostname: str) -> bool:
         addrs = [ipaddress.ip_address(hostname.strip("[]"))]
     except ValueError:
         try:
-            infos = await asyncio.get_running_loop().getaddrinfo(hostname, None)
+            infos = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(hostname, None), _RESOLVE_TIMEOUT)
         except OSError:
             return False
         addrs = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
@@ -904,6 +910,29 @@ class Go2RTCManager:
         await self._sync_webrtc_integration_url(api_port)
         return rtsp_port, webrtc_port
 
+    def _ha_own_hosts(self) -> set[str]:
+        """Host names in Home Assistant's internal and external URL settings.
+
+        Covers what `_is_this_host` cannot see from inside a container on
+        bridge networking, where the host's LAN IP is not bindable and its
+        name may not resolve. `hass.config.api.local_ip` would add nothing:
+        HA reads it from a socket in its own network namespace (the
+        container's 172.x address), which the bind check already recognises.
+        """
+        from urllib.parse import urlparse
+
+        hosts: set[str] = set()
+        config = getattr(self.hass, "config", None)
+        for value in (getattr(config, "internal_url", None), getattr(config, "external_url", None)):
+            if isinstance(value, str) and value:
+                try:
+                    name = urlparse(value).hostname
+                except ValueError:
+                    name = None
+                if name:
+                    hosts.add(name.lower())
+        return hosts
+
     async def _sync_webrtc_integration_url(self, api_port: int) -> None:
         """Follow our API port in the WebRTC Camera integration's stored URL.
 
@@ -943,11 +972,23 @@ class Go2RTCManager:
             # this same process, so loopback reaches us. A URL naming another
             # machine keeps its host: that is not us.
             host = parsed.hostname or ""
-            if await _is_this_host(host):
+            if host.lower() in self._ha_own_hosts() or await _is_this_host(host):
                 host = "127.0.0.1"
+            elif host:
+                # In a container on bridge networking the host's LAN IP is not
+                # bindable and `homeassistant.local` may not resolve, so a URL
+                # for this host can look like another machine. Say so rather
+                # than leave the card failing silently.
+                _LOGGER.warning(
+                    "WebRTC Camera integration points at %s. If that is this Home "
+                    "Assistant, change its URL to http://127.0.0.1:%s: the CuboAI "
+                    "go2rtc API listens on 127.0.0.1 only.",
+                    url,
+                    api_port,
+                )
             if port == api_port and host == parsed.hostname:
                 continue  # already correct
-            new_netloc = f"{host}:{api_port}"
+            new_netloc = f"[{host}]:{api_port}" if ":" in host else f"{host}:{api_port}"
             if parsed.username:
                 cred = parsed.username + (f":{parsed.password}" if parsed.password else "")
                 new_netloc = f"{cred}@{new_netloc}"

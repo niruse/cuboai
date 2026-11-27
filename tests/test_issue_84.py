@@ -396,6 +396,67 @@ class TestWebRTCIntegrationUrlFollowsThePort:
         asyncio.run(mgr._sync_webrtc_integration_url(1986))
         mgr.hass.config_entries.async_update_entry.assert_not_called()
 
+    def test_a_host_ha_knows_it_is_moves_to_loopback(self):
+        """Docker on bridge networking: inside the container the host's LAN IP
+        is not bindable and `homeassistant.local` may not resolve, so the bind
+        check alone misses them. The internal/external URL settings still name
+        this host. (TEST-NET addresses and .example names are never local, so
+        only the settings can recognise them.) Kill: drop either source."""
+        for attr, value, url in (
+            ("internal_url", "http://198.51.100.20:8123", "http://198.51.100.20:1985"),
+            ("internal_url", "http://homeassistant.local:8123", "http://homeassistant.local:1985"),
+            ("external_url", "https://ha.example.com", "http://HA.example.com:1986"),
+        ):
+            mgr, _ = self._mgr_with_entry(url)
+            mgr.hass.config.internal_url = None
+            mgr.hass.config.external_url = None
+            setattr(mgr.hass.config, attr, value)
+            with patch("custom_components.cuboai.go2rtc._is_this_host", AsyncMock(return_value=False)):
+                asyncio.run(mgr._sync_webrtc_integration_url(1986))
+            args, kwargs = mgr.hass.config_entries.async_update_entry.call_args
+            assert kwargs["data"]["url"] == "http://127.0.0.1:1986", (attr, value)
+
+    def test_an_ipv6_host_keeps_its_brackets(self):
+        """A remote IPv6 literal must stay bracketed when only the port moves:
+        'http://2001:db8::7:1986' is not a URL. 2001:db8::/32 is documentation
+        space, never local."""
+        mgr, _ = self._mgr_with_entry("http://[2001:db8::7]:1985")
+        mgr.hass.config.internal_url = None
+        mgr.hass.config.external_url = None
+        asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        args, kwargs = mgr.hass.config_entries.async_update_entry.call_args
+        assert kwargs["data"]["url"] == "http://[2001:db8::7]:1986"
+
+    def test_a_name_that_never_resolves_does_not_hold_up_the_start(self):
+        """The sync runs before go2rtc is spawned, so a resolver that hangs
+        (no DNS server, no mDNS in a container) must not delay the start by
+        its own timeout. Kill: remove the wait_for."""
+        import time
+
+        from custom_components.cuboai import go2rtc as mod
+
+        async def _hang(*_a, **_k):
+            await asyncio.sleep(30)
+
+        with patch.object(mod, "_RESOLVE_TIMEOUT", 0.05), patch.object(asyncio.BaseEventLoop, "getaddrinfo", _hang):
+            t0 = time.monotonic()
+            assert asyncio.run(mod._is_this_host("never-resolves.invalid")) is False
+            assert time.monotonic() - t0 < 5
+
+    def test_an_unrecognised_host_is_kept_but_named_in_a_warning(self, caplog):
+        """If neither check recognises the host it may still be this HA (an
+        unusual Docker setup), so the log tells the user what to change."""
+        import logging
+
+        mgr, _ = self._mgr_with_entry("http://203.0.113.7:1986")
+        mgr.hass.config.internal_url = None
+        mgr.hass.config.external_url = None
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(mgr._sync_webrtc_integration_url(1986))
+        mgr.hass.config_entries.async_update_entry.assert_not_called()
+        assert "http://203.0.113.7:1986" in caplog.text
+        assert "http://127.0.0.1:1986" in caplog.text
+
     def test_a_correct_url_is_left_alone(self):
         mgr, _ = self._mgr_with_entry("http://192.168.1.50:1986")
         asyncio.run(mgr._sync_webrtc_integration_url(1986))
