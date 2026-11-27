@@ -84,7 +84,7 @@ async def test_a_stream_we_no_longer_generate_does_not_survive(tmp_path):
 
 async def test_ports_are_written_from_the_resolved_values(tmp_path):
     cfg = await _write_config(tmp_path, {})
-    assert cfg["api"]["listen"] == ":1985"
+    assert cfg["api"]["listen"] == "127.0.0.1:1985"
     assert cfg["rtsp"]["listen"] == ":8557"
     assert cfg["webrtc"]["listen"] == ":8556"
 
@@ -96,3 +96,18 @@ async def test_nvr_credentials_are_written_only_when_both_are_set(tmp_path):
 
     cfg = await _write_config(tmp_path, {}, {"nvr_enabled": True})
     assert "password" not in cfg["rtsp"]
+
+
+async def test_api_listens_on_loopback_only(tmp_path):
+    """go2rtc's API has no auth, so it must never listen on the LAN.
+
+    On all interfaces it served this config (camera credentials, the NVR
+    password), snapshots, live A/V and the talk-back stream to anyone on the
+    network. Kill: the listen address loses its 127.0.0.1 host. RTSP and
+    WebRTC stay on all interfaces: NVRs, Protect and browsers reach those.
+    """
+    for options in ({}, {"nvr_enabled": True, "nvr_password": "s3cret"}):
+        cfg = await _write_config(tmp_path, {}, options)
+        assert cfg["api"]["listen"].startswith("127.0.0.1:"), cfg["api"]
+    assert cfg["rtsp"]["listen"] == ":8557"
+    assert cfg["webrtc"]["listen"] == ":8556"

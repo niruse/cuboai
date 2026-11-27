@@ -656,8 +656,8 @@ restarting it and says so — check `go2rtc.log`, then reload the integration.
 
 ### Ports
 
-The streaming engine uses RTSP `8557` (usually — it moves if a port is taken), API `1985` and
-WebRTC `8556`; UniFi Protect uses `8899` and up. Nothing needs configuring; the sensors always show
+The streaming engine uses RTSP `8557` (usually — it moves if a port is taken), API `1985`
+(localhost only) and WebRTC `8556`; UniFi Protect uses `8899` and up. Nothing needs configuring; the sensors always show
 the ports in use. Details: [docs/advanced.md](docs/advanced.md).
 
 ---

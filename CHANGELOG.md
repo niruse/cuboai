@@ -14,6 +14,31 @@ All notable changes to this project will be documented in this file.
   Known: sound cannot keep playing *while* the phone is locked inside the Home Assistant app; iOS
   suspends the app's web page, and no card code can prevent that.
 
+## [2.6.67]
+
+### Security
+- **The streaming engine's API is no longer reachable from your network.** The go2rtc API (port
+  `1985`) has no password, and it listened on every network interface. Any device on the same
+  network could read the generated configuration (the camera's credentials and the NVR stream
+  password), take snapshots, watch and listen live, and use the talk-back stream. The API now
+  listens on `127.0.0.1` only. Everything inside Home Assistant already used that address, so the
+  card, the camera entities, HomeKit, the NVR streams (RTSP) and UniFi Protect work as before.
+  Reported and fixed by @T1M30UT (#135, #136).
+
+### Changed — BREAKING for anyone reading the API from another machine
+- `http://<HA-IP>:1985/...` no longer answers from another computer: the `stream.html` test page,
+  an external go2rtc or Frigate that pulls over HTTP, or a script that reads `/api/streams`. Use
+  the RTSP URL for a recorder, and for diagnostics run the request on the Home Assistant host
+  against `127.0.0.1` ([docs/nvr-troubleshooting.md](docs/nvr-troubleshooting.md), step 3).
+- If AlexxIT's WebRTC Camera integration points at this Home Assistant by its network address
+  (for example `http://192.168.1.10:1985`), the address is changed to `http://127.0.0.1:1985`
+  at the next start, and a line in the log says so. When Home Assistant runs in a container on
+  bridge networking and the address is not recognised as its own, the log asks you to change it
+  by hand.
+
+### Fixed
+- An IPv6 address in the WebRTC Camera URL kept its brackets when only the port was updated.
+
 ## [2.6.66]
 
 ### Fixed

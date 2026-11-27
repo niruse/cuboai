@@ -8,7 +8,7 @@
 # TUTK session against the same camera, which Cubo 3 / SW05 answers with no
 # tracks at all — HomeKit then shows "No Response".
 api:
-  listen: :1985
+  listen: 127.0.0.1:1985   # loopback only: the API has no authentication
 rtsp:
   listen: :{RTSP_PORT}
 streams:
