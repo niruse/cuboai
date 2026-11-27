@@ -46,9 +46,12 @@ Check, in this order:
 2. **Test the exact URL from a computer** (`ffprobe`, VLC). If it plays there and the recorder still
    fails, the recorder's stored value is not what you think it is.
 3. **Only then read the log — and confirm the client address.** A `new consumer` line carries no IP;
-   check `remote_addr` under `http://<HA-IP>:<api-port>/api/streams?src=<stream>` (the API port is in
-   the WebRTC Stream sensor's `go2rtc_server` attribute). It is easy to mistake your own test pull
-   for the recorder.
+   check `remote_addr` in `/api/streams?src=<stream>`. The API listens on `127.0.0.1` only, so run
+   `curl -s "http://127.0.0.1:<api-port>/api/streams?src=<stream>"` from a shell that shares Home
+   Assistant's network: the Advanced SSH & Web Terminal add-on (the official Terminal & SSH add-on
+   has its own network and cannot reach it), `docker exec <container> curl …` on a Container install,
+   or the host itself on a Core install. The API port is in the WebRTC Stream sensor's
+   `go2rtc_server` attribute. It is easy to mistake your own test pull for the recorder.
 
 ## Connects, streams for 30–60 seconds, then drops repeatedly
 
