@@ -92,6 +92,8 @@ _ha_module("homeassistant.components.switch", SwitchEntity=_entity_base("SwitchE
 # Real module (not a MagicMock attribute) so `from homeassistant.components import
 # persistent_notification` resolves, and so tests can assert on async_create.
 _ha_module("homeassistant.components.persistent_notification", async_create=MagicMock())
+# images.py subclasses it, so it has to be a real class.
+_ha_module("homeassistant.components.http", HomeAssistantView=type("HomeAssistantView", (), {}))
 _ha_module("homeassistant.helpers.restore_state", RestoreEntity=_entity_base("RestoreEntity"))
 _ha_module(
     "homeassistant.helpers.update_coordinator",

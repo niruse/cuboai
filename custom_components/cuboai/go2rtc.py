@@ -298,12 +298,10 @@ async def _is_this_host(hostname: str) -> bool:
 
 
 def _port_bindable(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("0.0.0.0", port))
-            return True
-        except OSError:
-            return False
+    """Whether go2rtc could bind this port now (see const.port_bindable)."""
+    from .const import port_bindable
+
+    return port_bindable(port)
 
 
 class Go2RTCManager:
@@ -1058,6 +1056,15 @@ class Go2RTCManager:
         if self._options.get("nvr_enabled") and self._options.get("nvr_password"):
             config["rtsp"]["username"] = self._options.get("nvr_username") or "cuboai"
             config["rtsp"]["password"] = self._options["nvr_password"]
+            from .const import protect_nvr_credentials_differ
+
+            if protect_nvr_credentials_differ(self._options):
+                _LOGGER.warning(
+                    "The NVR stream username and password differ from the UniFi Protect ones. "
+                    "Protect signs in to the stream with its own, so it is refused and its picture "
+                    "freezes. Set both to the same username and password in Configure, or clear "
+                    "the NVR stream password."
+                )
         # This file is fully REGENERATED here, not merged into: `config` is built
         # from scratch above and `_write` truncates. That is what makes a stale
         # cuboai_* entry impossible — a stream we no longer generate simply is not

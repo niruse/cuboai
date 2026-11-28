@@ -2,7 +2,6 @@ import logging
 import logging.handlers
 import os
 import queue
-import socket
 
 # Default to current directory, but can be updated dynamically
 LOG_FILE_PATH = "cuboai_last_alert_debug.log"
@@ -112,15 +111,13 @@ def find_available_port(start_port=8555, max_port=8600):
     # 8554 rtsp, 8555 webrtc — 8555 conflicts even when momentarily free, see
     # issue #80), and CuboAI's own API/WebRTC listeners (1985/8556). The scan
     # therefore suggests 8557 as the first candidate on a clean system.
+    from .const import port_bindable
+
     IGNORE_PORTS = {8123, 4357, 8554, 8555, 1984, 1985, 8443, 5683, 5353, 8556, 8899}
     for port in range(start_port, max_port):
         if port in IGNORE_PORTS:
             continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                # Actually try to bind to verify if the port is free
-                s.bind(("0.0.0.0", port))
-                return port
-            except OSError:
-                pass
+        # Actually try to bind to verify if the port is free
+        if port_bindable(port):
+            return port
     return start_port

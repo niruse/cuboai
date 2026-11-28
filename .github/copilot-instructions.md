@@ -116,7 +116,7 @@ Access via `entry.data` or `entry.options`:
 
 ### File Paths (hardcoded for HA container)
 - Tokens: `/config/cuboai_access_token.json`, `/config/cuboai_refresh_token.json`
-- Alert images: `/config/www/cuboai_images/` → web path `/local/cuboai_images/`
+- Alert images: `/config/cuboai_images/` (never under `www`, which is public) → signed web path `/api/cuboai/alert_image/<file>?token=…` (see `images.py`)
 - Debug log: `/config/cuboai_auth.log`
 
 ### Dependencies

@@ -409,23 +409,35 @@ class CuboAICoordinator(DataUpdateCoordinator):
         # them concurrently (see _local_fetch). A no-op for 1-4 cameras.
         self._local_fetch_slots = asyncio.Semaphore(4)
 
-        # Portable image storage path
-        self._images_dir = self._get_images_dir()
-        self._web_base = "/local/cuboai_images"
+        # Alert photos live outside `www` (which Home Assistant serves without
+        # a login) and are handed out with signed addresses: see images.py.
+        # Set up on the first poll, because it reads the disk.
+        self._alert_images = None
+        self._alert_images_error_logged = False
+        self._images_dir = self.hass.config.path("cuboai_images")
 
-    def _get_images_dir(self) -> str:
-        """Get the images directory path with legacy fallback for backwards compatibility."""
-        import os
+    async def _ensure_alert_images(self) -> None:
+        """Prepare the private photo folder, move photos out of `www`, register the view.
 
-        portable_path = self.hass.config.path("www", "cuboai_images")
-        legacy_path = "/config/www/cuboai_images"
+        Runs whether or not photos are downloaded: an install that turned the
+        download off still has its old photos in the public folder.
+        """
+        if self._alert_images is not None:
+            return
+        try:
+            from .images import async_setup_alert_images
 
-        if os.path.exists(portable_path):
-            return portable_path
-        if os.path.exists(legacy_path):
-            log_to_file(f"Using legacy images path: {legacy_path}")
-            return legacy_path
-        return portable_path
+            self._alert_images = await async_setup_alert_images(self.hass)
+            self._images_dir = self._alert_images.directory
+        except Exception as e:
+            # Tried again at the next poll; said once.
+            if not self._alert_images_error_logged:
+                self._alert_images_error_logged = True
+                _LOGGER.error("Alert photos are unavailable: their folder could not be prepared (%s)", e)
+
+    def _image_url(self, filename: str) -> str | None:
+        """The signed address of a stored photo; None until the folder is ready."""
+        return self._alert_images.url(filename) if self._alert_images is not None else None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
@@ -759,8 +771,10 @@ class CuboAICoordinator(DataUpdateCoordinator):
                     # symptom was broken thumbnails on older alerts.
                     import os as _os
 
-                    if await aiofiles.os.path.exists(_os.path.join(self._images_dir, filename)):
-                        local_image_path = f"{self._web_base}/{filename}"
+                    if self._alert_images is None:
+                        pass  # no private folder: never fall back to a public one
+                    elif await aiofiles.os.path.exists(_os.path.join(self._images_dir, filename)):
+                        local_image_path = self._image_url(filename)
                     else:
                         try:
                             await download_image(
@@ -771,7 +785,7 @@ class CuboAICoordinator(DataUpdateCoordinator):
                                 filename,
                                 session,
                             )
-                            local_image_path = f"{self._web_base}/{filename}"
+                            local_image_path = self._image_url(filename)
                         except Exception as e:
                             log_to_file(f"[CuboAICoordinator] Image download failed for {device_id}: {e}")
 
@@ -841,6 +855,8 @@ class CuboAICoordinator(DataUpdateCoordinator):
         # this method returns, but passing a snapshot keeps _process_camera free
         # of shared reads and gives the failure path something to carry forward.
         prev_cams = (self.data or {}).get("cameras", {}) if getattr(self, "data", None) else {}
+
+        await self._ensure_alert_images()
 
         # Ensure the images directory once per poll rather than once per camera.
         if self.download_images and not await aiofiles.os.path.exists(self._images_dir):
