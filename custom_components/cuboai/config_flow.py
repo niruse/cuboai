@@ -31,6 +31,7 @@ from .const import (
     h264_resolution,
     protect_camera_id,
     protect_camera_ids,
+    protect_nvr_credentials_differ,
 )
 
 # Dedicated file logger for CuboAI
@@ -145,6 +146,10 @@ async def _protect_plan(hass, previous: dict, user_input: dict, cameras: list[di
         errors[OPT_PROTECT_PASSWORD] = "unifi_password_required"
     if OPT_PROTECT_CAMERAS in user_input and not user_input[OPT_PROTECT_CAMERAS]:
         errors[OPT_PROTECT_CAMERAS] = "unifi_protect_no_camera"
+    # Protect logs in to the stream with its own username and password, so an
+    # NVR stream password that differs locks it out without any error (#138).
+    if protect_nvr_credentials_differ(user_input):
+        errors["nvr_password"] = "nvr_protect_credentials_differ"
     # The base port and the MACs are per HOST: the primary camera of a second
     # CuboAI account would report the same MAC and Protect would merge them.
     others = [

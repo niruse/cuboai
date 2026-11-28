@@ -63,8 +63,9 @@ Thresholds can be changed through the producer environment:
 
 | Path | What |
 |---|---|
-| `www/cuboai_images/` | Downloaded alert photos (served as `/local/cuboai_images/…`) |
-| `www/cuboai_cache/` | Cached YouTube/Spotify songs |
+| `cuboai_images/` | Downloaded alert photos. Not under `www`, so Home Assistant does not serve the folder; each photo is served at `/api/cuboai/alert_image/<file>?token=…`, the address in the alert's `image` attribute. Until v2.6.67 they were in `www/cuboai_images/`, which anyone who could reach Home Assistant could read without logging in; photos found there are moved on start. |
+| `.storage/cuboai_alert_images.json` | The random key that signs the photo addresses |
+| `www/cuboai_cache/` | Cached YouTube/Spotify songs. Public by design: a speaker fetches a song without logging in. |
 | `www/cuboai-card.js` | The cards, copied and registered automatically on start |
 | `.storage/cuboai_media.json` | The card's song library, playlists and shared settings |
 | `cuboai_debug.log`, `cuboai_last_alert_debug.log` | Debug logs (only with debug logs on; 2 MB rotation) |

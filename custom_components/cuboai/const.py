@@ -42,6 +42,7 @@ OPT_PROTECT_USERNAME = "unifi_protect_username"
 OPT_PROTECT_PASSWORD = "unifi_protect_password"
 OPT_PROTECT_PORT = "unifi_protect_port"
 PROTECT_USERNAME_DEFAULT = "cuboai"
+NVR_USERNAME_DEFAULT = "cuboai"
 #: 8899 is the ONVIF port many IP cameras use, and it is not one HA or its
 #: common add-ons take. PINNED, never self-healed: Protect stores ip:port when
 #: the camera is adopted, so a silent hop to 8900 would orphan the camera in
@@ -66,6 +67,33 @@ VAAPI_DEVICE_PATTERN = r"/dev/dri/renderD[0-9]+"
 #: 50 frames, which was 5 s on a Cubo 2 measured sending 10 fps. 15 frames is
 #: 1-1.5 s at the 10-15 fps the cameras send.
 H264_KEYINT = 15
+
+
+def port_bindable(port: int) -> bool:
+    """Whether a TCP port can be bound on all interfaces right now.
+
+    Probes the way go2rtc binds. Go sets SO_REUSEADDR on its listeners, so a
+    port is free for go2rtc as soon as nothing LISTENS on it. Without the
+    option, the probe also fails while old connections of a stopped go2rtc sit
+    in TIME_WAIT (60 s on Linux): a reload with a recorder connected then saw
+    its own port as "held by another process" and moved the stream to the
+    next port (issue #137). On Linux and macOS the option never allows a bind
+    over a live listener, so a real holder is still detected.
+
+    Not set on Windows: there SO_REUSEADDR lets a second socket take a port
+    that is being listened on, which would hide a real holder.
+    """
+    import socket
+    import sys
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if sys.platform != "win32":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            return False
 
 
 def h264_resolution(options) -> str:
@@ -160,6 +188,26 @@ def protect_stream_target(device_id: str, options) -> str:
     viewers untranscoded; the integration never turns the option on itself.
     """
     return live_stream_name(device_id, options)
+
+
+def protect_nvr_credentials_differ(options) -> bool:
+    """Whether UniFi Protect will be refused by the NVR stream password.
+
+    Protect does not use the username and password in the stream address the
+    bridge hands it: it logs in to RTSP with the credentials it was adopted
+    with (issue #138). The RTSP listener has one username and password, the NVR
+    ones, so with a password set they must equal the Protect ones. With no NVR
+    password the listener asks for nothing and Protect is let in.
+    """
+    options = options or {}
+    if not (options.get(OPT_PROTECT_ENABLED) and options.get("nvr_enabled") and options.get("nvr_password")):
+        return False
+    nvr = (options.get("nvr_username") or NVR_USERNAME_DEFAULT, options["nvr_password"])
+    protect = (
+        options.get(OPT_PROTECT_USERNAME) or PROTECT_USERNAME_DEFAULT,
+        options.get(OPT_PROTECT_PASSWORD) or "",
+    )
+    return nvr != protect
 
 
 def protect_camera_id(options, cameras) -> str | None:
