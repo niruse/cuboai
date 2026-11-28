@@ -34,6 +34,7 @@ from .const import (
     effective_ports,
     h264_resolution,
     live_stream_name,
+    protect_nvr_credentials_differ,
     protect_stream_name,
 )
 
@@ -518,6 +519,7 @@ def _protect_section(store: dict, options: dict, scrubber: Scrubber, streams: di
         "start_error": getattr(group, "start_error", None),
         "cameras": cameras,
         "protect_pulling": pulling,
+        "nvr_credentials_differ": protect_nvr_credentials_differ(options),
     }
 
 
@@ -582,6 +584,12 @@ def _protect_verdicts(report: dict, log_codecs: set) -> list[str]:
     if not cams:
         return [f"UniFi Protect support is on but not running: {protect.get('start_error') or 'no camera selected'}."]
     out: list[str] = []
+    if protect.get("nvr_credentials_differ"):
+        out.append(
+            "UniFi Protect is refused by the NVR stream password: it signs in to the stream with the UniFi "
+            "Protect username and password, and the NVR stream ones are different. Its picture freezes with no "
+            "error. Set the same username and password for both in Configure, or clear the NVR stream password."
+        )
     for protect_cam in cams:
         out += _protect_camera_verdicts(protect_cam, report, log_codecs)
     return out

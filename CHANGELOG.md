@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **Alert photos are no longer public.** With *Download alert images locally* on (the default),
+  the photos were saved in `www/cuboai_images/`. Home Assistant serves everything in `www` at
+  `/local/` without a login, also through a remote address, and a photo's name could be guessed
+  from the camera's serial number and the alert time. The photos are now kept in `cuboai_images/`
+  in the configuration folder, which Home Assistant does not serve, and each one is served only at
+  an address that carries a signature (`/api/cuboai/alert_image/<file>?token=…`). Photos found in
+  the old folder are moved on the first start, and the folder is removed when nothing else is in
+  it. Reported by @DerHerzog7 (#139).
+
+### Changed — BREAKING for anyone who builds the photo address by hand
+- The `image` of an alert (*Last Alert* sensor) and the `image_url` of the session history now hold
+  the new signed address. The timeline card and anything else that uses the attribute as it is
+  keep working. A template, card or notification that builds `/local/cuboai_images/<name>.jpg`
+  itself has to use the attribute instead: the old address answers 404.
+- Cached YouTube/Spotify songs stay in `www/cuboai_cache/`, because a speaker fetches them without
+  a login.
+
 ### Fixed
 - **iPhone: black picture and no sound after unlocking the phone.** iOS freezes the Home Assistant
   app while the phone is locked: it pauses the video and the stream connection dies, and the card
@@ -13,6 +31,20 @@ All notable changes to this project will be documented in this file.
   the speaker button turns it back on) and restarts a picture that has not moved within 3 seconds.
   Known: sound cannot keep playing *while* the phone is locked inside the Home Assistant app; iOS
   suspends the app's web page, and no card code can prevent that.
+- **Saving the options no longer moves the stream to another port.** With a recorder connected
+  (an NVR, UniFi Protect), a reload could move the RTSP port from 8557 to 8558 and the log blamed
+  "another process" that did not exist. The connections of the stopped streaming engine stay in
+  the system for a minute, and the check for a free port counted them as a holder. It now checks
+  the way the engine itself binds, so only a program that is really listening on the port counts.
+  Reloads are also faster, because they no longer wait for those connections. Reported, with the
+  cause, by @T1M30UT (#137).
+- **UniFi Protect is no longer locked out by the NVR stream password.** Protect signs in to the
+  video stream with the username and password it was added with, not the NVR stream ones. With a
+  different NVR stream password its picture froze on the last frame and nothing showed an error.
+  Configure now refuses an NVR stream username and password that differ from the UniFi Protect
+  ones while both are on; an install that already has the mismatch gets a warning in the log and
+  a line in the diagnostics download. An empty NVR stream password still works with Protect.
+  Reported by @T1M30UT (#138).
 
 ## [2.6.67]
 

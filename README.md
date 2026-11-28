@@ -108,7 +108,7 @@ needs a re-login.
 | Option | Default | What it does |
 |---|---|---|
 | Cameras to add | all ticked at setup | Which of the account's cameras this entry manages. Unticking removes that camera's entities. |
-| Download alert images locally | on | Saves each alert's photo under `www/cuboai_images/`, for the Last Alert sensor and the timeline card. |
+| Download alert images locally | on | Saves each alert's photo under `cuboai_images/` in the configuration folder, for the Last Alert sensor and the timeline card. The photos are not public: each one is served only with the signed address in the alert's `image` attribute. |
 | Save YouTube/Spotify songs to local cache | off | Keeps downloaded songs on disk so they replay instantly. Same as the *Cache YouTube/Spotify Songs* switch. |
 | Enable debug logs | off | Full diagnostics for a bug report — see [Debug logs](#debug-logs). |
 | Baby-present & DVR history sensors | off | Adds the [history sensors](#history-sensors-opt-in). |
@@ -152,7 +152,7 @@ Both encoders retain the same `cuboai_h264_<device_id>` stream name, so Home Ass
 |---|---|---|
 | Expose RTSP stream for NVR | off | Publishes a ready-to-paste RTSP URL on the camera's WebRTC Stream sensor. See [RTSP](#rtsp--recording-to-an-nvr). |
 | NVR stream username | `cuboai` | |
-| NVR stream password | empty | Empty means **no authentication** (most compatible with Hikvision/HiLook, but open to your whole network). |
+| NVR stream password | empty | Empty means **no authentication** (most compatible with Hikvision/HiLook, but open to your whole network). With UniFi Protect on, a password here must be the same username and password as the UniFi Protect ones. |
 | Burn the date and time into these cameras' NVR recordings | none | Draws the time into the picture of the stream an NVR records. Live view and HomeKit are unchanged. Costs a transcode per ticked camera. |
 
 ### UniFi Protect
@@ -586,6 +586,10 @@ ONVIF and pulls the video from its streaming engine, like an NVR.
   takes effect in Protect within about 20 seconds, without re-adding the camera.
 - **Video only** — Protect can't play the camera's audio track.
 - **Recording** needs a hard drive in the console; without one, cameras still add and live-view.
+- **One username and password for the stream:** Protect signs in to the video stream with the
+  username and password it was added with, not with the NVR stream ones. If you set an *NVR stream
+  password*, use the same username and password as the UniFi Protect fields; Configure refuses any
+  other combination. With different ones Protect's picture froze on the last frame with no error.
 - **Ports never change** once a camera has one, because Protect remembers the address. If a port is
   taken, a notification says so and the other cameras keep working.
 - Settings Protect pushes to a camera (time, encoding, reboot) are accepted and ignored.
