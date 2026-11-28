@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.6.68]
 
 ### Security
 - **Alert photos are no longer public.** With *Download alert images locally* on (the default),
